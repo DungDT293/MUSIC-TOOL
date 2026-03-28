@@ -41,6 +41,11 @@ export function decryptString(encrypted: string): string {
 /**
  * Pre-encrypted strings (được encrypt tại build time)
  * Format: { key: encrypted_value }
+ *
+ * ⚠️ SECURITY NOTE: Đây là obfuscation, KHÔNG phải encryption thực sự.
+ * KEY derivation và ciphertext đều nằm trong cùng bundle → attacker
+ * có thể decrypt. Dùng process.env (inject tại CI/build) cho production secrets.
+ * File này chỉ là fallback khi env var không có.
  */
 const ENCRYPTED_STRINGS: Record<string, string> = {
   // API URLs

@@ -5,11 +5,13 @@ import { getDecryptedString } from '../security/stringEncryption'
 import { createSignedHeaders } from '../security/apiSigning'
 
 // Fallback về plaintext nếu encryption fail
+// ⚠️ SECURITY: Ưu tiên process.env.LICENSE_INSTALLER_KEY (set tại build/deploy time).
+// Chỉ dùng getDecryptedString() làm fallback cuối cùng khi không có env var.
 let DEFAULT_BASE: string
 let DEFAULT_INSTALLER_KEY: string
 try {
-  DEFAULT_BASE = getDecryptedString('LICENSE_BASE')
-  DEFAULT_INSTALLER_KEY = getDecryptedString('INSTALLER_KEY')
+  DEFAULT_BASE = process.env.LICENSE_SERVER_BASE || getDecryptedString('LICENSE_BASE')
+  DEFAULT_INSTALLER_KEY = process.env.LICENSE_INSTALLER_KEY || getDecryptedString('INSTALLER_KEY')
 } catch {
   DEFAULT_BASE = 'https://license-server.dungdong333.workers.dev'
   DEFAULT_INSTALLER_KEY = 'Ins$2025!LEONYG'

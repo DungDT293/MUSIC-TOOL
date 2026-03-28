@@ -1,0 +1,45 @@
+{
+  "compilerOptions": {
+    "composite": true,
+    "skipLibCheck": true,
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowSyntheticDefaultImports": true,
+    "strict": true
+  },
+  "include": [
+    "vite.config.ts",
+    "electron/**/*",
+    "backend/auth/**/*",
+    "backend/audio/**/*",
+    "backend/autopilot/**/*",
+    "backend/ffmpeg/**/*",
+    "backend/jobQueue/**/*",
+    "backend/license/**/*",
+    "backend/youtube/**/*",
+    "backend/music/**/*",
+    "backend/security/**/*",
+    "backend/utils/**/*",
+    "backend/system/**/*",
+    "backend/video/**/*.ts",
+    "shared/**/*",
+    "src/types/**/*"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "dist-electron",
+    "backend/video_backup",
+    "backend/video_backup/**",
+    "**/*Turbo*.ts",
+    "**/turboIO.ts",
+    "**/videoFFmpegRunner.ts",
+    "**/ramAcceleration.ts",
+    "**/detectDiskType.ts",
+    "**/cutSingleTurbo.ts",
+    "**/mergeVideosTurbo.ts",
+    "**/splitManyTurbo.ts"
+  ]
+}
+
+

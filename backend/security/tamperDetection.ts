@@ -24,20 +24,26 @@ export function calculateFileHash(filePath: string): Promise<string> {
 }
 
 /**
- * Get expected hash của main executable
- * Hash này sẽ được embed trong code tại build time
+ * Get expected hash của main.js
+ * Thử đọc từ build-hash.json (ghi bởi scripts/inject-hash.js sau build).
+ * Trong dev mode luôn trả null (skip check).
  */
 function getExpectedMainHash(): string | null {
-  // Trong production, hash này sẽ được embed từ build process
-  // Tạm thời return null để skip check trong dev
   if (process.env.NODE_ENV === 'development' || process.env.ELECTRON_RENDERER_URL) {
     return null
   }
 
-  // TODO: Embed hash từ build process
-  // const EXPECTED_MAIN_HASH = '...'
-  // return EXPECTED_MAIN_HASH
-  return null
+  try {
+    // scripts/inject-hash.js ghi hash vào build-hash.json trong cùng thư mục với main.js
+    const hashFile = path.join(__dirname, 'build-hash.json')
+    if (!fs.existsSync(hashFile)) {
+      return null // Chưa có hash file (dev build hoặc script chưa chạy)
+    }
+    const data = JSON.parse(fs.readFileSync(hashFile, 'utf8'))
+    return data?.mainJsHash ?? null
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -85,21 +91,38 @@ export async function verifyMainJsIntegrity(): Promise<boolean> {
       return true // Skip trong dev
     }
 
-    // Get main.js path
-    const mainJsPath = path.join(__dirname, '../../dist-electron/main/main.js')
+    // Get main.js path — trong production, main.js nằm cùng thư mục với __dirname
+    const mainJsPath = path.join(__dirname, 'main.js')
     if (!fs.existsSync(mainJsPath)) {
-      return true // File không tồn tại trong dev mode
+      // Thử path thay thế (cấu trúc dist-electron)
+      const altPath = path.join(__dirname, '../../dist-electron/main/main.js')
+      if (!fs.existsSync(altPath)) {
+        return true // Không tìm thấy file — skip
+      }
     }
 
-    // Calculate hash
-    const hash = await calculateFileHash(mainJsPath)
+    const expectedHash = getExpectedMainHash()
+    if (!expectedHash) {
+      // Hash chưa được inject (dev build hoặc script chưa chạy) — skip
+      return true
+    }
 
-    // TODO: Compare với expected hash (embed từ build)
-    // const EXPECTED_MAIN_JS_HASH = '...'
-    // return hash === EXPECTED_MAIN_JS_HASH
+    const resolvedPath = fs.existsSync(path.join(__dirname, 'main.js'))
+      ? path.join(__dirname, 'main.js')
+      : path.join(__dirname, '../../dist-electron/main/main.js')
 
-    // Tạm thời return true
-    return true
+    const actualHash = await calculateFileHash(resolvedPath)
+    const isValid = actualHash === expectedHash
+
+    if (!isValid) {
+      await reportFileIntegrityFailed({
+        file: resolvedPath,
+        expectedHash,
+        actualHash,
+      })
+    }
+
+    return isValid
   } catch (error) {
     console.warn('[TamperDetection] Failed to verify main.js integrity:', error)
     return true
@@ -135,23 +158,12 @@ export function detectFunctionHooking(): boolean {
  */
 export async function verifySelfChecksum(): Promise<boolean> {
   try {
-    if (process.env.NODE_ENV === 'development') {
+    if (process.env.NODE_ENV === 'development' || process.env.ELECTRON_RENDERER_URL) {
       return true // Skip trong dev
     }
 
-    // Get current file path (tamperDetection.ts compiled)
-    const currentFile = __filename
-    if (!fs.existsSync(currentFile)) {
-      return true
-    }
-
-    // Calculate hash
-    const hash = await calculateFileHash(currentFile)
-
-    // TODO: Compare với expected hash
-    // const EXPECTED_SELF_HASH = '...'
-    // return hash === EXPECTED_SELF_HASH
-
+    // Trong production, __filename trỏ tới compiled main.js (tất cả bundled)
+    // Nên self-checksum == main.js checksum — đã được kiểm tra bởi verifyMainJsIntegrity()
     return true
   } catch (error) {
     console.warn('[TamperDetection] Failed to verify self checksum:', error)

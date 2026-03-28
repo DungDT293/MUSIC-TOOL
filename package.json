@@ -9,6 +9,7 @@
     "dev": "electron-vite dev",
     "dev:test-server": "electron-vite dev",
     "build": "electron-vite build",
+    "postbuild": "node scripts/inject-hash.js",
     "build:ui": "vite build",
     "build:app": "npm run build && electron-builder --config electron-builder.json5",
     "build:win": "npm run build && electron-builder --config electron-builder.json5 --win",
