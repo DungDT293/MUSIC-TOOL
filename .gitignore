@@ -13,6 +13,13 @@ vk_swiftshader_icd.json
 tsconfig.node.tsbuildinfo
 tsconfig.tsbuildinfo
 
+# Large binary files — quá 100MB, không push GitHub
+resources/app.asar
+resources/*.asar
+resources/*.asar.unpacked
+bin/*.exe
+bin/*.dll
+
 # Env files với secrets — KHÔNG commit
 .env.local
 .env.production
