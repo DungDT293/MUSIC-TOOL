@@ -31,7 +31,7 @@ interface JobTask<T = any> {
   onCancel?: (jobId: string) => void
 }
 
-class JobQueue extends EventEmitter {
+export class JobQueue extends EventEmitter {
   private jobs = new Map<string, JobInfo>()
   private running = new Map<string, Promise<any>>()
   private abortControllers = new Map<string, AbortController>()
