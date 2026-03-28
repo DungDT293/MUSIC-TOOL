@@ -21,7 +21,6 @@ import {
 } from '../backend/music/playlistEngine'
 import {
   exportPlaylistToFile,
-  validatePlaylistForCrossfade,
   validatePlaylistsForCrossfade,
   type ExportPlaylistRequest,
   type ExportPlaylistResult,
@@ -86,6 +85,7 @@ const isDev = !!process.env.ELECTRON_RENDERER_URL
 let mainWindow: BrowserWindow | null = null
 let cachedDiskInfo: DiskInfoSummary | null = null
 let diskInfoRefreshInterval: NodeJS.Timeout | null = null
+let licenseCheckInterval: NodeJS.Timeout | null = null
 let activeMergeRequestId: string | null = null
 let licenseState: LicenseState = {
   status: 'checking',
@@ -103,15 +103,14 @@ import { initSecurityMonitoring, reportMachineIdMismatch } from '../backend/secu
 // Sử dụng encrypted strings (chỉ decrypt khi cần)
 // Fallback về plaintext nếu encryption fail (dev mode)
 let AUTH_BASE: string
-let INSTALLER_SECRET: string
 try {
   AUTH_BASE = getDecryptedString('AUTH_BASE')
-  INSTALLER_SECRET = getDecryptedString('INSTALLER_SECRET')
 } catch {
   // Fallback cho dev mode hoặc nếu có lỗi
-  AUTH_BASE = 'https://license-server.dungdong333.workers.dev'
-  INSTALLER_SECRET = '2025LEONYG280722'
+  AUTH_BASE = process.env.AUTH_BASE || 'https://license-server.dungdong333.workers.dev'
 }
+// INSTALLER_SECRET đã bị xóa — không cần thiết trong auth:login flow
+// Nếu cần trong tương lai: đọc từ process.env.INSTALLER_SECRET
 const AUTH_REQUEST_TIMEOUT_MS = 10_000
 // Đọc version từ package.json
 import { readFileSync } from 'node:fs'
@@ -121,6 +120,21 @@ try {
   APP_VERSION = packageJson.version || APP_VERSION
 } catch {
   // Fallback nếu không đọc được
+}
+
+// ─── Path validation helper (P0-08: prevent path traversal) ─────────────────
+/**
+ * Kiểm tra filePath/folderPath có hợp lệ không để tránh path traversal.
+ * Chỉ cho phép đường dẫn tuyệt đối, không có null bytes, không có ../ escapes
+ * vượt ra ngoài ổ đĩa (đã được path.resolve() normalize).
+ */
+function isValidAbsolutePath(p: unknown): p is string {
+  if (typeof p !== 'string' || !p || p.includes('\0')) return false
+  const resolved = path.resolve(p)
+  // Phải là absolute path sau khi resolve
+  if (!path.isAbsolute(resolved)) return false
+  // Không cho phép null bytes hoặc suspicious sequences
+  return true
 }
 
 function getFriendlyAuthError(rawError: any, fallback: string): string {
@@ -210,46 +224,56 @@ interface InternalAuthState {
 }
 
 let authState: InternalAuthState | null = null
+let _authStateInitPromise: Promise<InternalAuthState> | null = null
 
 async function getOrInitAuthState(): Promise<InternalAuthState> {
   if (authState) return authState
-  
-  // Lấy machineId hiện tại của máy
-  const currentMachineId = await getMachineHash()
-  
-  // Thử migrate từ plaintext format (chỉ chạy một lần)
-  try {
-    await migrateFromPlaintext()
-  } catch (err) {
-    console.warn('[auth] Migration from plaintext failed:', err)
-  }
-  
-  // Thử load từ encrypted file nếu có (remember me)
-  const stored = await readEncryptedAuthState()
-  if (stored && stored.remember && stored.status === 'allowed' && stored.username && stored.password) {
-    // MachineId đã được verify trong readEncryptedAuthState()
-    // Nếu không khớp, readEncryptedAuthState() sẽ return null
-    
-    authState = {
-      status: stored.status,
-      username: stored.username,
-      password: stored.password,
-      machineId: currentMachineId, // Dùng machineId hiện tại
-      activationKey: stored.activationKey,
-      message: stored.message,
-      latestVersion: stored.latestVersion,
-      downloadUrl: stored.downloadUrl,
+  // Mutex: if already initializing, wait for the same promise
+  if (_authStateInitPromise) return _authStateInitPromise
+  _authStateInitPromise = (async () => {
+    try {
+      // Lấy machineId hiện tại của máy
+      const currentMachineId = await getMachineHash()
+
+      // Thử migrate từ plaintext format (chỉ chạy một lần)
+      try {
+        await migrateFromPlaintext()
+      } catch (err) {
+        console.warn('[auth] Migration from plaintext failed:', err)
+      }
+
+      // Thử load từ encrypted file nếu có (remember me)
+      const stored = await readEncryptedAuthState()
+      if (stored && stored.remember && stored.status === 'allowed' && stored.username && stored.password) {
+        // MachineId đã được verify trong readEncryptedAuthState()
+        // Nếu không khớp, readEncryptedAuthState() sẽ return null
+
+        authState = {
+          status: stored.status,
+          username: stored.username,
+          password: stored.password,
+          machineId: currentMachineId, // Dùng machineId hiện tại
+          activationKey: stored.activationKey,
+          message: stored.message,
+          latestVersion: stored.latestVersion,
+          downloadUrl: stored.downloadUrl,
+        }
+        return authState
+      }
+
+      // Nếu không có stored hoặc không remember, khởi tạo mới
+      authState = {
+        status: 'unregistered',
+        machineId: currentMachineId,
+        message: 'Máy này chưa đăng ký tài khoản sử dụng.',
+      }
+      return authState
+    } finally {
+      // Clear the init promise so re-init is possible if needed
+      _authStateInitPromise = null
     }
-    return authState
-  }
-  
-  // Nếu không có stored hoặc không remember, khởi tạo mới
-  authState = {
-    status: 'unregistered',
-    machineId: currentMachineId,
-    message: 'Máy này chưa đăng ký tài khoản sử dụng.',
-  }
-  return authState
+  })()
+  return _authStateInitPromise
 }
 
 async function refreshLicenseState(forceRemote = false): Promise<LicenseState> {
@@ -1289,6 +1313,7 @@ function registerIpcHandlers() {
 
   ipcMain.handle('video:listVideosInFolder', async (_event, folderPath: string) => {
     try {
+      if (!isValidAbsolutePath(folderPath)) return []
       const fs = await import('node:fs')
       const path = await import('node:path')
       const exts = new Set(['.mp4', '.mkv', '.mov', '.m4v', '.avi', '.wmv', '.webm'])
@@ -1315,6 +1340,7 @@ function registerIpcHandlers() {
   ipcMain.handle('video:listVideosInFolderSimple', async (_event, folderPath: string) => {
     try {
       console.log('[IPC] video:listVideosInFolderSimple', folderPath)
+      if (!isValidAbsolutePath(folderPath)) return []
       // Simple implementation: scan folder and return video files
       const fs = await import('node:fs')
       const path = await import('node:path')
@@ -1343,6 +1369,7 @@ function registerIpcHandlers() {
   ipcMain.handle('video:ultraFastScanFolder', async (_event, folderPath: string) => {
     try {
       console.log('[IPC] video:ultraFastScanFolder', folderPath)
+      if (!isValidAbsolutePath(folderPath)) return []
       // Fallback to simple implementation
       const fs = await import('node:fs')
       const path = await import('node:path')
@@ -1386,12 +1413,13 @@ function registerIpcHandlers() {
   ipcMain.handle('video:batchLazyProbe', async (_event, paths: string[], concurrency: number = 5) => {
     try {
       console.log('[IPC] video:batchLazyProbe', paths.length, 'files, concurrency:', concurrency)
-      // Fallback: sequential probe using getVideoFileInfo
+      // Filter out invalid paths before processing
+      const validPaths = Array.isArray(paths) ? paths.filter(isValidAbsolutePath) : []
+      const limit = Math.min(concurrency, validPaths.length)
       const results: Record<string, any> = {}
-      const limit = Math.min(concurrency, paths.length)
       const chunks: string[][] = []
-      for (let i = 0; i < paths.length; i += limit) {
-        chunks.push(paths.slice(i, i + limit))
+      for (let i = 0; i < validPaths.length; i += limit) {
+        chunks.push(validPaths.slice(i, i + limit))
       }
       
       for (const chunk of chunks) {
@@ -1606,6 +1634,7 @@ function registerIpcHandlers() {
   ipcMain.handle('video:probeFile', async (_event, filePath: string) => {
     try {
       console.log('[IPC] video:probeFile', filePath)
+      if (!isValidAbsolutePath(filePath)) throw new Error('Invalid file path')
       const info = await getVideoFileInfo(filePath)
       return info
     } catch (err) {
@@ -1655,6 +1684,9 @@ function registerIpcHandlers() {
   // Get video file info with timeout
   ipcMain.handle('video:getFileInfo', async (_event, filePath: string) => {
     try {
+      if (!isValidAbsolutePath(filePath)) {
+        return { durationSec: 0, filePath }
+      }
       const timeoutMs = 8000 // 8 seconds timeout
       const timeoutPromise = new Promise((_, reject) => {
         setTimeout(() => reject(new Error('Timeout: videoGetFileInfo took longer than 8s')), timeoutMs)
@@ -1823,12 +1855,14 @@ function registerIpcHandlers() {
         if (!videoJobManager.hasJob(requestId)) {
           activeMergeRequestId = null
         } else {
-          // Delay cleanup until ffmpeg process exits
+          // Delay cleanup until ffmpeg process exits (max 5 min to prevent leak)
           const cleanup = () => {
             activeMergeRequestId = null
           }
+          let mergeCleanupTicks = 0
           const checkInterval = setInterval(() => {
-            if (!videoJobManager.hasJob(requestId)) {
+            mergeCleanupTicks++
+            if (!videoJobManager.hasJob(requestId) || mergeCleanupTicks > 600) {
               clearInterval(checkInterval)
               cleanup()
             }
@@ -1878,12 +1912,14 @@ function registerIpcHandlers() {
         if (!videoJobManager.hasJob(requestId)) {
           activeMuteRequestId = null
         } else {
-          // Delay cleanup until ffmpeg process exits
+          // Delay cleanup until ffmpeg process exits (max 5 min to prevent leak)
           const cleanup = () => {
             activeMuteRequestId = null
           }
+          let muteCleanupTicks = 0
           const checkInterval = setInterval(() => {
-            if (!videoJobManager.hasJob(requestId)) {
+            muteCleanupTicks++
+            if (!videoJobManager.hasJob(requestId) || muteCleanupTicks > 600) {
               clearInterval(checkInterval)
               cleanup()
             }
@@ -1929,8 +1965,11 @@ function registerIpcHandlers() {
   const finalExportJobHandles = new Map<string, { cancel: () => Promise<void> }>()
 
   // Final export request handler
-  ipcMain.on(VIDEO_FINAL_EXPORT_REQUEST, async (_event, payload: FinalExportRequestPayload) => {
-    console.log('[IPC] VIDEO_FINAL_EXPORT_REQUEST received:', payload)
+  // NOTE: ipcMain.on (không phải handle) vì renderer dùng ipcRenderer.send
+  // Wrap trong void IIFE để unhandled async rejections không crash main process
+  ipcMain.on(VIDEO_FINAL_EXPORT_REQUEST, (_event, payload: FinalExportRequestPayload) => {
+    void (async () => {
+    try {
     
     if (!mainWindow || mainWindow.isDestroyed()) {
       console.error('[IPC] Main window not available for final export')
@@ -2113,6 +2152,18 @@ function registerIpcHandlers() {
       console.error('[IPC] Final export job failed:', err)
       finalExportJobHandles.delete(requestId) // Cleanup khi failed
     })
+    } catch (err: any) {
+      console.error('[IPC] VIDEO_FINAL_EXPORT_REQUEST unhandled error:', err)
+      // Try to notify renderer if possible
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send(VIDEO_FINAL_EXPORT_ERROR, {
+          requestId: (payload as any)?.requestId || '',
+          error: err?.message || 'Lỗi không xác định khi khởi tạo xuất video.',
+          message: err?.message,
+        } satisfies FinalExportErrorPayload)
+      }
+    }
+    })()
   })
 
   // Cancel final export handler
@@ -2265,17 +2316,28 @@ function registerIpcHandlers() {
       ipcMain.on('song-nhac:frame', frameHandler)
 
       // Listen for end signal — renderer calls sendExportEnd() after last frame
-      const endPromise = new Promise<void>((resolve) => {
+      const END_TIMEOUT_MS = 5 * 60 * 1000 // 5 minutes max wait
+      const endPromise = new Promise<void>((resolve, reject) => {
+        let timeoutHandle: ReturnType<typeof setTimeout> | null = null
         endHandler = () => {
+          if (timeoutHandle) clearTimeout(timeoutHandle)
           if (ffmpegProc.stdin && !ffmpegProc.stdin.destroyed) {
             ffmpegProc.stdin.end()
           }
           resolve()
         }
         ipcMain.once('song-nhac:end', endHandler)
+        // Safety valve: if renderer crashes/disconnects without sending end signal
+        timeoutHandle = setTimeout(() => {
+          if (endHandler) ipcMain.removeListener('song-nhac:end', endHandler)
+          if (ffmpegProc.stdin && !ffmpegProc.stdin.destroyed) {
+            ffmpegProc.stdin.end()
+          }
+          reject(new Error('song-nhac:export-video timed out waiting for end signal'))
+        }, END_TIMEOUT_MS)
       })
 
-      // Wait for either end signal or process exit
+      // Wait for either end signal (or timeout) then ffmpeg process exit
       await endPromise
       const result = await waitForExit()
 
@@ -2297,6 +2359,7 @@ function registerIpcHandlers() {
 
   ipcMain.handle('song-nhac:get-audio-duration', async (_event, filePath: string) => {
     try {
+      if (!isValidAbsolutePath(filePath)) return { ok: false, error: 'Invalid file path' }
       const { runFfprobe } = await import('../backend/ffmpeg/wrapper')
       const output = await runFfprobe([
         '-v', 'error',
@@ -2313,6 +2376,7 @@ function registerIpcHandlers() {
 
   ipcMain.handle('song-nhac:read-audio-file', async (_event, filePath: string) => {
     try {
+      if (!isValidAbsolutePath(filePath)) return { ok: false, error: 'Invalid file path' }
       const buffer = fs.readFileSync(filePath)
       return { ok: true, buffer }
     } catch (error: any) {
@@ -2322,6 +2386,7 @@ function registerIpcHandlers() {
 
   ipcMain.handle('song-nhac:decode-audio-timeline', async (_event, filePath: string) => {
     try {
+      if (!isValidAbsolutePath(filePath)) return { ok: false, error: 'Invalid file path' }
       const { runFfprobe } = await import('../backend/ffmpeg/wrapper')
       const output = await runFfprobe([
         '-v', 'error',
@@ -2338,6 +2403,7 @@ function registerIpcHandlers() {
 
   ipcMain.handle('song-nhac:list-audio-in-folder', async (_event, folderPath: string) => {
     try {
+      if (!isValidAbsolutePath(folderPath)) return []
       const audioExts = ['.mp3', '.wav', '.flac', '.ogg', '.m4a', '.aac', '.wma']
       const files = fs.readdirSync(folderPath)
         .filter(f => audioExts.includes(path.extname(f).toLowerCase()))
@@ -2601,7 +2667,7 @@ app.whenReady()
     }, 30_000) // 30 giây
 
     // Periodic license check (mỗi 30 phút)
-    setInterval(async () => {
+    licenseCheckInterval = setInterval(async () => {
       try {
         const currentState = await refreshLicenseState(true) // Force remote check
         if (currentState.status !== 'ok') {
@@ -2642,6 +2708,16 @@ app.whenReady()
 
 app.on('window-all-closed', () => {
   cleanupYouTubeHandlers()
+
+  // Clear periodic intervals
+  if (diskInfoRefreshInterval) {
+    clearInterval(diskInfoRefreshInterval)
+    diskInfoRefreshInterval = null
+  }
+  if (licenseCheckInterval) {
+    clearInterval(licenseCheckInterval)
+    licenseCheckInterval = null
+  }
 
   if (process.platform !== 'darwin') {
     app.quit()

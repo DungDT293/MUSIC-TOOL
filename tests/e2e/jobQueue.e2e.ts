@@ -7,7 +7,6 @@
  * Điều này kiểm tra behavior thực tế của class, không mock.
  */
 
-import { test, expect } from '@playwright/test'
 import path from 'node:path'
 
 // ─── Import JobQueue từ source ─────────────────────────────────────────────
@@ -21,7 +20,7 @@ async function getJobQueue() {
 
 // ─── Basic Job Execution ───────────────────────────────────────────────────
 
-test.describe('JobQueue — basic execution', () => {
+describe('JobQueue — basic execution', () => {
   test('runs a job and returns result', async () => {
     const { JobQueue } = await import('../../backend/jobQueue/jobQueue')
     const queue = new (JobQueue as any)(2)
@@ -70,7 +69,7 @@ test.describe('JobQueue — basic execution', () => {
 
 // ─── Concurrency ────────────────────────────────────────────────────────────
 
-test.describe('JobQueue — concurrency enforcement', () => {
+describe('JobQueue — concurrency enforcement', () => {
   test('maxConcurrent=2 never runs more than 2 jobs simultaneously', async () => {
     const { JobQueue } = await import('../../backend/jobQueue/jobQueue')
     const queue = new (JobQueue as any)(2)
@@ -131,7 +130,7 @@ test.describe('JobQueue — concurrency enforcement', () => {
 
 // ─── Cancel ─────────────────────────────────────────────────────────────────
 
-test.describe('JobQueue — cancel', () => {
+describe('JobQueue — cancel', () => {
   test('cancel() aborts running job via AbortSignal', async () => {
     const { JobQueue } = await import('../../backend/jobQueue/jobQueue')
     const queue = new (JobQueue as any)(2)
@@ -151,6 +150,7 @@ test.describe('JobQueue — cancel', () => {
 
     // Give it a tick to start running
     await new Promise((r) => setTimeout(r, 20))
+    handle.result.catch(() => {}) // suppress unhandled rejection from abort
     await handle.cancel()
 
     const info = queue.getJob(handle.jobId)
@@ -176,6 +176,7 @@ test.describe('JobQueue — cancel', () => {
     })
 
     await new Promise((r) => setTimeout(r, 20))
+    handle.result.catch(() => {}) // suppress unhandled rejection from abort
     await handle.cancel()
 
     expect(cancelledId).toBe(handle.jobId)
@@ -211,7 +212,7 @@ test.describe('JobQueue — cancel', () => {
 
 // ─── Progress Updates ────────────────────────────────────────────────────────
 
-test.describe('JobQueue — progress tracking', () => {
+describe('JobQueue — progress tracking', () => {
   test('updateProgress emits values in order', async () => {
     const { JobQueue } = await import('../../backend/jobQueue/jobQueue')
     const queue = new (JobQueue as any)(2)
@@ -241,7 +242,7 @@ test.describe('JobQueue — progress tracking', () => {
 
 // ─── Job Management ──────────────────────────────────────────────────────────
 
-test.describe('JobQueue — job management', () => {
+describe('JobQueue — job management', () => {
   test('getJobs returns all tracked jobs', async () => {
     const { JobQueue } = await import('../../backend/jobQueue/jobQueue')
     const queue = new (JobQueue as any)(3)

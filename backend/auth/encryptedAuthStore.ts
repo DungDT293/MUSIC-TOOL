@@ -13,7 +13,6 @@ import type { SessionInfo } from './sessionManager'
 import { reportEncryptionFailed, reportMachineIdMismatch } from '../security/securityMonitoring'
 
 const AUTH_FILE_NAME = 'authState.enc'
-const SALT_LENGTH = 32
 const IV_LENGTH = 16
 const TAG_LENGTH = 16
 const HMAC_LENGTH = 32

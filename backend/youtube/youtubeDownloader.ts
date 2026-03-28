@@ -16,12 +16,22 @@ import { SafeFolderManager } from './SafeFolderManager';
 import { extractCookiesFromBrowsers } from './browserCookieService';
 
 export class YouTubeDownloader extends EventEmitter {
-  
+
   private ytDlpPath: string;
   // private ffmpegPath: string; // Reserved for future upscale feature
-  // ⚠️ WARNING: currentProcess chỉ track 1 process — concurrent downloads sẽ bị ghi đè.
-  // Cancel chỉ kill process cuối cùng. Fix: đổi thành Map<jobId, ChildProcess>.
-  private currentProcess: ChildProcess | null = null;
+  // Fix P0-07: dùng Map<jobId, ChildProcess> thay vì single currentProcess
+  // để hỗ trợ concurrent downloads và cancel đúng process
+  private activeProcesses: Map<string, ChildProcess> = new Map();
+  private _legacyCurrentProcess: ChildProcess | null = null; // backward compat alias
+  private get currentProcess(): ChildProcess | null {
+    // Trả về process cuối cùng được thêm vào (backward compat)
+    const values = Array.from(this.activeProcesses.values())
+    return values[values.length - 1] ?? null
+  }
+  private set currentProcess(proc: ChildProcess | null) {
+    // Legacy setter — dùng addProcess/removeProcess thay thế
+    this._legacyCurrentProcess = proc
+  }
   private folderManager: SafeFolderManager | null = null;
   
   constructor() {
@@ -579,16 +589,34 @@ export class YouTubeDownloader extends EventEmitter {
    * Cancel ongoing download
    */
   cancelDownload(): void {
-    if (this.currentProcess) {
-      console.log('[YouTubeDownloader] Cancelling download...');
-      this.currentProcess.kill('SIGTERM');
-      this.currentProcess = null;
-      
+    // Fix P0-07: Kill ALL active processes, not just the last one
+    if (this.activeProcesses.size > 0) {
+      console.log(`[YouTubeDownloader] Cancelling ${this.activeProcesses.size} active download(s)...`);
+      for (const [jobId, proc] of this.activeProcesses) {
+        try {
+          if (!proc.killed) proc.kill('SIGTERM');
+        } catch (err) {
+          console.warn(`[YouTubeDownloader] Error killing process ${jobId}:`, err);
+        }
+      }
+      this.activeProcesses.clear();
+
       this.emit('progress', {
         type: 'error',
         message: 'Download cancelled by user'
       } as DownloadProgress);
     }
+  }
+
+  /** Helper: track a new process so cancelDownload() can kill it */
+  private addProcess(jobId: string, proc: ChildProcess): void {
+    this.activeProcesses.set(jobId, proc);
+    proc.once('close', () => this.activeProcesses.delete(jobId));
+  }
+
+  /** Helper: remove a tracked process (called on completion) */
+  private removeProcess(jobId: string): void {
+    this.activeProcesses.delete(jobId);
   }
   
   /**
@@ -767,7 +795,8 @@ export class YouTubeDownloader extends EventEmitter {
     }
     return new Promise((resolve, reject) => {
       const proc = spawn(cmd[0], cmd.slice(1));
-      this.currentProcess = proc;
+      const _procId = `dl-${Date.now()}`
+      this.addProcess(_procId, proc);
       
       let downloadedFile = '';
       let stderrBuffer = '';
@@ -792,7 +821,7 @@ export class YouTubeDownloader extends EventEmitter {
       });
       
       proc.on('close', async (code) => {
-        this.currentProcess = null;
+        this.removeProcess(_procId);
         cleanupTempCookie()
 
         if (code === 0) {

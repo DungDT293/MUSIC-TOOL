@@ -43,10 +43,9 @@ const api: IPCAPI = {
       ipcRenderer.invoke('auth:validateToken') as Promise<any>,
   },
   music: {
-    scan: (payload: any) => ipcRenderer.invoke('music:scan', payload),
-    createPlaylist: (payload: any) => ipcRenderer.invoke('music:createPlaylist', payload),
-    preview: (payload: any) => ipcRenderer.invoke('music:preview', payload),
-    export: (payload: any) => ipcRenderer.invoke('music:export', payload),
+    // NOTE: music:scan, music:createPlaylist, music:preview, music:export
+    // không có handler trong main.ts — dùng các API cụ thể bên dưới:
+    // scanMusicFolders, createPlaylists, exportPlaylist thay thế.
     validatePlaylistsForCrossfade: (payload: any) => ipcRenderer.invoke('music:validatePlaylistsForCrossfade', payload),
     normalizeAudio: (payload: any) => ipcRenderer.invoke('music:normalizeAudio', payload),
     onNormalizeAudioProgress: (handler: (progress: any) => void) => {
@@ -60,9 +59,9 @@ const api: IPCAPI = {
     cancelNormalizeAudio: () => ipcRenderer.invoke('music:normalizeAudio:cancel'),
   },
   video: {
-    cutSingle: (payload: any) => ipcRenderer.invoke('video:cutSingle', payload),
-    cutBatch: (payload: any) => ipcRenderer.invoke('video:cutBatch', payload),
-    merge: (payload: any) => ipcRenderer.invoke('video:merge', payload),
+    // NOTE: video:cutSingle, video:cutBatch, video:merge, video:finalExport
+    // không có handler trong main.ts — dùng các API cụ thể:
+    // videoCutSingleSimple, videoSplitManySimple, videoMergeSimple, videoFinalExport thay thế.
     finalExport: (payload: any) => ipcRenderer.invoke('video:finalExport', payload)
   },
   probeFile: (path: string) => ipcRenderer.invoke('ffmpeg:probe', path),
@@ -89,8 +88,10 @@ const api: IPCAPI = {
   listPlaylists: () => ipcRenderer.invoke('music:listPlaylists'),
   getExportHistory: () => ipcRenderer.invoke('music:getExportHistory'),
   exportPlaylist: (req: any) => ipcRenderer.invoke('music:exportPlaylist', req),
+  // Fix P1-03: top-level validatePlaylistsForCrossfade đồng bộ với music.validatePlaylistsForCrossfade
+  // Wrap playlistIds array thành object { playlistIds } mà handler mong đợi
   validatePlaylistsForCrossfade: (playlistIds: string[]) =>
-    ipcRenderer.invoke('music:validatePlaylistsForCrossfade', playlistIds),
+    ipcRenderer.invoke('music:validatePlaylistsForCrossfade', { playlistIds }),
   // cutVideoSegment: DEPRECATED - use videoCutSingleSimple instead
   // cutVideoSegment: (req: any) => ipcRenderer.invoke('video:cutSegment', req),
   selectVideoFile: () => ipcRenderer.invoke('dialog:selectVideoFile'),

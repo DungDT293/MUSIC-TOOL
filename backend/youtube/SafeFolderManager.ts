@@ -71,39 +71,52 @@ export class SafeFolderManager {
   async createChannelFolder(channelName: string, videoTitle?: string): Promise<string> {
     try {
       // Làm sạch tên kênh
-      const safeChannelName = this.sanitizeFolderName(channelName);
+      const safeChannelName = this.sanitizeFolderName(channelName)
 
-      // Tạo đường dẫn folder
-      const channelFolder = path.join(this.basePath, safeChannelName);
+      // Tạo đường dẫn folder và kiểm tra path traversal
+      const channelFolder = path.resolve(this.basePath, safeChannelName)
+
+      // Guard: ensure channelFolder is strictly inside basePath
+      const resolvedBase = path.resolve(this.basePath)
+      if (!channelFolder.startsWith(resolvedBase + path.sep) && channelFolder !== resolvedBase) {
+        console.error(`[SafeFolderManager] Path traversal detected: ${channelFolder}`)
+        return this.basePath
+      }
 
       // Kiểm tra và tạo folder
       try {
-        await fs.access(channelFolder);
-        console.log(`[SafeFolderManager] Folder đã tồn tại: ${channelFolder}`);
+        await fs.access(channelFolder)
+        console.log(`[SafeFolderManager] Folder đã tồn tại: ${channelFolder}`)
       } catch {
-        await fs.mkdir(channelFolder, { recursive: true });
-        console.log(`[SafeFolderManager] ✅ Đã tạo folder: ${channelFolder}`);
+        await fs.mkdir(channelFolder, { recursive: true })
+        console.log(`[SafeFolderManager] ✅ Đã tạo folder: ${channelFolder}`)
       }
 
       // Tạo subfolder cho video nếu có
       if (videoTitle) {
-        const safeVideoName = this.sanitizeFolderName(videoTitle);
-        const videoFolder = path.join(channelFolder, safeVideoName);
+        const safeVideoName = this.sanitizeFolderName(videoTitle)
+        const videoFolder = path.resolve(channelFolder, safeVideoName)
 
-        try {
-          await fs.access(videoFolder);
-        } catch {
-          await fs.mkdir(videoFolder, { recursive: true });
-          console.log(`[SafeFolderManager] ✅ Đã tạo subfolder: ${videoFolder}`);
+        // Guard: ensure videoFolder is strictly inside channelFolder
+        if (!videoFolder.startsWith(channelFolder + path.sep) && videoFolder !== channelFolder) {
+          console.error(`[SafeFolderManager] Path traversal detected: ${videoFolder}`)
+          return channelFolder
         }
 
-        return videoFolder;
+        try {
+          await fs.access(videoFolder)
+        } catch {
+          await fs.mkdir(videoFolder, { recursive: true })
+          console.log(`[SafeFolderManager] ✅ Đã tạo subfolder: ${videoFolder}`)
+        }
+
+        return videoFolder
       }
 
-      return channelFolder;
+      return channelFolder
     } catch (error: any) {
-      console.error(`[SafeFolderManager] ❌ Lỗi tạo folder: ${error.message}`);
-      return this.basePath;
+      console.error(`[SafeFolderManager] ❌ Lỗi tạo folder: ${error.message}`)
+      return this.basePath
     }
   }
 

@@ -136,7 +136,15 @@ export function offAutopilotProgress() {
 function emit(progress: Partial<AutopilotProgress>) {
   const next: AutopilotProgress = { ...currentProgress, ...progress }
   if (typeof progress.stepPercent === 'number') {
-    next.stepPercent = Math.max(currentProgress.stepPercent || 0, progress.stepPercent)
+    // Allow stepPercent to reset when the step index changes (new step starts from 0)
+    const stepChanged =
+      typeof progress.currentStep === 'number' &&
+      progress.currentStep !== currentProgress.currentStep
+    if (stepChanged) {
+      next.stepPercent = progress.stepPercent
+    } else {
+      next.stepPercent = Math.max(currentProgress.stepPercent || 0, progress.stepPercent)
+    }
   }
   currentProgress = next
   if (progressListener) progressListener(currentProgress)

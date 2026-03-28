@@ -4,6 +4,9 @@
 
 import { type ChildProcess } from 'child_process'
 
+/** Max number of cancelled job IDs to retain (prevent unbounded memory growth) */
+const MAX_CANCELLED_HISTORY = 200
+
 class VideoJobManager {
   private jobs = new Map<string, ChildProcess>()
   private cancelledJobs = new Set<string>()
@@ -13,12 +16,12 @@ class VideoJobManager {
    */
   registerJob(requestId: string, proc: ChildProcess): void {
     this.jobs.set(requestId, proc)
-    
+
     // Auto cleanup khi process kết thúc
     proc.on('close', () => {
       this.jobs.delete(requestId)
-      // Fix Critical #1.3: Don't delete cancelledJobs here to avoid race condition
-      // cancelledJobs will be cleaned up when job is actually cancelled or when explicitly cleared
+      // Cleanup cancelled flag after job finishes — safe to remove now
+      this.cancelledJobs.delete(requestId)
     })
   }
 
@@ -38,17 +41,22 @@ class VideoJobManager {
     if (this.cancelledJobs.has(requestId)) {
       return
     }
-    
+
     // Mark as cancelled trước (để các hàm khác có thể check)
     this.cancelledJobs.add(requestId)
-    
+
+    // Evict oldest entry if history cap exceeded
+    if (this.cancelledJobs.size > MAX_CANCELLED_HISTORY) {
+      const oldest = this.cancelledJobs.values().next().value
+      if (oldest !== undefined) this.cancelledJobs.delete(oldest)
+    }
+
     // Fix Critical #1.3: Get proc after marking cancelled to avoid race condition
     // Nếu proc không tồn tại, cancelled flag vẫn được giữ để các hàm khác có thể check
     const proc = this.jobs.get(requestId)
     if (!proc) {
       // Job không tồn tại trong Map, nhưng đã mark cancelled rồi
       // Có thể job đã hoàn thành hoặc chưa được register
-      // cancelledJobs sẽ được cleanup sau khi job thực sự hoàn thành
       return
     }
 
@@ -72,7 +80,6 @@ class VideoJobManager {
     }
 
     // Không xóa job khỏi Map ngay lập tức - để process.on('close') tự cleanup
-    // cancelledJobs sẽ được giữ lại để các hàm khác có thể check
   }
 
   /**
@@ -116,11 +123,6 @@ class VideoJobManager {
 
 // Singleton instance
 export const videoJobManager = new VideoJobManager()
-
-
-
-
-
 
 
 

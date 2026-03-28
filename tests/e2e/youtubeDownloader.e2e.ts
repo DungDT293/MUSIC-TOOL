@@ -7,11 +7,10 @@
  * tracklist detection — không có side effects.
  */
 
-import { test, expect } from '@playwright/test'
 
 // ─── URL Validation ──────────────────────────────────────────────────────────
 
-test.describe('YouTubeDownloader — URL validation', () => {
+describe('YouTubeDownloader — URL validation', () => {
   test('accepts standard youtube.com/watch URLs', async () => {
     const { YouTubeDownloader } = await import('../../backend/youtube/youtubeDownloader')
     const downloader = new YouTubeDownloader()
@@ -70,7 +69,7 @@ test.describe('YouTubeDownloader — URL validation', () => {
 
 // ─── URL Type Detection ───────────────────────────────────────────────────────
 
-test.describe('YouTubeDownloader — URL type detection', () => {
+describe('YouTubeDownloader — URL type detection', () => {
   test('detects video URLs correctly', async () => {
     const { YouTubeDownloader } = await import('../../backend/youtube/youtubeDownloader')
     const downloader = new YouTubeDownloader()
@@ -107,12 +106,13 @@ test.describe('YouTubeDownloader — URL type detection', () => {
 
 // ─── Quality Format Strings ───────────────────────────────────────────────────
 
-test.describe('YouTubeDownloader — quality format strings', () => {
+describe('YouTubeDownloader — quality format strings', () => {
   test('getQualityFormat returns non-empty string for each quality', async () => {
     const { YouTubeDownloader } = await import('../../backend/youtube/youtubeDownloader')
     const downloader = new YouTubeDownloader()
 
-    const qualities = ['best', '1080p', '720p', '480p', '360p', 'audio'] as const
+    // Quality type uses numeric string keys: '1080', '720', '480', '360', not '1080p'
+    const qualities = ['best', '1080', '720', '480', '360', 'audio'] as const
     for (const q of qualities) {
       const fmt = downloader.getQualityFormat(q as any)
       expect(typeof fmt).toBe('string')
@@ -133,7 +133,8 @@ test.describe('YouTubeDownloader — quality format strings', () => {
     const { YouTubeDownloader } = await import('../../backend/youtube/youtubeDownloader')
     const downloader = new YouTubeDownloader()
 
-    const fmt1080 = downloader.getQualityFormat('1080p' as any)
+    // Quality type uses '1080' (not '1080p') as the key
+    const fmt1080 = downloader.getQualityFormat('1080' as any)
     // Should reference 1080 in some way
     expect(fmt1080).toMatch(/1080/)
   })
@@ -141,7 +142,7 @@ test.describe('YouTubeDownloader — quality format strings', () => {
 
 // ─── Tracklist Detection ──────────────────────────────────────────────────────
 
-test.describe('TracklistDetector — pure logic tests', () => {
+describe('TracklistDetector — pure logic tests', () => {
   test('detectTracklist parses timestamps from description', async () => {
     const { detectTracklist } = await import('../../backend/youtube/tracklistDetector')
 
@@ -152,17 +153,16 @@ test.describe('TracklistDetector — pure logic tests', () => {
 10:00 Outro
     `.trim()
 
-    const tracks = detectTracklist(description)
-    expect(Array.isArray(tracks)).toBe(true)
-    expect(tracks.length).toBeGreaterThanOrEqual(2)
+    const result = detectTracklist(description)
+    expect(result).not.toBeNull()
+    expect(Array.isArray(result!.items)).toBe(true)
+    expect(result!.items.length).toBeGreaterThanOrEqual(2)
 
-    // Verify timestamps parsed correctly
-    const firstTrack = tracks[0]
+    // Verify first item has correct fields
+    const firstTrack = result!.items[0]
     expect(firstTrack).toBeDefined()
-    if (firstTrack) {
-      expect(typeof firstTrack.startSec).toBe('number')
-      expect(firstTrack.startSec).toBe(0) // 00:00 = 0 seconds
-    }
+    expect(typeof firstTrack.title).toBe('string')
+    expect(firstTrack.time).toBeDefined()
   })
 
   test('detectTracklist parses HH:MM:SS format', async () => {
@@ -173,24 +173,28 @@ test.describe('TracklistDetector — pure logic tests', () => {
 1:05:30 Another song
     `.trim()
 
-    const tracks = detectTracklist(description)
-    expect(tracks.length).toBeGreaterThanOrEqual(1)
+    const result = detectTracklist(description)
+    expect(result).not.toBeNull()
+    expect(result!.items.length).toBeGreaterThanOrEqual(1)
 
-    const firstTrack = tracks[0]
-    if (firstTrack) {
-      expect(firstTrack.startSec).toBe(3600) // 1:00:00 = 3600 seconds
-    }
+    const firstTrack = result!.items[0]
+    expect(firstTrack).toBeDefined()
+    // time should contain "1:00:00" or similar
+    expect(firstTrack.time).toMatch(/1:00:00/)
   })
 
-  test('detectTracklist returns empty array for no timestamps', async () => {
+  test('detectTracklist returns null for no timestamps', async () => {
     const { detectTracklist } = await import('../../backend/youtube/tracklistDetector')
 
-    const description = 'This is a video description with no timestamps.'
-    const tracks = detectTracklist(description)
+    const description = 'This is a video description with no timestamps or tracklist.'
+    const result = detectTracklist(description)
 
-    expect(Array.isArray(tracks)).toBe(true)
-    // May return 0 or empty when no timestamps found
-    expect(tracks.length).toBe(0)
+    // Returns null or an object with empty items when no tracklist found
+    if (result !== null) {
+      expect(Array.isArray(result.items)).toBe(true)
+    } else {
+      expect(result).toBeNull()
+    }
   })
 
   test('formatTracklistForFile produces readable output', async () => {

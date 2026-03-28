@@ -10,7 +10,7 @@ export default defineConfig({
     name: 'unit',
     environment: 'node',
     globals: true,
-    include: ['tests/unit/**/*.test.ts'],
+    include: ['tests/unit/**/*.test.ts', 'tests/e2e/**/*.e2e.ts'],
     exclude: ['node_modules', 'dist', 'dist-electron'],
     coverage: {
       provider: 'v8',

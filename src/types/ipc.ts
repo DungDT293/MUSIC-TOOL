@@ -856,7 +856,8 @@ export interface IPCAPI {
   onExportProgress: (
     handler: (payload: ExportProgressPayload) => void
   ) => () => void
-  toFileUrl: (filePath: string) => Promise<string>
+  // toFileUrl is sync in preload (pathToFileURL is sync) — union type to avoid breaking callers that use await
+  toFileUrl: (filePath: string) => string | Promise<string>
   videoFinalExport: {
     start: (payload: FinalExportRequestPayload) => void
     cancel: (requestId: string) => Promise<{ success: boolean; error?: string }>

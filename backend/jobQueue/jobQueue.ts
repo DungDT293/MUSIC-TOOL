@@ -35,7 +35,7 @@ export class JobQueue extends EventEmitter {
   private jobs = new Map<string, JobInfo>()
   private running = new Map<string, Promise<any>>()
   private abortControllers = new Map<string, AbortController>()
-  private pendingQueue: Array<() => void> = []
+  private pendingQueue: Array<{ jobId: string; fn: () => void }> = []
   private maxConcurrent: number
 
   constructor(maxConcurrent = 3) {
@@ -50,7 +50,10 @@ export class JobQueue extends EventEmitter {
   private drainPending(): void {
     while (this.pendingQueue.length > 0 && this.runningCount < this.maxConcurrent) {
       const next = this.pendingQueue.shift()!
-      next()
+      // Skip cancelled pending jobs
+      const info = this.jobs.get(next.jobId)
+      if (info?.status === 'cancelled') continue
+      next.fn()
     }
   }
 
@@ -100,7 +103,13 @@ export class JobQueue extends EventEmitter {
 
           return result
         } catch (error: any) {
-          if (error?.message?.includes('cancelled') || error?.message?.includes('dừng')) {
+          const isAborted = abortController.signal.aborted
+          const isCancelMsg =
+            error?.message?.includes('cancelled') ||
+            error?.message?.includes('dừng') ||
+            error?.message?.includes('aborted') ||
+            error?.name === 'AbortError'
+          if (isAborted || isCancelMsg) {
             jobInfo.status = 'cancelled'
           } else {
             jobInfo.status = 'failed'
@@ -128,8 +137,17 @@ export class JobQueue extends EventEmitter {
       taskPromise = runTask() as Promise<T>
     } else {
       taskPromise = new Promise<T>((resolve, reject) => {
-        this.pendingQueue.push(() => {
-          runTask().then(resolve, reject)
+        this.pendingQueue.push({
+          jobId,
+          fn: () => {
+            // If job was cancelled while pending, skip execution
+            const info = this.jobs.get(jobId)
+            if (info?.status === 'cancelled') {
+              reject(new Error('Job cancelled before starting'))
+              return
+            }
+            runTask().then(resolve, reject)
+          },
         })
       })
     }
@@ -164,11 +182,8 @@ export class JobQueue extends EventEmitter {
       this.jobs.set(jobId, jobInfo)
       this.emit('update', jobInfo)
 
-      // Remove from pending queue if not yet started
-      this.pendingQueue = this.pendingQueue.filter((_, i) => {
-        // Can't identify by jobId in closure; abort signal will handle it
-        return true
-      })
+      // Remove cancelled job from pending queue so it is not started when a slot opens
+      this.pendingQueue = this.pendingQueue.filter((entry) => entry.jobId !== jobId)
     }
   }
 
