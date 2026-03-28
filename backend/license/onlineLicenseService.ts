@@ -2,6 +2,7 @@ import { app } from 'electron'
 import { getMachineHash } from './machineId'
 import { readStoredTicket, writeStoredTicket, clearStoredTicket } from './ticketStore'
 import { getDecryptedString } from '../security/stringEncryption'
+import { createSignedHeaders } from '../security/apiSigning'
 
 // Fallback về plaintext nếu encryption fail
 let DEFAULT_BASE: string
@@ -64,10 +65,13 @@ async function postJson<T>(
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
   try {
+    // Thêm signed headers để chống replay attack và tampering
+    const signedHeaders = await createSignedHeaders('POST', path, body)
     const response = await fetch(`${API_BASE}${path}`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
+        ...signedHeaders,
         ...headers,
       },
       body: JSON.stringify(body),

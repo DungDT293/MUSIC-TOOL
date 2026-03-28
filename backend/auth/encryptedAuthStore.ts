@@ -17,7 +17,7 @@ const SALT_LENGTH = 32
 const IV_LENGTH = 16
 const TAG_LENGTH = 16
 const HMAC_LENGTH = 32
-const PBKDF2_ITERATIONS = 10000
+const PBKDF2_ITERATIONS = 300000
 const KEY_LENGTH = 32 // 256 bits
 
 // Salt cố định được embed trong code (không lưu trong file)

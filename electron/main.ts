@@ -76,6 +76,8 @@ import {
 } from '../backend/auth/encryptedAuthStore'
 import type { StoredAuthState } from '../backend/auth/authStore'
 import { checkAndCleanCacheOnUpdate } from '../backend/utils/cacheCleanup'
+import { loginRateLimiter, LOGIN_RATE_LIMIT_CONFIG } from '../backend/security/rateLimiter'
+import { createSignedHeaders } from '../backend/security/apiSigning'
 
 // Biến kiểm tra dev mode
 const isDev = !!process.env.ELECTRON_RENDERER_URL
@@ -456,7 +458,7 @@ function createWindow() {
       preload: preloadPath,
       nodeIntegration: false,
       contextIsolation: true,
-      sandbox: false,
+      sandbox: true,
       // Cho phép trang http://localhost:5173 load file:// trong DEV
       webSecurity: !isDev,
       allowRunningInsecureContent: isDev,
@@ -902,6 +904,17 @@ function registerIpcHandlers() {
     'auth:login',
     async (_event, payload: { username: string; password: string; remember: boolean }) => {
       try {
+        // Rate limit: tối đa 5 lần thử trong 15 phút theo username
+        const rateKey = `login:${payload.username}`
+        const rateResult = loginRateLimiter.check(rateKey, LOGIN_RATE_LIMIT_CONFIG)
+        if (!rateResult.allowed) {
+          const resetInSec = rateResult.resetAt ? Math.ceil((rateResult.resetAt - Date.now()) / 1000) : 900
+          return {
+            ok: false,
+            message: `Quá nhiều lần thử đăng nhập. Vui lòng thử lại sau ${resetInSec} giây.`,
+          }
+        }
+
         const base = await getOrInitAuthState()
         const result = await postJson<{
           allow: boolean
@@ -959,6 +972,8 @@ function registerIpcHandlers() {
           clearEncryptedAuthState()
         }
 
+        // Login thành công — reset rate limiter
+        loginRateLimiter.reset(rateKey)
         return { ok: true }
       } catch (err: any) {
         console.error('[auth:login] error', err)
@@ -1013,6 +1028,14 @@ function registerIpcHandlers() {
 
   ipcMain.handle('auth:validateKey', async (_event, data: { username: string; key: string }) => {
     try {
+      // Rate limit: tối đa 5 lần thử trong 15 phút theo username
+      const rateKey = `validateKey:${data.username}`
+      const rateResult = loginRateLimiter.check(rateKey, LOGIN_RATE_LIMIT_CONFIG)
+      if (!rateResult.allowed) {
+        const resetInSec = rateResult.resetAt ? Math.ceil((rateResult.resetAt - Date.now()) / 1000) : 900
+        return { valid: false, message: `Quá nhiều lần thử. Vui lòng thử lại sau ${resetInSec} giây.` }
+      }
+
       const state = await getOrInitAuthState()
       const result = await postJson<{
         valid: boolean
@@ -1042,6 +1065,8 @@ function registerIpcHandlers() {
           remember: true,
           sessionInfo: createSession(),
         })
+        // Key hợp lệ — reset rate limiter
+        loginRateLimiter.reset(rateKey)
       }
       return result
     } catch (err: any) {
