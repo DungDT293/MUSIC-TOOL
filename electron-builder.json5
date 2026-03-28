@@ -1,0 +1,85 @@
+{
+  appId: 'com.93media.tool-mix-nhac',
+  productName: '93 Media - Tool Mix Nhạc',
+
+  directories: {
+    output: 'dist-electron-output',
+    buildResources: 'build',
+  },
+
+  files: [
+    'dist/**/*',
+    'dist-electron/**/*',
+    'package.json',
+  ],
+
+  extraResources: [
+    {
+      from: 'bin',
+      to: 'bin',
+      filter: ['**/*'],
+    },
+    {
+      from: 'security',
+      to: 'security',
+      filter: ['license_public_key.pem'],
+    },
+    {
+      from: 'scripts',
+      to: 'scripts',
+      filter: ['*.ps1', '*.bat'],
+    },
+  ],
+
+  win: {
+    target: [
+      {
+        target: 'nsis',
+        arch: ['x64'],
+      },
+      {
+        target: 'portable',
+        arch: ['x64'],
+      },
+    ],
+    artifactName: '${productName}-${version}-${arch}.${ext}',
+  },
+
+  nsis: {
+    oneClick: false,
+    allowToChangeInstallationDirectory: true,
+    createDesktopShortcut: true,
+    createStartMenuShortcut: true,
+    shortcutName: '93 Media Tool',
+    include: 'build/installer.nsh',
+  },
+
+  portable: {
+    artifactName: '${productName}-${version}-portable.${ext}',
+  },
+
+  publish: [
+    {
+      provider: 'github',
+      owner: 'DungDT293',
+      repo: '93-media-tool-releases',
+      releaseType: 'release',
+    },
+  ],
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

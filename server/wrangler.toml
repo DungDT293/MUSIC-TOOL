@@ -1,0 +1,30 @@
+# Cloudflare Workers Configuration
+# File này dùng để cấu hình và deploy lên Cloudflare Workers
+
+name = "license-server"
+main = "index.ts"
+compatibility_date = "2024-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+# D1 Database binding
+[[d1_databases]]
+binding = "DB"
+database_name = "license-db"
+database_id = "93f5890b-ab73-42f7-875e-788193b79c99"  # Thay bằng database_id thực tế của bạn
+
+# Environment variables (secrets - set via wrangler secret put)
+# INSTALLER_SECRET - Secret key cho installer
+# ADMIN_TOKEN - Token cho admin dashboard
+# SENDGRID_API_KEY - API key cho SendGrid (optional)
+# ALERT_EMAIL - Email để nhận alerts (optional)
+# WEBHOOK_URL - Webhook URL cho Discord/Slack (optional)
+
+# Routes (nếu muốn custom domain)
+# routes = [
+#   { pattern = "api.yourdomain.com/*", zone_name = "yourdomain.com" }
+# ]
+
+# Build configuration
+# [build]
+# command = "npm run build"  # Comment vì package.json không có script build
+

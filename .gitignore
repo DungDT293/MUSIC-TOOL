@@ -1,0 +1,14 @@
+node_modules
+dist
+dist-electron
+out
+release
+*.pak
+*.bin
+*.dll
+*.exe
+snapshot_blob.bin
+v8_context_snapshot.bin
+vk_swiftshader_icd.json
+tsconfig.node.tsbuildinfo
+tsconfig.tsbuildinfo

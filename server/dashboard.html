@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Security Dashboard - 93 Media Tool</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      padding: 20px;
+    }
+    .container {
+      max-width: 1400px;
+      margin: 0 auto;
+    }
+    h1 {
+      margin-bottom: 30px;
+      color: #f1f5f9;
+    }
+    .controls {
+      display: flex;
+      gap: 15px;
+      margin-bottom: 30px;
+      flex-wrap: wrap;
+    }
+    .controls select, .controls input {
+      padding: 8px 12px;
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 6px;
+      color: #e2e8f0;
+      font-size: 14px;
+    }
+    .controls button {
+      padding: 8px 16px;
+      background: #0ea5e9;
+      border: none;
+      border-radius: 6px;
+      color: white;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    .controls button:hover {
+      background: #0284c7;
+    }
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 20px;
+      margin-bottom: 30px;
+    }
+    .stat-card {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      padding: 20px;
+    }
+    .stat-card h3 {
+      font-size: 14px;
+      color: #94a3b8;
+      margin-bottom: 10px;
+    }
+    .stat-card .value {
+      font-size: 32px;
+      font-weight: bold;
+      color: #0ea5e9;
+    }
+    .chart-container {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      padding: 20px;
+      margin-bottom: 30px;
+    }
+    .chart-container h2 {
+      margin-bottom: 20px;
+      font-size: 18px;
+    }
+    .events-table {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .events-table table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    .events-table th {
+      background: #0f172a;
+      padding: 12px;
+      text-align: left;
+      font-size: 12px;
+      color: #94a3b8;
+      text-transform: uppercase;
+      border-bottom: 1px solid #334155;
+    }
+    .events-table td {
+      padding: 12px;
+      border-bottom: 1px solid #334155;
+      font-size: 14px;
+    }
+    .events-table tr:hover {
+      background: #0f172a;
+    }
+    .severity-critical { color: #ef4444; }
+    .severity-high { color: #f97316; }
+    .severity-medium { color: #eab308; }
+    .severity-low { color: #22c55e; }
+    .loading {
+      text-align: center;
+      padding: 40px;
+      color: #94a3b8;
+    }
+    .error {
+      background: #7f1d1d;
+      border: 1px solid #991b1b;
+      border-radius: 6px;
+      padding: 12px;
+      margin-bottom: 20px;
+      color: #fca5a5;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🔒 Security Dashboard</h1>
+
+    <div class="controls">
+      <select id="severityFilter">
+        <option value="">All Severities</option>
+        <option value="critical">Critical</option>
+        <option value="high">High</option>
+        <option value="medium">Medium</option>
+        <option value="low">Low</option>
+      </select>
+      <select id="eventTypeFilter">
+        <option value="">All Event Types</option>
+      </select>
+      <input type="number" id="hoursFilter" value="24" min="1" max="168" placeholder="Hours">
+      <button onclick="refreshData()">Refresh</button>
+      <button onclick="autoRefresh()">Auto Refresh: <span id="autoRefreshStatus">OFF</span></button>
+    </div>
+
+    <div id="errorContainer"></div>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <h3>Total Events (24h)</h3>
+        <div class="value" id="totalEvents">-</div>
+      </div>
+      <div class="stat-card">
+        <h3>Critical</h3>
+        <div class="value severity-critical" id="criticalCount">-</div>
+      </div>
+      <div class="stat-card">
+        <h3>High</h3>
+        <div class="value severity-high" id="highCount">-</div>
+      </div>
+      <div class="stat-card">
+        <h3>Medium</h3>
+        <div class="value severity-medium" id="mediumCount">-</div>
+      </div>
+      <div class="stat-card">
+        <h3>Low</h3>
+        <div class="value severity-low" id="lowCount">-</div>
+      </div>
+    </div>
+
+    <div class="chart-container">
+      <h2>Events by Type</h2>
+      <canvas id="typeChart"></canvas>
+    </div>
+
+    <div class="chart-container">
+      <h2>Events by Severity</h2>
+      <canvas id="severityChart"></canvas>
+    </div>
+
+    <div class="events-table">
+      <table>
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Event Type</th>
+            <th>Severity</th>
+            <th>Message</th>
+            <th>Machine ID</th>
+            <th>Username</th>
+          </tr>
+        </thead>
+        <tbody id="eventsTableBody">
+          <tr>
+            <td colspan="6" class="loading">Loading...</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    const API_BASE = window.location.origin
+    const ADMIN_TOKEN = prompt('Enter Admin Token:') // In production, use proper auth
+
+    let typeChart = null
+    let severityChart = null
+    let autoRefreshInterval = null
+
+    async function fetchWithAuth(url) {
+      const response = await fetch(url, {
+        headers: {
+          'Authorization': `Bearer ${ADMIN_TOKEN}`,
+        },
+      })
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+      }
+      return response.json()
+    }
+
+    function showError(message) {
+      const container = document.getElementById('errorContainer')
+      container.innerHTML = `<div class="error">Error: ${message}</div>`
+    }
+
+    function clearError() {
+      document.getElementById('errorContainer').innerHTML = ''
+    }
+
+    async function loadStats() {
+      try {
+        const hours = parseInt(document.getElementById('hoursFilter').value) || 24
+        const stats = await fetchWithAuth(`${API_BASE}/api/admin/stats?hours=${hours}`)
+        
+        if (!stats.ok) throw new Error(stats.error)
+
+        document.getElementById('totalEvents').textContent = stats.stats.total
+        document.getElementById('criticalCount').textContent = stats.stats.bySeverity.critical || 0
+        document.getElementById('highCount').textContent = stats.stats.bySeverity.high || 0
+        document.getElementById('mediumCount').textContent = stats.stats.bySeverity.medium || 0
+        document.getElementById('lowCount').textContent = stats.stats.bySeverity.low || 0
+
+        // Update charts
+        updateTypeChart(stats.stats.byType)
+        updateSeverityChart(stats.stats.bySeverity)
+      } catch (error) {
+        showError(error.message)
+      }
+    }
+
+    function updateTypeChart(byType) {
+      const ctx = document.getElementById('typeChart').getContext('2d')
+      if (typeChart) typeChart.destroy()
+
+      typeChart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels: Object.keys(byType),
+          datasets: [{
+            label: 'Events',
+            data: Object.values(byType),
+            backgroundColor: '#0ea5e9',
+          }],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: true,
+          plugins: {
+            legend: { display: false },
+          },
+          scales: {
+            y: { beginAtZero: true, ticks: { color: '#94a3b8' }, grid: { color: '#334155' } },
+            x: { ticks: { color: '#94a3b8' }, grid: { color: '#334155' } },
+          },
+        },
+      })
+    }
+
+    function updateSeverityChart(bySeverity) {
+      const ctx = document.getElementById('severityChart').getContext('2d')
+      if (severityChart) severityChart.destroy()
+
+      const colors = {
+        critical: '#ef4444',
+        high: '#f97316',
+        medium: '#eab308',
+        low: '#22c55e',
+      }
+
+      severityChart = new Chart(ctx, {
+        type: 'doughnut',
+        data: {
+          labels: Object.keys(bySeverity),
+          datasets: [{
+            data: Object.values(bySeverity),
+            backgroundColor: Object.keys(bySeverity).map(s => colors[s] || '#64748b'),
+          }],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: true,
+          plugins: {
+            legend: { labels: { color: '#94a3b8' } },
+          },
+        },
+      })
+    }
+
+    async function loadEvents() {
+      try {
+        const severity = document.getElementById('severityFilter').value
+        const eventType = document.getElementById('eventTypeFilter').value
+        const params = new URLSearchParams({ limit: '100' })
+        if (severity) params.append('severity', severity)
+        if (eventType) params.append('eventType', eventType)
+
+        const result = await fetchWithAuth(`${API_BASE}/api/admin/events?${params}`)
+        
+        if (!result.ok) throw new Error(result.error)
+
+        const tbody = document.getElementById('eventsTableBody')
+        if (result.events.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="6" class="loading">No events found</td></tr>'
+          return
+        }
+
+        tbody.innerHTML = result.events.map(event => `
+          <tr>
+            <td>${new Date(event.timestamp).toLocaleString()}</td>
+            <td>${event.event_type}</td>
+            <td class="severity-${event.severity}">${event.severity.toUpperCase()}</td>
+            <td>${event.message}</td>
+            <td><code>${event.machine_id.substring(0, 16)}...</code></td>
+            <td>${event.username || '-'}</td>
+          </tr>
+        `).join('')
+      } catch (error) {
+        showError(error.message)
+      }
+    }
+
+    async function refreshData() {
+      clearError()
+      await Promise.all([loadStats(), loadEvents()])
+    }
+
+    function autoRefresh() {
+      if (autoRefreshInterval) {
+        clearInterval(autoRefreshInterval)
+        autoRefreshInterval = null
+        document.getElementById('autoRefreshStatus').textContent = 'OFF'
+      } else {
+        autoRefreshInterval = setInterval(refreshData, 30000) // 30 seconds
+        document.getElementById('autoRefreshStatus').textContent = 'ON'
+      }
+    }
+
+    // Initial load
+    refreshData()
+  </script>
+</body>
+</html>
+
+

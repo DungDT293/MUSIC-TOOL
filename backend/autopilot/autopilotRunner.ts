@@ -1,0 +1,1841 @@
+import fs from 'node:fs'
+import fsp from 'node:fs/promises'
+import path from 'node:path'
+import { randomUUID } from 'node:crypto'
+import { buildPlaylists, clearPlaylists, savePlaylists, type BuildPlaylistsOptions } from '../music/playlistEngine'
+import { exportPlaylistToFile, type ExportPlaylistRequest } from '../music/exportAudio'
+import { scanMusicFolders, type ScanMusicResult } from '../music/scanMusic'
+import { exportFinalVideo, type FinalExportJobRequest, planFinalExport, executeFinalExport, type ExecuteFinalExportOptions } from '../video/finalExport'
+import { videoJobManager } from '../video/videoJobManager'
+import { getDiskSpace, formatBytes } from '../utils/diskSpace'
+
+export type DayPresetId = 'tomorrowland' | 'partymix' | 'custom'
+
+import type { SubtitleOptions } from '../../shared/videoFinalExportChannels'
+
+export interface DayPlanDetailOverrides {
+  priorityTracksPerPlaylist?: number
+  videoPickPercent?: number
+  enableCrossfade?: boolean
+  crossfadeSeconds?: number
+  titleVariant?: 'pipe' | 'fire'
+  topDj?: string
+  allowDjRepeatAcrossVideos?: boolean
+  generateTracklist?: boolean
+  /** Bật re-encode + kiểm tra sâu khi ghép video (an toàn hơn nhưng chậm hơn) */
+  normalizeVideoInput?: boolean
+  /** Bật chế độ nhập tiêu đề thủ công */
+  useCustomTitles?: boolean
+  /** Danh sách tiêu đề tùy chỉnh (mỗi phần tử = 1 file) */
+  customTitles?: string[]
+  /** Cách chọn bài ưu tiên: 'auto' (mặc định) hoặc 'manual' (user tự chọn giống tab 2) */
+  prioritySelectionMode?: 'auto' | 'manual'
+  /** Danh sách track id ưu tiên (chọn tay) dùng khi prioritySelectionMode === 'manual' */
+  priorityPinnedTrackIds?: string[]
+  /** Cấu hình subtitle (phụ đề nhạc) cho video xuất ra */
+  subtitle?: SubtitleOptions
+}
+
+export interface DayPlanConfig {
+  id: string
+  dateCode: string // '0212'
+  playlistCount: number
+  minutesPerPlaylist: number
+  presetId: DayPresetId
+  overrides?: DayPlanDetailOverrides
+}
+
+export interface AutopilotFoldersConfig {
+  rootAudio: string
+  rootVideo: string
+  rootFinal: string
+  autoCreateDailySubfolder: boolean
+  priorityMusicFolder?: string
+  randomMusicFolder?: string
+  /** Thư mục video ưu tiên (tùy chọn) – các clip trong thư mục này sẽ được ưu tiên xuất hiện đầu video khi Final Export */
+  priorityVideoFolder?: string
+}
+
+export interface AutopilotConfig {
+  dayPlans: DayPlanConfig[]
+  folders: AutopilotFoldersConfig
+}
+
+export type AutopilotStatus =
+  | 'idle'
+  | 'running'
+  | 'paused'
+  | 'completed'
+  | 'completed_with_errors'
+  | 'error'
+  | 'cancelling'
+
+export interface AutopilotProgress {
+  status: AutopilotStatus
+  currentDayIndex: number | null
+  currentStep: 1 | 2 | 3 | 4 | 5 | null
+  stepPercent: number
+  message?: string
+  error?: string
+  videoSelectedCount?: number
+  videoTargetMin?: number
+}
+
+export type AutopilotProgressListener = (progress: AutopilotProgress) => void
+
+let currentProgress: AutopilotProgress = {
+  status: 'idle',
+  currentDayIndex: null,
+  currentStep: null,
+  stepPercent: 0,
+  message: '',
+}
+
+let isCancelling = false
+let progressListener: AutopilotProgressListener | null = null
+let logListener: ((log: { timestamp: string; level: 'info' | 'warn' | 'error'; message: string }) => void) | null = null
+let activeAbortControllers: AbortController[] = []
+const LOG_BUFFER_LIMIT = 500
+let recentLogs: { timestamp: string; level: 'info' | 'warn' | 'error'; message: string }[] = []
+const SCAN_TIMEOUT_MS = 10 * 60 * 1000 // 10 phút
+const VIDEO_PICK_TIMEOUT_MS = 10 * 60 * 1000 // 10 phút
+const MAX_PLAYLIST_COUNT_DEFAULT = 200 // cảnh báo
+const MAX_PLAYLIST_COUNT = 500 // giới hạn cứng
+const MAX_LOG_FILES = 5
+const MAX_LOG_SIZE_BYTES = 5 * 1024 * 1024 // 5MB
+// Lazy-init LOG_DIR để tránh require electron trước khi app ready
+function getLogDir(): string {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { app } = require('electron') as typeof import('electron')
+    return path.join(app.getPath('userData'), 'logs')
+  } catch {
+    // Fallback khi chạy ngoài Electron (unit test, CLI)
+    return path.join(process.cwd(), 'logs')
+  }
+}
+const LOG_DIR = getLogDir()
+const LOG_FILE_PREFIX = 'autopilot'
+const VIDEO_CHECK_MAX_DEPTH = 8
+const VIDEO_CHECK_ENTRY_LIMIT = 10_000
+
+const VIDEO_EXTS = new Set(['.mp4', '.mkv', '.mov', '.m4v', '.avi', '.wmv', '.webm'])
+
+export function getAutopilotProgress(): AutopilotProgress {
+  return currentProgress
+}
+
+export function onAutopilotProgress(listener: AutopilotProgressListener) {
+  progressListener = listener
+}
+
+export function offAutopilotProgress() {
+  progressListener = null
+}
+
+function emit(progress: Partial<AutopilotProgress>) {
+  const next: AutopilotProgress = { ...currentProgress, ...progress }
+  if (typeof progress.stepPercent === 'number') {
+    next.stepPercent = Math.max(currentProgress.stepPercent || 0, progress.stepPercent)
+  }
+  currentProgress = next
+  if (progressListener) progressListener(currentProgress)
+}
+
+function formatDuration(seconds: number): string {
+  const h = Math.floor(seconds / 3600)
+  const m = Math.floor((seconds % 3600) / 60)
+  const s = Math.floor(seconds % 60)
+  if (h > 0) {
+    return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`
+  }
+  return `${m}:${s.toString().padStart(2, '0')}`
+}
+
+let ensureLogDirDone = false
+
+function ensureLogDir() {
+  if (ensureLogDirDone) return
+  try {
+    fs.mkdirSync(LOG_DIR, { recursive: true })
+    ensureLogDirDone = true
+  } catch (err) {
+    console.warn('[Autopilot] Không tạo được thư mục log:', err)
+  }
+}
+
+function rotateLogsIfNeeded(basePath: string) {
+  try {
+    const stat = fs.statSync(basePath)
+    if (stat.size < MAX_LOG_SIZE_BYTES) return
+  } catch {
+    return
+  }
+
+  // Xoay file: .log.(n-1) -> .log.n, rồi .log -> .log.1
+  for (let i = MAX_LOG_FILES - 1; i >= 1; i--) {
+    const src = i === 1 ? basePath : `${basePath}.${i - 1}`
+    const dst = `${basePath}.${i}`
+    try {
+      if (fs.existsSync(dst)) fs.unlinkSync(dst)
+      if (fs.existsSync(src)) fs.renameSync(src, dst)
+    } catch (err) {
+      console.warn('[Autopilot] rotateLogsIfNeeded rename error:', err)
+    }
+  }
+}
+
+function appendLogToFile(entry: { timestamp: string; level: 'info' | 'warn' | 'error'; message: string }) {
+  ensureLogDir()
+  const basePath = path.join(LOG_DIR, `${LOG_FILE_PREFIX}.log`)
+  rotateLogsIfNeeded(basePath)
+  const line = `${entry.timestamp} [${entry.level.toUpperCase()}] ${entry.message}\n`
+  try {
+    fs.appendFileSync(basePath, line, 'utf-8')
+  } catch (err) {
+    console.warn('[Autopilot] Ghi log file thất bại:', err)
+  }
+}
+
+function emitLog(level: 'info' | 'warn' | 'error', message: string) {
+  const timestamp = new Date().toLocaleTimeString('vi-VN', { hour12: false })
+  const logEntry = { timestamp, level, message }
+  recentLogs.push(logEntry)
+  if (recentLogs.length > LOG_BUFFER_LIMIT) {
+    recentLogs = recentLogs.slice(-LOG_BUFFER_LIMIT)
+  }
+  if (logListener) {
+    logListener(logEntry)
+  }
+  appendLogToFile(logEntry)
+  // Cũng log vào console
+  if (level === 'error') {
+    console.error(`[Autopilot] ${message}`)
+  } else if (level === 'warn') {
+    console.warn(`[Autopilot] ${message}`)
+  } else {
+    console.log(`[Autopilot] ${message}`)
+  }
+}
+
+export function onAutopilotLog(listener: (log: { timestamp: string; level: 'info' | 'warn' | 'error'; message: string }) => void) {
+  logListener = listener
+}
+
+export function offAutopilotLog() {
+  logListener = null
+}
+
+export function cancelAutopilot() {
+  if (currentProgress.status === 'running' || currentProgress.status === 'paused') {
+    isCancelling = true
+    emit({ status: 'cancelling', message: 'Đang dừng Autopilot, huỷ các job FFmpeg hiện tại...' })
+    try {
+      // Kill toàn bộ FFmpeg jobs đang chạy (export audio, final export, v.v.)
+      videoJobManager.cancelAll()
+    } catch (error) {
+      console.warn('[Autopilot] cancelAutopilot: lỗi khi huỷ video jobs:', error)
+    }
+
+    // Abort các AbortController nội bộ (ví dụ export audio)
+    for (const ctrl of activeAbortControllers) {
+      try {
+        ctrl.abort()
+      } catch (err) {
+        console.warn('[Autopilot] cancelAutopilot: lỗi khi abort controller:', err)
+      }
+    }
+    activeAbortControllers = []
+  }
+}
+
+function normalizeNumber(value: number | string | null | undefined, fallback: number): number {
+  if (typeof value === 'number' && !Number.isNaN(value) && value > 0) return value
+  if (typeof value === 'string') {
+    const n = Number(value)
+    if (!Number.isNaN(n) && n > 0) return n
+  }
+  return fallback
+}
+
+async function ensureDir(dirPath: string): Promise<void> {
+  await fsp.mkdir(dirPath, { recursive: true })
+}
+
+/**
+ * Validate dateCode format: phải là 4 ký tự số (ddMM)
+ */
+function validateDateCode(dateCode: string): boolean {
+  if (!dateCode || typeof dateCode !== 'string') return false
+  if (dateCode.length !== 4) return false
+  if (!/^\d{4}$/.test(dateCode)) return false
+  
+  const day = parseInt(dateCode.substring(0, 2), 10)
+  const month = parseInt(dateCode.substring(2, 4), 10)
+  
+  if (isNaN(day) || isNaN(month)) return false
+  if (month < 1 || month > 12) return false
+  if (day < 1 || day > 31) return false
+  
+  // Kiểm tra số ngày hợp lệ trong tháng
+  const currentYear = new Date().getFullYear()
+  const date = new Date(currentYear, month - 1, day)
+  if (date.getDate() !== day || date.getMonth() !== month - 1) return false
+  
+  return true
+}
+
+/**
+ * Validate thư mục: kiểm tra tồn tại và có quyền truy cập
+ */
+async function validateFolder(folderPath: string, folderName: string): Promise<void> {
+  if (!folderPath || typeof folderPath !== 'string' || folderPath.trim().length === 0) {
+    throw new Error(`Thư mục "${folderName}" chưa được chọn.`)
+  }
+  
+  try {
+    const stat = await fsp.stat(folderPath)
+    if (!stat.isDirectory()) {
+      throw new Error(`Đường dẫn "${folderPath}" không phải là thư mục.`)
+    }
+  } catch (error: any) {
+    if (error.code === 'ENOENT') {
+      throw new Error(`Thư mục "${folderName}" không tồn tại: ${folderPath}`)
+    } else if (error.code === 'EACCES') {
+      throw new Error(`Không có quyền truy cập thư mục "${folderName}": ${folderPath}`)
+    } else {
+      throw new Error(`Lỗi khi kiểm tra thư mục "${folderName}": ${error.message}`)
+    }
+  }
+}
+
+async function ensureAudioDiskSpaceEstimate(
+  dirPath: string,
+  playlistCount: number,
+  minutesPerPlaylist: number,
+  label: string,
+): Promise<void> {
+  try {
+    const info = await getDiskSpace(dirPath)
+    // Ước lượng: ~4MB/phút ở 256kbps + 15% margin
+    const estimatedBytes = playlistCount * Math.max(1, minutesPerPlaylist) * 4 * 1024 * 1024
+    const required = Math.round(estimatedBytes * 1.15)
+    if (info.free < required) {
+      throw new Error(
+        `Ổ ${info.drive} còn ${formatBytes(info.free)} nhưng ${label} cần khoảng ${formatBytes(required)} (ước lượng +15%). Hãy dọn dung lượng trước khi chạy.`,
+      )
+    }
+  } catch (err: any) {
+    throw new Error(err?.message || `Không kiểm tra được dung lượng ổ đĩa cho ${label}`)
+  }
+}
+
+async function ensureVideoDiskSpaceEstimate(
+  dirPath: string,
+  videoPaths: string[],
+  outputCount: number,
+  label: string,
+): Promise<void> {
+  try {
+    const info = await getDiskSpace(dirPath)
+
+    // Lấy mẫu kích thước video (tối đa 200 file) để ước lượng
+    let totalSize = 0
+    let sampleCount = 0
+    for (let i = 0; i < videoPaths.length && sampleCount < 200; i++) {
+      const p = videoPaths[i]
+      try {
+        const stat = fs.statSync(p)
+        if (stat.isFile()) {
+          totalSize += stat.size
+          sampleCount++
+        }
+      } catch {
+        // ignore file errors in sampling
+      }
+    }
+
+    const avgSize = sampleCount > 0 ? totalSize / sampleCount : 200 * 1024 * 1024 // fallback 200MB
+    const estimatedBytes = Math.round(avgSize * outputCount)
+    const required = Math.round(estimatedBytes * 1.15)
+    const minimumBuffer = 4 * 1024 * 1024 * 1024 // 4GB sàn
+    const need = Math.max(required, minimumBuffer)
+
+    if (info.free < need) {
+      throw new Error(
+        `Ổ ${info.drive} còn ${formatBytes(info.free)} nhưng ${label} cần khoảng ${formatBytes(need)} (ước lượng +15%, sàn 4GB). Hãy dọn dung lượng trước khi chạy.`,
+      )
+    }
+  } catch (err: any) {
+    throw new Error(err?.message || `Không kiểm tra được dung lượng ổ đĩa cho ${label}`)
+  }
+}
+
+function throwIfCancelling() {
+  if (isCancelling) {
+    throw new Error('Autopilot đã được yêu cầu dừng.')
+  }
+}
+
+function isFatalExportError(err: any): boolean {
+  const msg = (err?.message || err?.error || `${err}` || '').toLowerCase()
+  const fatalKeywords = [
+    'disk',
+    'space',
+    'dung lượng',
+    'không kiểm tra được dung lượng',
+    'không tồn tại',
+    'không có quyền',
+    'playlist không tồn tại',
+    'playlist không có bài',
+    'thư mục xuất không tồn tại',
+  ]
+  return fatalKeywords.some((k) => msg.includes(k))
+}
+
+async function hasAnyVideoFile(folderPath: string, maxDepth = VIDEO_CHECK_MAX_DEPTH): Promise<boolean> {
+  const stack: Array<{ dir: string; depth: number }> = [{ dir: folderPath, depth: 0 }]
+  let visitedEntries = 0
+  while (stack.length > 0) {
+    const { dir, depth } = stack.pop()!
+    try {
+      const entries = await fsp.readdir(dir, { withFileTypes: true })
+      for (const entry of entries) {
+        visitedEntries++
+        if (visitedEntries > VIDEO_CHECK_ENTRY_LIMIT) {
+          console.warn('[Autopilot] Dừng kiểm tra video sớm vì vượt giới hạn entry.')
+          return false
+        }
+        const full = path.join(dir, entry.name)
+        if (entry.isFile()) {
+          const ext = path.extname(entry.name).toLowerCase()
+          if (VIDEO_EXTS.has(ext)) return true
+        } else if (entry.isDirectory() && depth < maxDepth) {
+          stack.push({ dir: full, depth: depth + 1 })
+        }
+      }
+    } catch (err) {
+      console.warn('[Autopilot] Không đọc được thư mục video để kiểm tra file:', dir, err)
+    }
+  }
+  return false
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string, onTimeout?: () => void): Promise<T> {
+  if (timeoutMs <= 0) return promise
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      try {
+        if (onTimeout) onTimeout()
+      } catch {
+        // ignore
+      }
+      reject(new Error(`${label} bị timeout sau ${Math.round(timeoutMs / 1000)} giây.`))
+    }, timeoutMs)
+
+    promise
+      .then((val) => {
+        clearTimeout(timer)
+        resolve(val)
+      })
+      .catch((err) => {
+        clearTimeout(timer)
+        reject(err)
+      })
+  })
+}
+
+function getDayFolder(base: string, dateCode: string, autoDaily: boolean): string {
+  const trimmed = base.replace(/[\\/]+$/, '')
+  return autoDaily ? path.join(trimmed, dateCode) : trimmed
+}
+
+function splitFolderLines(value: string | null | undefined): string[] {
+  if (!value) return []
+  return value
+    .split(/[\r\n;]+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0)
+}
+
+function pickFirstFolder(value: string | null | undefined): string | null {
+  const list = splitFolderLines(value)
+  return list.length > 0 ? list[0] : null
+}
+
+/**
+ * In-place shuffle array để tiết kiệm memory (không copy array)
+ * Sử dụng Fisher-Yates shuffle algorithm
+ */
+function shuffleArrayInPlace<T>(items: T[]): void {
+  for (let i = items.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[items[i], items[j]] = [items[j], items[i]]
+  }
+}
+
+/**
+ * Quét video files đệ quy với progress callback
+ */
+async function collectVideoFilesRecursive(
+  dir: string,
+  onProgress?: (currentCount: number, currentDir: string) => void
+): Promise<string[]> {
+  const results: string[] = []
+  try {
+    const entries = await fsp.readdir(dir, { withFileTypes: true })
+    // Quét song song các subfolder để tăng tốc độ
+    const subdirPromises: Promise<string[]>[] = []
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name)
+      if (entry.isDirectory()) {
+        subdirPromises.push(collectVideoFilesRecursive(full, onProgress))
+      } else if (entry.isFile()) {
+        const ext = path.extname(entry.name).toLowerCase()
+        if (VIDEO_EXTS.has(ext)) {
+          results.push(full)
+          // Emit progress mỗi khi tìm thấy file
+          if (onProgress) {
+            onProgress(results.length, dir)
+          }
+        }
+      }
+    }
+    // Đợi tất cả subfolder quét xong
+    if (subdirPromises.length > 0) {
+      const subdirResults = await Promise.all(subdirPromises)
+      for (const subdirFiles of subdirResults) {
+        results.push(...subdirFiles)
+        // Emit progress sau khi merge subfolder results
+        if (onProgress && subdirFiles.length > 0) {
+          onProgress(results.length, dir)
+        }
+      }
+    }
+  } catch (error) {
+    console.warn('[Autopilot] Lỗi khi quét thư mục video:', dir, error)
+  }
+  return results
+}
+
+interface VideoBucketSummary {
+  folder: string
+  totalFiles: number
+  selectedFiles: number
+}
+
+async function listSubFolders(folder: string): Promise<string[]> {
+  try {
+    const entries = await fsp.readdir(folder, { withFileTypes: true })
+    const subdirs = entries
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => path.join(folder, entry.name))
+    return subdirs
+  } catch (error) {
+    console.warn('[Autopilot] Không đọc được thư mục con:', folder, error)
+    return []
+  }
+}
+
+async function prepareVideoBuckets(
+  baseFoldersRaw: string,
+  autoDaily: boolean,
+  dateCode: string,
+): Promise<string[]> {
+  const baseFolders = splitFolderLines(baseFoldersRaw)
+  const buckets: string[] = []
+
+  for (const base of baseFolders) {
+    const normalizedBase = autoDaily ? path.join(base.replace(/[\\/]+$/, ''), dateCode) : base
+    try {
+      const stat = await fsp.stat(normalizedBase)
+      if (!stat.isDirectory()) {
+        console.warn('[Autopilot] Bỏ qua vì không phải thư mục video:', normalizedBase)
+        continue
+      }
+    } catch (error) {
+      console.warn('[Autopilot] Không tìm thấy thư mục video:', normalizedBase, error)
+      continue
+    }
+
+    const subdirs = await listSubFolders(normalizedBase)
+    if (subdirs.length > 0) {
+      buckets.push(...subdirs)
+    } else {
+      buckets.push(normalizedBase)
+    }
+  }
+
+  return buckets
+}
+
+async function pickVideosFromFolders(
+  baseFoldersRaw: string,
+  dateCode: string,
+  autoDaily: boolean,
+  percent: number,
+  minTotal: number,
+): Promise<{ paths: string[]; summary: VideoBucketSummary[] }> {
+  const buckets = await prepareVideoBuckets(baseFoldersRaw, autoDaily, dateCode)
+  if (buckets.length === 0) {
+    return { paths: [], summary: [] }
+  }
+
+  const summaries: VideoBucketSummary[] = []
+  const p = Math.max(1, Math.min(100, Math.round(percent || 70)))
+
+  emitLog('info', `[Bước 4] Bắt đầu quét ${buckets.length} thư mục video...`)
+  
+  // BƯỚC 1: Quét TẤT CẢ folder, thu thập TẤT CẢ video (không dừng sớm)
+  const allFilesByFolder: Array<{ folder: string; files: string[] }> = []
+  let totalScanned = 0
+  
+  for (let i = 0; i < buckets.length; i++) {
+    if (isCancelling) break
+    
+    const folder = buckets[i]
+    emitLog('info', `[Bước 4] Đang quét thư mục ${i + 1}/${buckets.length}: ${folder}`)
+    
+    // Quét với progress callback
+    let folderFileCount = 0
+    const allFiles = await collectVideoFilesRecursive(folder, (currentCount, currentDir) => {
+      folderFileCount = currentCount
+      totalScanned = allFilesByFolder.reduce((sum, item) => sum + item.files.length, 0) + currentCount
+      // Emit progress mỗi 100 file để tránh spam log
+      if (currentCount % 100 === 0 || currentCount === 1) {
+        emitLog('info', `[Bước 4]   → Đã quét ${currentCount} video từ "${path.basename(currentDir)}"...`)
+      }
+    })
+    
+    emitLog('info', `[Bước 4] ✓ Thư mục ${i + 1}/${buckets.length}: Tìm thấy ${allFiles.length} video`)
+    
+    allFilesByFolder.push({ folder, files: allFiles })
+    summaries.push({
+      folder,
+      totalFiles: allFiles.length,
+      selectedFiles: 0, // Sẽ tính sau
+    })
+    
+    totalScanned += allFiles.length
+  }
+
+  // BƯỚC 2: Gộp tất cả video lại
+  const allFiles: string[] = []
+  for (const item of allFilesByFolder) {
+    allFiles.push(...item.files)
+  }
+
+  emitLog('info', `[Bước 4] Tổng cộng quét được ${allFiles.length} video từ ${buckets.length} thư mục`)
+
+  if (allFiles.length === 0) {
+    console.warn('[Autopilot] Không tìm thấy video nào trong tất cả thư mục')
+    return { paths: [], summary: summaries }
+  }
+
+  // BƯỚC 3: Shuffle IN-PLACE để tiết kiệm memory và lấy X% từ tổng số
+  emitLog('info', `[Bước 4] Đang shuffle ${allFiles.length} video...`)
+  shuffleArrayInPlace(allFiles) // In-place shuffle, không copy array
+  
+  const percentCount = Math.max(1, Math.round((allFiles.length * p) / 100))
+  const targetCount = Math.max(minTotal, percentCount) // Lấy ít nhất minTotal, hoặc X% nếu lớn hơn
+  const selected = allFiles.slice(0, Math.min(targetCount, allFiles.length))
+
+  emitLog('info', `[Bước 4] Đã chọn ${selected.length} video (${p}% = ${percentCount}, minTotal = ${minTotal}, tổng = ${allFiles.length})`)
+
+  // Cập nhật selectedFiles cho mỗi folder (tính theo tỷ lệ)
+  for (let i = 0; i < summaries.length; i++) {
+    const item = allFilesByFolder[i]
+    if (item.files.length > 0) {
+      // Tính tỷ lệ video được chọn từ folder này
+      const ratio = item.files.length / allFiles.length
+      summaries[i].selectedFiles = Math.max(1, Math.round(selected.length * ratio))
+    }
+  }
+
+  if (selected.length < minTotal) {
+    console.warn(
+      `[Autopilot] Tổng video đã chọn ${selected.length} < minTotal ${minTotal}. Có thể không đủ 1000 clip, nhưng vẫn tiếp tục ghép.`,
+    )
+  }
+
+  return { paths: selected, summary: summaries }
+}
+
+function buildBaseOutputNameFromPreset(presetId: DayPresetId): string {
+  switch (presetId) {
+    case 'tomorrowland':
+      return 'Tomorrowland_2025'
+    case 'partymix':
+      return 'Party_Mix_2025'
+    default:
+      return 'AutoMix_2025'
+  }
+}
+
+/**
+ * Sinh danh sách tên file output (không extension) theo quy tắc cơ bản:
+ * - [index] + baseName
+ * - Ví dụ: "1 Tomorrowland 2025 | Tiësto, Hardwell, W&W" (ở đây backend chỉ sinh phần text, dấu |/🔥 sẽ do UI quyết định sau)
+ * 
+ * Hiện tại backend sẽ tạo tiêu đề theo rule:
+ *  - "1 Tomorrowland 2025 | Tiësto, Hardwell, W&W, Bassjackers, Blasterjaxx"
+ *  - hoặc "1 Tomorrowland 2025 🔥 Tiësto, Hardwell, W&W, Bassjackers, Blasterjaxx"
+ */
+// Danh sách DJ mặc định để random (đã tổng hợp & loại bỏ trùng lặp, không bao gồm Tiësto vì là topDj mặc định)
+const DEFAULT_DJS: string[] = [
+  // Mainstream / Bigroom / EDM
+  'David Guetta',
+  'Calvin Harris',
+  'Armin van Buuren',
+  'Martin Garrix',
+  'Skrillex',
+  'Diplo',
+  'Deadmau5',
+  'Steve Aoki',
+  'DJ Snake',
+  'Afrojack',
+  'Hardwell',
+  'Kygo',
+  'Alesso',
+  'Zedd',
+  'Alan Walker',
+  'Eric Prydz',
+  'Carl Cox',
+  'Paul van Dyk',
+  'Fatboy Slim',
+  'Swedish House Mafia',
+  'The Chainsmokers',
+  'Daft Punk',
+  'Above & Beyond',
+  'Marshmello',
+  'Avicii',
+  'Nicky Romero',
+  'Don Diablo',
+  'Oliver Heldens',
+  'R3HAB',
+  'Fedde Le Grand',
+  'Sander van Doorn',
+  'Laidback Luke',
+  'Quintino',
+  'Dannic',
+  'Brooks',
+  'Julian Jordan',
+  'KSHMR',
+  'Dillon Francis',
+  'A-Trak',
+  'Boys Noize',
+  'Duke Dumont',
+  'MK',
+  'Robin Schulz',
+  'Felix Jaehn',
+  'Lost Frequencies',
+  'Sam Feldt',
+  'Sigala',
+  'Jax Jones',
+  'Joel Corry',
+  'Riton',
+  'Claptone',
+  'Purple Disco Machine',
+  'Fisher',
+  'Chris Lake',
+  'John Summit',
+  'Dom Dolla',
+  'Vintage Culture',
+  'Alok',
+  'Benny Benassi',
+  'Bob Sinclar',
+  'Gigi D’Agostino',
+  'Paul Oakenfold',
+  'Roger Sanchez',
+  'Sasha',
+  'John Digweed',
+  'Pete Tong',
+  'Laurent Garnier',
+  'David Morales',
+  'Todd Terry',
+  'Louie Vega',
+  'Dennis Ferrer',
+  'Hot Since 82',
+  'Sonny Fodera',
+  'Michael Bibi',
+  'Patrick Topping',
+  'Jamie Jones',
+  'Seth Troxler',
+  'Marco Carola',
+  'Loco Dice',
+  'Paco Osuna',
+  'Joseph Capriati',
+
+  // Techno / Tech House / Underground
+  'Adam Beyer',
+  'Richie Hawtin',
+  'Maceo Plex',
+  'Solomun',
+  'Boris Brejcha',
+  'Paul Kalkbrenner',
+  'Sven Väth',
+  'Chris Liebing',
+  'Ben Klock',
+  'Marcel Dettmann',
+  'Jeff Mills',
+  'Derrick May',
+  'Kevin Saunderson',
+  'Juan Atkins',
+  'Green Velvet',
+  'Black Coffee',
+  'CamelPhat',
+  'Gorgon City',
+  'Meduza',
+  'Keinemusik',
+  'Markus Schulz',
+  'Ferry Corsten',
+  'Gareth Emery',
+  'Andrew Rayel',
+  'Ben Nicky',
+  'Craig Connelly',
+  'Giuseppe Ottaviani',
+  'Paul Thomas',
+  'John O’Callaghan',
+  'Sean Tyas',
+  'Bryan Kearney',
+
+  // Psy / Goa / Trance & Progressive
+  'Neelix',
+  'Vini Vici',
+  'Astrix',
+  'Berg',
+  'Infected Mushroom',
+  'Shpongle',
+  'Bicep',
+  'Moderat',
+  'Jon Hopkins',
+  'Four Tet',
+  'Bonobo',
+  'Floating Points',
+  'Caribou',
+  'Disclosure',
+  'The Blessed Madonna',
+  'Kerri Chandler',
+  'Franky Rizardo',
+  'Joris Voorn',
+  'Reinier Zonneveld',
+  'Stephan Bodzin',
+  'Oliver Koletzki',
+  'NTO',
+  'Pan-Pot',
+  'Len Faki',
+  'Dax J',
+  'Adam X',
+  'Rødhåd',
+  'Tale Of Us',
+  'Martinez Brothers',
+  'Satin Jackets',
+  'Lane 8',
+  'Yotto',
+  'Ben Böhmer',
+  'Nora En Pure',
+  'Rüfüs Du Sol',
+  'Odesza',
+  'Flume',
+  'Porter Robinson',
+  'Madeon',
+  'San Holo',
+  'Illenium',
+  'Seven Lions',
+
+  // Bass / Dubstep / DnB
+  'Excision',
+  'Zomboy',
+  'Knife Party',
+  'Noisia',
+  'Pendulum',
+  'Andy C',
+  'Chase & Status',
+  'Sub Focus',
+  'Netsky',
+  'Camo & Krooked',
+  'Black Sun Empire',
+  'Spor',
+  'Rusko',
+  'Borgore',
+  'Getter',
+  'Virtual Riot',
+  'Barely Alive',
+  'Ghastly',
+  'TroyBoi',
+  'RL Grime',
+  'Baauer',
+  'DJ Shadow',
+]
+
+function generateSimpleTitles(
+  count: number,
+  baseKeyword: string,
+  dateCode: string | undefined,
+  overrides?: DayPlanDetailOverrides,
+): string[] {
+  // Nếu bật chế độ tiêu đề thủ công và có danh sách tiêu đề tùy chỉnh
+  if (overrides?.useCustomTitles && Array.isArray(overrides.customTitles) && overrides.customTitles.length > 0) {
+    const customTitles = overrides.customTitles.map((t) => t.trim()).filter(Boolean)
+    
+    console.log(`[generateSimpleTitles] useCustomTitles=true, customTitles count=${customTitles.length}, needed=${count}`)
+    if (customTitles.length > 0) {
+      console.log(`[generateSimpleTitles] customTitles[0]=${customTitles[0]}`)
+    }
+    
+    // Nếu số lượng tiêu đề tùy chỉnh >= số lượng cần, dùng trực tiếp
+    if (customTitles.length >= count) {
+      console.log(`[generateSimpleTitles] Using ${count} custom titles directly`)
+      return customTitles.slice(0, count)
+    }
+    
+    // Nếu thiếu, dùng tiêu đề tùy chỉnh cho các file đầu, phần còn lại dùng logic tự động
+    const result: string[] = [...customTitles]
+    const remaining = count - customTitles.length
+    
+    // Tạo tiêu đề tự động cho phần còn lại
+    const safeBase = baseKeyword.trim() || 'AutoMix 2025'
+    const topDj = (overrides?.topDj || 'Tiësto').trim()
+    const variant: 'pipe' | 'fire' = overrides?.titleVariant || 'pipe'
+    const allowRepeatAcross = overrides?.allowDjRepeatAcrossVideos ?? true
+    const separator = variant === 'fire' ? '🔥' : '|'
+    const usedDjsGlobal = new Set<string>()
+    
+    for (let i = 0; i < remaining; i++) {
+      const orderNumber = customTitles.length + i + 1
+      const needed = 4 // DJ2–DJ5
+      let picked: string[] = []
+
+      if (allowRepeatAcross) {
+        const shuffled = [...DEFAULT_DJS].sort(() => Math.random() - 0.5)
+        picked = shuffled.slice(0, needed)
+      } else {
+        const unused = DEFAULT_DJS.filter((dj) => !usedDjsGlobal.has(dj))
+        const shuffledUnused = [...unused].sort(() => Math.random() - 0.5)
+        picked.push(...shuffledUnused.slice(0, Math.min(needed, shuffledUnused.length)))
+
+        if (picked.length < needed) {
+          const remainingPool = DEFAULT_DJS.filter((dj) => !picked.includes(dj))
+          const shuffledRemaining = [...remainingPool].sort(() => Math.random() - 0.5)
+          picked.push(...shuffledRemaining.slice(0, needed - picked.length))
+        }
+      }
+
+      if (!allowRepeatAcross) {
+        for (const dj of picked) {
+          usedDjsGlobal.add(dj)
+        }
+      }
+
+      const djList = [topDj, ...picked].join(', ')
+      const prefix = `${orderNumber} ${safeBase}`
+      const title = `${prefix} ${separator} ${djList}`
+      result.push(title)
+    }
+    
+    return result
+  }
+
+  // Logic tạo tiêu đề tự động như cũ (khi không dùng custom titles)
+  const safeBase = baseKeyword.trim() || 'AutoMix 2025'
+  const topDj = (overrides?.topDj || 'Tiësto').trim()
+  const variant: 'pipe' | 'fire' = overrides?.titleVariant || 'pipe'
+  const allowRepeatAcross = overrides?.allowDjRepeatAcrossVideos ?? true
+  const separator = variant === 'fire' ? '🔥' : '|'
+  const titles: string[] = []
+  const usedDjsGlobal = new Set<string>()
+
+  for (let i = 0; i < count; i++) {
+    const orderNumber = i + 1
+
+    const needed = 4 // DJ2–DJ5
+    let picked: string[] = []
+
+    if (allowRepeatAcross) {
+      // Cho phép trùng giữa các video → chỉ cần random 4 DJ bất kỳ, không trùng trong cùng title
+      const shuffled = [...DEFAULT_DJS].sort(() => Math.random() - 0.5)
+      picked = shuffled.slice(0, needed)
+    } else {
+      // Ưu tiên dùng các DJ CHƯA dùng ở video trước
+      const unused = DEFAULT_DJS.filter((dj) => !usedDjsGlobal.has(dj))
+      const shuffledUnused = [...unused].sort(() => Math.random() - 0.5)
+      picked.push(...shuffledUnused.slice(0, Math.min(needed, shuffledUnused.length)))
+
+      // Nếu không đủ 4 DJ (hết pool) → lấy thêm từ toàn bộ list, tránh trùng trong cùng title
+      if (picked.length < needed) {
+        const remainingPool = DEFAULT_DJS.filter((dj) => !picked.includes(dj))
+        const shuffledRemaining = [...remainingPool].sort(() => Math.random() - 0.5)
+        picked.push(...shuffledRemaining.slice(0, needed - picked.length))
+      }
+    }
+
+    // Cập nhật global used nếu không cho phép trùng giữa các video
+    if (!allowRepeatAcross) {
+      for (const dj of picked) {
+        usedDjsGlobal.add(dj)
+      }
+    }
+
+    const djList = [topDj, ...picked].join(', ')
+    const prefix = `${orderNumber} ${safeBase}`
+    const title = `${prefix} ${separator} ${djList}`
+
+    titles.push(title)
+  }
+  return titles
+}
+
+// Helper function để chạy export video với options cụ thể
+async function runExportVideoWithOptions(
+  jobRequest: FinalExportJobRequest,
+  dateCode: string,
+  playlists: Playlist[],
+  options?: ExecuteFinalExportOptions
+): Promise<{ tempVideoPaths: Map<number, string>, subtitleFiles: Map<number, string> } | void> {
+  const requestId = jobRequest.requestId || randomUUID()
+  
+  // Plan first
+  const plan = await planFinalExport(
+    jobRequest.audioSource,
+    jobRequest.videoSource,
+    jobRequest.outputFolder,
+    jobRequest.outputFilename,
+    jobRequest.outputNames,
+    jobRequest.priorityVideoSource
+  )
+  
+  // Create emitter
+  const emitter: FinalExportEmitter = {
+    progress: (payload) => {
+      const p = payload.percent ?? 0
+      const currentIndex = payload.currentIndex ?? 0
+      const totalOutputs = payload.totalOutputs ?? playlists.length
+      emit({
+        currentStep: 4,
+        stepPercent: 60 + Math.round((p / 100) * 35),
+        message:
+          payload.status ??
+          `Ngày ${dateCode}: Đang xuất video hoàn chỉnh (${p.toFixed ? p.toFixed(1) : p}% )...`,
+      })
+      if (payload.currentOutputFilename && currentIndex > 0) {
+        emitLog('info', `[Bước 4] Đang xuất video ${currentIndex}/${totalOutputs}: ${payload.currentOutputFilename} (${p.toFixed(1)}%)`)
+      }
+    },
+    done: () => {
+      emit({
+        currentStep: 5,
+        stepPercent: 100,
+        message: `Ngày ${dateCode}: Hoàn tất xuất video hoàn chỉnh.`,
+      })
+      emitLog('info', `[Bước 5] ✓ Ngày ${dateCode}: Hoàn tất xuất ${playlists.length} video hoàn chỉnh!`)
+    },
+    error: (err) => {
+      emit({
+        status: 'error',
+        currentStep: 4,
+        stepPercent: 0,
+        message: `Ngày ${dateCode}: Lỗi khi xuất video hoàn chỉnh.`,
+        error: err.message || err.error || 'Xuất video thất bại.',
+      })
+      emitLog('error', `[Bước 4] ✗ Lỗi khi xuất video: ${err.message || err.error || 'Xuất video thất bại.'}`)
+    },
+  }
+  
+  // Emit initial progress
+  emitter.progress({
+    requestId,
+    stage: 'prepare-audio',
+    percent: 0,
+    timeSec: 0,
+    totalDurationSec: 0,
+    audioFileCount: plan.totalJobs,
+    videoFileCount: plan.videoClips.length,
+    totalOutputs: plan.totalJobs,
+    status:
+      plan.totalJobs > 1
+        ? `Đang chuẩn bị ${plan.totalJobs} track audio...`
+        : 'Đang chuẩn bị audio...',
+  })
+  
+  // Execute with options
+  return await executeFinalExport(
+    plan,
+    requestId,
+    emitter,
+    jobRequest.shuffle || false,
+    !!jobRequest.forceReencode,
+    !!jobRequest.normalizeAudio,
+    !!jobRequest.tracklistAuto,
+    jobRequest.subtitle,
+    options,
+    jobRequest.useGpuEncoding || 'auto', // GPU encoding choice (default: 'auto')
+    !!jobRequest.deleteSourceFiles // Xóa file audio/video sau khi xuất xong
+  )
+}
+
+async function runAutopilotForDay(
+  plan: DayPlanConfig,
+  index: number,
+  config: AutopilotConfig,
+  scan: ScanMusicResult,
+  phase?: 'all' | 'step1' | 'step2' | 'whisper',
+  tempVideoPaths?: Map<number, string>,
+  subtitleFiles?: Map<number, string>,
+): Promise<{ tempVideoPaths?: Map<number, string>, subtitleFiles?: Map<number, string> } | void> {
+  const { folders } = config
+
+  const dateCode = plan.dateCode || (() => {
+    const now = new Date()
+    const d = `${now.getDate()}`.padStart(2, '0')
+    const m = `${now.getMonth() + 1}`.padStart(2, '0')
+    return `${d}${m}`
+  })()
+
+  // Validate dateCode format
+  if (!validateDateCode(dateCode)) {
+    throw new Error(
+      `DateCode "${dateCode}" không hợp lệ. DateCode phải có format ddMM (4 ký tự số, ví dụ: 0412 cho ngày 04 tháng 12).`
+    )
+  }
+
+  const audioDir = getDayFolder(folders.rootAudio, dateCode, folders.autoCreateDailySubfolder)
+  // Video: cho phép nhiều thư mục, mỗi thư mục sẽ được nối với dateCode (nếu bật autoDaily)
+  const finalDir = getDayFolder(folders.rootFinal, dateCode, folders.autoCreateDailySubfolder)
+
+  emit({
+    currentDayIndex: index,
+    currentStep: 1,
+    stepPercent: 5,
+    status: 'running',
+    message: `Ngày ${dateCode}: Đang chuẩn bị thư mục output...`,
+    videoSelectedCount: undefined,
+    videoTargetMin: undefined,
+  })
+  emitLog('info', `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`)
+  emitLog('info', `📅 Bắt đầu xử lý ngày: ${dateCode}`)
+  emitLog('info', `[Bước 1] Ngày ${dateCode}: Đang chuẩn bị thư mục output...`)
+
+  await ensureDir(audioDir)
+  await ensureDir(finalDir)
+  emitLog('info', `[Bước 1] ✓ Đã tạo thư mục Audio: ${audioDir}`)
+  emitLog('info', `[Bước 1] ✓ Đã tạo thư mục Video: ${finalDir}`)
+
+  throwIfCancelling()
+
+  // Step 1: Use freshly scanned tracks (được quét trực tiếp trước khi chạy mỗi job)
+  if (!scan?.tracks || scan.tracks.length === 0) {
+    throw new Error('Không tìm thấy bài nhạc nào sau khi quét các thư mục ưu tiên / random.')
+  }
+
+  emit({
+    currentStep: 1,
+    stepPercent: 25,
+    message: `Ngày ${dateCode}: Đang sử dụng ${scan.tracks.length} bài nhạc đã quét trực tiếp...`,
+  })
+  emitLog('info', `[Bước 1] Đã quét được ${scan.tracks.length} bài nhạc từ thư mục ưu tiên/random`)
+
+  throwIfCancelling()
+
+  // Step 2: Build playlists
+  // Khai báo playlistCount và minutesPerPlaylist TRƯỚC KHI sử dụng
+  const playlistCount = normalizeNumber(plan.playlistCount as any, 10)
+  const minutesPerPlaylist = normalizeNumber(plan.minutesPerPlaylist as any, 30)
+  
+  emit({
+    currentStep: 2,
+    stepPercent: 30,
+    message: `Ngày ${dateCode}: Đang tạo playlist...`,
+  })
+  emitLog('info', `[Bước 2] Ngày ${dateCode}: Đang tạo ${playlistCount} playlist, mỗi playlist ${minutesPerPlaylist} phút...`)
+
+  if (playlistCount > MAX_PLAYLIST_COUNT_DEFAULT) {
+    emitLog('warn', `[Bước 2] playlistCount=${playlistCount} vượt ngưỡng khuyến nghị ${MAX_PLAYLIST_COUNT_DEFAULT}. Vui lòng cân nhắc giảm số playlist hoặc tách ngày.`)
+  }
+
+  const overrides = plan.overrides || {}
+  const prioritySelectionMode = overrides.prioritySelectionMode || 'auto'
+  const pinnedFromOverrides =
+    prioritySelectionMode === 'manual' && Array.isArray(overrides.priorityPinnedTrackIds)
+      ? overrides.priorityPinnedTrackIds.filter((id) => typeof id === 'string' && id.trim().length > 0)
+      : []
+
+  const buildOptions: BuildPlaylistsOptions = {
+    tracks: scan.tracks,
+    pinnedTrackIds: pinnedFromOverrides, // nếu rỗng → behave như random theo priority/random
+    playlistCount,
+    targetDurationMinutes: minutesPerPlaylist,
+    priorityRatioMin: 0.65,
+    priorityRatioMax: 0.8,
+  }
+
+  clearPlaylists()
+  const playlists = buildPlaylists(buildOptions)
+  savePlaylists(playlists)
+  emitLog('info', `[Bước 2] Đã tạo thành công ${playlists.length} playlist`)
+
+  await ensureAudioDiskSpaceEstimate(audioDir, playlists.length, minutesPerPlaylist, 'Xuất audio playlist (Autopilot)')
+
+  throwIfCancelling()
+
+  // Step 3: Export audio playlists
+  const smoothTransitions = !!overrides.enableCrossfade
+  // Chỉ tính crossfadeSec khi smoothTransitions = true, giống với xuất nhạc thông thường
+  // Clamp giá trị trong khoảng 1-10 giây, giống với xuất nhạc thông thường
+  const crossfadeSec = smoothTransitions
+    ? (() => {
+        const raw = normalizeNumber(
+          overrides.crossfadeSeconds as any,
+          4, // default 4s nếu bật nhưng không nhập
+        )
+        // Clamp trong khoảng 1-10 giây, giống với backend exportAudio.ts
+        return Math.min(Math.max(raw, 1), 10)
+      })()
+    : undefined
+
+  emit({
+    currentStep: 2,
+    stepPercent: 40,
+    message: `Ngày ${dateCode}: Đang xuất ${playlists.length} playlist thành file audio...`,
+  })
+  emitLog('info', `[Bước 2] Ngày ${dateCode}: Bắt đầu xuất ${playlists.length} playlist thành file audio...`)
+  if (smoothTransitions) {
+    emitLog('info', `[Bước 2] Crossfade: BẬT (${crossfadeSec}s)`)
+  } else {
+    emitLog('info', `[Bước 2] Crossfade: TẮT (concat copy-stream)`)
+  }
+
+  const maxAudioExportAttempts = 2
+  for (let i = 0; i < playlists.length; i++) {
+    throwIfCancelling()
+
+    const pl = playlists[i]
+    const fileNameBase = `${dateCode}_P${(i + 1).toString().padStart(2, '0')}`
+    const exportRequestId = `autopilot-export-${dateCode}-${i}`
+    const req: ExportPlaylistRequest = {
+      playlistId: pl.id,
+      outputDir: audioDir,
+      fileName: fileNameBase,
+      // Xuất AAC chuẩn: 48kHz, 384kbps để khớp khuyến nghị YouTube
+      format: 'aac',
+      bitrateKbps: 384,
+      smoothTransitions,
+      // Chỉ truyền crossfadeDurationSec khi smoothTransitions = true, giống với xuất nhạc thông thường
+      crossfadeDurationSec: smoothTransitions ? crossfadeSec : undefined,
+    }
+    
+    // Pass requestId để có thể cancel
+    ;(req as any).requestId = exportRequestId
+
+    emitLog('info', `[Bước 2] Đang xuất playlist ${i + 1}/${playlists.length}: ${fileNameBase}.m4a`)
+    
+    // Retry nhẹ khi export audio thất bại (không phải do cancel)
+    let attempt = 0
+    let lastError: any = null
+    while (attempt < maxAudioExportAttempts) {
+      attempt++
+      const controller = new AbortController()
+      activeAbortControllers.push(controller)
+      try {
+        // Thêm progress emitter để log real-time
+        await exportPlaylistToFile(
+          { ...req, signal: controller.signal } as ExportPlaylistRequest,
+          (progress) => {
+            const percent = progress.percent?.toFixed(1) ?? '0.0'
+            const timeStr = formatDuration(progress.currentSec ?? 0)
+            const totalTimeStr = formatDuration(progress.totalSec ?? 0)
+            emitLog('info', `[Bước 2]   → Playlist ${i + 1}/${playlists.length}: ${percent}% (${timeStr}/${totalTimeStr})`)
+          },
+        )
+        emitLog('info', `[Bước 2] ✓ Đã xuất xong playlist ${i + 1}/${playlists.length}: ${fileNameBase}.m4a`)
+        break
+      } catch (err: any) {
+        lastError = err
+        if (isCancelling || controller.signal.aborted) {
+          throw err
+        }
+        if (isFatalExportError(err)) {
+          throw err
+        }
+        emitLog('warn', `[Bước 2] Lỗi export playlist ${i + 1} (attempt ${attempt}/${maxAudioExportAttempts}): ${err?.message || err}`)
+        if (attempt >= maxAudioExportAttempts) {
+          throw err
+        }
+      } finally {
+        // cleanup controller reference
+        activeAbortControllers = activeAbortControllers.filter((c) => c !== controller)
+      }
+    }
+    
+    // Kiểm tra cancel sau mỗi export
+    throwIfCancelling()
+
+    const percent = 40 + Math.round(((i + 1) / playlists.length) * 20)
+    emit({
+      currentStep: 2,
+      stepPercent: Math.min(60, percent),
+      message: `Ngày ${dateCode}: Đã xuất ${i + 1}/${playlists.length} playlist audio...`,
+    })
+  }
+
+  if (isCancelling) return
+
+  // Step 4: Final export videos (1-1 mapping audio-files vs video-files)
+  // Khai báo videoPickPercent TRƯỚC KHI sử dụng
+  const videoPickPercent = normalizeNumber(
+    overrides.videoPickPercent as any,
+    70,
+  )
+  
+  emit({
+    currentStep: 4,
+    stepPercent: 65,
+    message: `Ngày ${dateCode}: Đang ghép video với audio (Final Export)...`,
+  })
+  emitLog('info', `[Bước 4] Ngày ${dateCode}: Đang chọn video từ thư mục (${videoPickPercent}% mỗi thư mục)...`)
+
+  // Chuẩn bị danh sách video clips:
+  // - Cho phép nhiều thư mục video đã cắt (mỗi dòng trong ô cấu hình)
+  // - Mỗi thư mục chỉ lấy khoảng X% video (videoPickPercent) để tránh lấy hết
+
+  const MIN_VIDEO_TOTAL = 1000
+  const { paths: selectedVideoPaths, summary: videoSelectionSummary } = await withTimeout(
+    pickVideosFromFolders(
+      folders.rootVideo,
+      dateCode,
+      false, // Video: không tự động thêm subfolder theo ngày, dùng nguyên các thư mục user chọn
+      videoPickPercent,
+      MIN_VIDEO_TOTAL,
+    ),
+    VIDEO_PICK_TIMEOUT_MS,
+    `Quét/Chọn video (Autopilot ngày ${dateCode})`,
+    () => {
+      emitLog('error', `[Autopilot] Timeout khi quét/chọn video cho ngày ${dateCode}, huỷ job.`)
+      isCancelling = true
+      videoJobManager.cancelAll()
+    },
+  )
+
+  // Check cancellation sau khi chọn video
+  if (isCancelling) return
+
+  if (selectedVideoPaths.length === 0) {
+    throw new Error(
+      'Không tìm thấy video hợp lệ trong các thư mục video đã cắt. Hãy kiểm tra lại cấu hình thư mục và ngày (ddMM).',
+    )
+  }
+
+  if (selectedVideoPaths.length < playlists.length) {
+    throw new Error(
+      `Số video được chọn (${selectedVideoPaths.length}) ít hơn số playlist/audio (${playlists.length}). Hãy tăng tỉ lệ chọn hoặc bổ sung thêm video.`,
+    )
+  }
+
+  await ensureVideoDiskSpaceEstimate(finalDir, selectedVideoPaths, playlists.length, 'Xuất video hoàn chỉnh (Autopilot)')
+
+  emit({
+    currentStep: 4,
+    stepPercent: 70,
+    message: `Ngày ${dateCode}: Đã chọn ${selectedVideoPaths.length} clip video (mục tiêu ${MIN_VIDEO_TOTAL}).`,
+    videoSelectedCount: selectedVideoPaths.length,
+    videoTargetMin: MIN_VIDEO_TOTAL,
+  })
+  emitLog('info', `[Bước 4] Đã chọn ${selectedVideoPaths.length} clip video (mục tiêu: ${MIN_VIDEO_TOTAL})`)
+  for (const s of videoSelectionSummary) {
+    emitLog('info', `[Bước 4]   - ${s.folder}: ${s.selectedFiles}/${s.totalFiles} video`)
+  }
+
+  // Tạo danh sách audio paths theo đúng thứ tự playlists để đảm bảo mapping đúng
+  // Thay vì dùng folder (sẽ sort theo tên), dùng files với paths đã được sắp xếp đúng
+  const audioPaths: string[] = []
+  for (let i = 0; i < playlists.length; i++) {
+    const fileNameBase = `${dateCode}_P${(i + 1).toString().padStart(2, '0')}`
+    const audioPath = path.join(audioDir, `${fileNameBase}.m4a`)
+    // Kiểm tra file tồn tại trước khi thêm vào danh sách
+    if (fs.existsSync(audioPath)) {
+      audioPaths.push(audioPath)
+    } else {
+      console.warn(`[Autopilot] Audio file không tồn tại: ${audioPath}`)
+    }
+  }
+
+  // Validation: Kiểm tra số lượng audio files có khớp với số playlists không
+  if (audioPaths.length !== playlists.length) {
+    throw new Error(
+      `Số lượng audio files (${audioPaths.length}) không khớp với số playlists (${playlists.length}). Có thể một số playlist chưa được xuất thành công.`
+    )
+  }
+
+  if (audioPaths.length === 0) {
+    throw new Error(
+      'Không tìm thấy file audio nào trong thư mục xuất. Hãy kiểm tra lại quá trình xuất audio.'
+    )
+  }
+
+  emitLog('info', `[Bước 4] Đã tìm thấy ${audioPaths.length} file audio theo đúng thứ tự playlists`)
+
+  const baseOutputName = buildBaseOutputNameFromPreset(plan.presetId)
+  
+  // Debug: Log overrides để kiểm tra customTitles
+  if (overrides?.useCustomTitles) {
+    emitLog('info', `[Bước 4] Debug: useCustomTitles=true, customTitles count=${overrides.customTitles?.length || 0}`)
+    if (overrides.customTitles && overrides.customTitles.length > 0) {
+      emitLog('info', `[Bước 4] Debug: customTitles[0]=${overrides.customTitles[0]}`)
+    }
+  } else {
+    emitLog('info', `[Bước 4] Debug: useCustomTitles=${overrides?.useCustomTitles || false}`)
+  }
+  
+  const outputNames = generateSimpleTitles(playlists.length, baseOutputName, dateCode, overrides)
+  
+  // Debug: Log outputNames để kiểm tra kết quả
+  if (outputNames.length > 0) {
+    emitLog('info', `[Bước 4] Debug: outputNames[0]=${outputNames[0]}`)
+  }
+
+  const requestId = randomUUID()
+
+  const jobRequest: FinalExportJobRequest = {
+    requestId,
+    // Dùng 'files' thay vì 'folder' để đảm bảo thứ tự audio files đúng với playlists
+    audioSource: {
+      type: 'files',
+      path: audioPaths[0],
+      paths: audioPaths,
+    },
+    videoSource: {
+      type: 'files',
+      path: selectedVideoPaths[0],
+      paths: selectedVideoPaths,
+    },
+    outputFolder: finalDir,
+    outputFilename: `${baseOutputName}.mp4`,
+    outputNames,
+    shuffle: true,
+    // Mặc định copy-stream video; nếu user chọn "Chuẩn hoá video đầu vào" thì re-encode + deep verify
+    forceReencode: !!overrides.normalizeVideoInput,
+    normalizeAudio: false,
+    tracklistAuto: !!overrides.generateTracklist,
+    priorityVideoSource:
+      config.folders.priorityVideoFolder && config.folders.priorityVideoFolder.trim().length > 0
+        ? {
+            type: 'folder',
+            path: pickFirstFolder(config.folders.priorityVideoFolder),
+          }
+        : undefined,
+    subtitle: overrides.subtitle,
+  }
+
+  emitLog('info', `[Bước 4] Ngày ${dateCode}: Bắt đầu xuất ${playlists.length} video hoàn chỉnh...`)
+  if (overrides.subtitle) {
+    emitLog('info', `[Bước 4] Subtitle config:`, JSON.stringify({
+      enabled: overrides.subtitle.enabled,
+      useWhisper: overrides.subtitle.useWhisper,
+      autoLyrics: overrides.subtitle.autoLyrics,
+      subtitleStyle: overrides.subtitle.subtitleStyle,
+      subtitleFormat: overrides.subtitle.subtitleFormat,
+      whisperLanguage: overrides.subtitle.whisperLanguage,
+      hasText: !!overrides.subtitle.text,
+    }))
+    
+    // CRITICAL: Log forceReencode status for subtitle 2-step process
+    if (overrides.subtitle.enabled) {
+      if (overrides.normalizeVideoInput) {
+        emitLog('info', `[Bước 4] ⚠️ Re-encode video: BẬT → Sẽ dùng 1-step process (forceReencode=true)`)
+      } else {
+        emitLog('info', `[Bước 4] ✅ Re-encode video: TẮT → Sẽ dùng 2-step process (ghép video trước, burn subtitle sau)`)
+      }
+    }
+  } else {
+    emitLog('info', `[Bước 4] Subtitle: KHÔNG CÓ CONFIG (overrides.subtitle is undefined)`)
+  }
+  if (overrides.normalizeVideoInput) {
+    emitLog('info', `[Bước 4] Re-encode video: BẬT (chậm hơn nhưng an toàn hơn)`)
+  } else {
+    emitLog('info', `[Bước 4] Re-encode video: TẮT (copy-stream, nhanh)`)
+  }
+  if (overrides.generateTracklist) {
+    emitLog('info', `[Bước 4] Tự động tạo tracklist: BẬT`)
+  }
+
+  // CRITICAL: 3-Phase Process for subtitle-enabled days
+  emitLog('info', `[Bước 4] DEBUG: phase=${phase}, dateCode=${dateCode}, hasTempVideoPaths=${!!tempVideoPaths}, hasSubtitleFiles=${!!subtitleFiles}`)
+  
+  if (phase === 'step1') {
+    // Phase 1: Only Step 1 (concat video)
+    emitLog('info', `[Bước 4] Phase 1: Chỉ ghép video (copy-stream) cho ngày ${dateCode}...`)
+    const result = await runExportVideoWithOptions(jobRequest, dateCode, playlists, { onlyStep1: true })
+    if (result) {
+      emitLog('info', `[Bước 4] Phase 1: Đã tạo ${result.tempVideoPaths?.size || 0} tempVideoPaths`)
+      return { tempVideoPaths: result.tempVideoPaths }
+    }
+  } else if (phase === 'whisper') {
+    // Phase 2: Only Whisper (create subtitle files)
+    if (!tempVideoPaths) {
+      throw new Error(`Phase 2: Missing tempVideoPaths for day ${dateCode}`)
+    }
+    emitLog('info', `[Bước 4] Phase 2: Chỉ chạy Whisper cho ngày ${dateCode}...`)
+    const result = await runExportVideoWithOptions(jobRequest, dateCode, playlists, {
+      onlyWhisper: true,
+      tempVideoPaths,
+    })
+    if (result) {
+      emitLog('info', `[Bước 4] Phase 2: Đã tạo ${result.subtitleFiles?.size || 0} subtitleFiles`)
+      return { subtitleFiles: result.subtitleFiles }
+    }
+  } else if (phase === 'step2') {
+    // Phase 3: Only Step 2 (burn subtitle)
+    if (!tempVideoPaths || !subtitleFiles) {
+      throw new Error(`Phase 3: Missing tempVideoPaths or subtitleFiles for day ${dateCode}`)
+    }
+    emitLog('info', `[Bước 4] Phase 3: Chỉ burn subtitle cho ngày ${dateCode}...`)
+    await runExportVideoWithOptions(jobRequest, dateCode, playlists, {
+      onlyStep2: true,
+      tempVideoPaths,
+      subtitleFiles,
+    })
+  } else {
+    // Normal flow: all steps (or no subtitle)
+    emitLog('info', `[Bước 4] DEBUG: Chạy normal flow (phase=${phase || 'undefined'}) cho ngày ${dateCode}`)
+    await runExportVideoWithOptions(jobRequest, dateCode, playlists)
+  }
+}
+
+export async function startAutopilot(config: AutopilotConfig): Promise<void> {
+  if (currentProgress.status === 'running') {
+    throw new Error('Autopilot đang chạy. Hãy dừng job hiện tại trước khi chạy job mới.')
+  }
+
+  activeAbortControllers = []
+  isCancelling = false
+  emit({
+    status: 'running',
+    currentDayIndex: null,
+    currentStep: 1,
+    stepPercent: 0,
+    message: 'Bắt đầu chạy Autopilot...',
+    error: undefined,
+    videoSelectedCount: undefined,
+    videoTargetMin: undefined,
+  })
+  emitLog('info', '🚀 Bắt đầu Autopilot...')
+
+  try {
+    if (!config.dayPlans || config.dayPlans.length === 0) {
+      throw new Error('Chưa có kế hoạch ngày nào trong Autopilot.')
+    }
+
+    const validPlans = config.dayPlans.filter(
+      (p) =>
+        normalizeNumber(p.playlistCount as any, 0) > 0 &&
+        normalizeNumber(p.minutesPerPlaylist as any, 0) > 0,
+    )
+
+    if (validPlans.length === 0) {
+      throw new Error('Tất cả kế hoạch ngày đều có số playlist hoặc thời lượng không hợp lệ.')
+    }
+    const totalDays = validPlans.length
+
+    const priorityFolder = pickFirstFolder(config.folders.priorityMusicFolder)
+    const randomFolder = pickFirstFolder(config.folders.randomMusicFolder)
+    if (!priorityFolder && !randomFolder) {
+      throw new Error('Hãy chọn ít nhất một thư mục nhạc ưu tiên hoặc nhạc random cho Autopilot.')
+    }
+
+    // Validate thư mục nhạc
+    if (priorityFolder) {
+      await validateFolder(priorityFolder, 'Thư mục nhạc ưu tiên')
+    }
+    if (randomFolder) {
+      await validateFolder(randomFolder, 'Thư mục nhạc random')
+    }
+
+    // Validate thư mục output
+    await validateFolder(config.folders.rootAudio, 'Thư mục xuất Audio')
+    await validateFolder(config.folders.rootVideo, 'Thư mục gốc Video đã cắt')
+    await validateFolder(config.folders.rootFinal, 'Thư mục xuất Video hoàn chỉnh')
+
+    // Validate dateCode cho tất cả day plans
+    const dateCodeSeen = new Set<string>()
+    for (let i = 0; i < validPlans.length; i++) {
+      const plan = validPlans[i]
+      const planDateCode = plan.dateCode || (() => {
+        const now = new Date()
+        const d = `${now.getDate()}`.padStart(2, '0')
+        const m = `${now.getMonth() + 1}`.padStart(2, '0')
+        return `${d}${m}`
+      })()
+      
+      if (!validateDateCode(planDateCode)) {
+        throw new Error(
+          `Day plan ${i + 1}: DateCode "${planDateCode}" không hợp lệ. DateCode phải có format ddMM (4 ký tự số, ví dụ: 0412 cho ngày 04 tháng 12).`
+        )
+      }
+
+      const playlistCount = normalizeNumber(plan.playlistCount as any, 0)
+      if (playlistCount > MAX_PLAYLIST_COUNT) {
+        throw new Error(
+          `Day plan ${i + 1}: playlistCount=${playlistCount} vượt giới hạn tối đa ${MAX_PLAYLIST_COUNT}. Giảm số playlist hoặc tách ngày.`,
+        )
+      }
+
+      if (dateCodeSeen.has(planDateCode)) {
+        throw new Error(`Có 2 kế hoạch dùng cùng dateCode "${planDateCode}". Hãy chỉnh lại để tránh ghi đè output.`)
+      }
+      dateCodeSeen.add(planDateCode)
+    }
+
+    emit({
+      currentStep: 1,
+      stepPercent: 5,
+      message: 'Đang quét thư mục nhạc ưu tiên / random...',
+    })
+
+    const scanResult = await withTimeout(
+      scanMusicFolders({
+        priorityFolder,
+        randomFolder,
+      }),
+      SCAN_TIMEOUT_MS,
+      'Quét thư mục nhạc (Autopilot)',
+      () => {
+        emitLog('error', '[Autopilot] Timeout khi quét thư mục nhạc, huỷ job.')
+        isCancelling = true
+        videoJobManager.cancelAll()
+      },
+    )
+
+    emit({
+      currentStep: 1,
+      stepPercent: 15,
+      message: `Đã quét ${scanResult.summary.totalCount} bài nhạc (ưu tiên ${scanResult.summary.priorityCount}, random ${scanResult.summary.randomCount}).`,
+    })
+
+    // CRITICAL: 3-Phase Process for subtitle-enabled days
+    // Phase 1: Concat all videos (Step 1)
+    // Phase 2: Run Whisper for all audio
+    // Phase 3: Burn subtitles for all videos (Step 2)
+    
+    // Separate days into subtitle-enabled and non-subtitle days
+    const subtitleDays: Array<{ plan: DayPlanConfig, index: number }> = []
+    const normalDays: Array<{ plan: DayPlanConfig, index: number }> = []
+    
+    for (let i = 0; i < validPlans.length; i++) {
+      const plan = validPlans[i]
+      const overrides = plan.overrides || {}
+      // CRITICAL: hasSubtitle = subtitle enabled AND NOT forceReencode (normalizeVideoInput)
+      // If normalizeVideoInput=true, we use 1-step process (forceReencode), so no need for 3-phase
+      const hasSubtitle = !!(overrides.subtitle?.enabled) && !overrides.normalizeVideoInput
+      emitLog('info', `[Autopilot] Debug day ${i + 1} (${plan.dateCode}): subtitle.enabled=${overrides.subtitle?.enabled}, normalizeVideoInput=${overrides.normalizeVideoInput}, hasSubtitle=${hasSubtitle}`)
+      if (hasSubtitle) {
+        subtitleDays.push({ plan, index: i })
+      } else {
+        normalDays.push({ plan, index: i })
+      }
+    }
+    
+    emitLog('info', `[Autopilot] Tổng hợp: ${subtitleDays.length} ngày có subtitle (3-phase), ${normalDays.length} ngày không subtitle (1-phase)`)
+    
+    // CRITICAL: If no subtitle days, fallback to old flow
+    if (subtitleDays.length === 0) {
+      emitLog('info', `[Autopilot] ⚠️ Không có ngày nào có subtitle enabled, sẽ dùng flow cũ (1-phase)`)
+      emitLog('info', `[Autopilot] DEBUG: Tất cả ${validPlans.length} ngày sẽ chạy flow cũ (normal flow)`)
+    } else {
+      emitLog('info', `[Autopilot] ✅ Có ${subtitleDays.length} ngày sẽ chạy 3-phase process`)
+      for (const { plan, index } of subtitleDays) {
+        emitLog('info', `[Autopilot]   - Ngày ${plan.dateCode} (index ${index})`)
+      }
+    }
+    
+    const failedDays: string[] = []
+    const allTempVideoPaths = new Map<string, Map<number, string>>() // dateCode -> jobIndex -> tempVideoPath
+    const allSubtitleFiles = new Map<string, Map<number, string>>() // dateCode -> jobIndex -> subtitleFile
+    
+    // PHASE 1: Concat all videos for subtitle-enabled days
+    if (subtitleDays.length > 0) {
+      emitLog('info', `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`)
+      emitLog('info', `[Phase 1] Bắt đầu ghép video cho ${subtitleDays.length} ngày có subtitle...`)
+      emit({
+        currentStep: 4,
+        stepPercent: 60,
+        message: `Phase 1: Đang ghép video cho ${subtitleDays.length} ngày có subtitle...`,
+      })
+      
+      for (let idx = 0; idx < subtitleDays.length; idx++) {
+        if (isCancelling) break
+        const { plan, index } = subtitleDays[idx]
+        emit({
+          currentDayIndex: index,
+          currentStep: 4,
+          stepPercent: 60 + Math.round((idx / subtitleDays.length) * 5),
+          message: `Phase 1: Đang ghép video cho ngày ${plan.dateCode}...`,
+        })
+        emitLog('info', `[Phase 1] 📅 Đang ghép video cho ngày ${plan.dateCode}...`)
+        try {
+          const result = await runAutopilotForDay(plan, index, { ...config, dayPlans: validPlans }, scanResult, 'step1')
+          if (result?.tempVideoPaths) {
+            allTempVideoPaths.set(plan.dateCode || '', result.tempVideoPaths)
+            emitLog('info', `[Phase 1] ✓ Đã ghép video cho ngày ${plan.dateCode}`)
+          }
+        } catch (err: any) {
+          failedDays.push(plan.dateCode || `plan-${index + 1}`)
+          emitLog('error', `[Phase 1] Lỗi ở ngày ${plan.dateCode || index + 1}: ${err?.message || err}`)
+          if (isCancelling) break
+        }
+      }
+    }
+    
+    // PHASE 2: Run Whisper for all audio (using onlyWhisper option)
+    if (subtitleDays.length > 0 && !isCancelling) {
+      emitLog('info', `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`)
+      emitLog('info', `[Phase 2] Bắt đầu Whisper cho ${subtitleDays.length} ngày có subtitle...`)
+      emit({
+        currentStep: 4,
+        stepPercent: 65,
+        message: `Phase 2: Đang chạy Whisper cho ${subtitleDays.length} ngày có subtitle...`,
+      })
+      
+      for (let idx = 0; idx < subtitleDays.length; idx++) {
+        if (isCancelling) break
+        const { plan, index } = subtitleDays[idx]
+        const dateCode = plan.dateCode || ''
+        const tempVideoPaths = allTempVideoPaths.get(dateCode)
+        
+        if (!tempVideoPaths) {
+          emitLog('warn', `[Phase 2] ⚠️ Thiếu tempVideoPaths cho ngày ${dateCode}, bỏ qua`)
+          continue
+        }
+        
+        emit({
+          currentDayIndex: index,
+          currentStep: 4,
+          stepPercent: 65 + Math.round((idx / subtitleDays.length) * 5),
+          message: `Phase 2: Đang chạy Whisper cho ngày ${dateCode}...`,
+        })
+        emitLog('info', `[Phase 2] 📅 Đang chạy Whisper cho ngày ${dateCode}...`)
+        try {
+          const result = await runAutopilotForDay(plan, index, { ...config, dayPlans: validPlans }, scanResult, 'whisper', tempVideoPaths)
+          if (result?.subtitleFiles) {
+            allSubtitleFiles.set(dateCode, result.subtitleFiles)
+            emitLog('info', `[Phase 2] ✓ Đã chạy Whisper cho ngày ${dateCode}`)
+          }
+        } catch (err: any) {
+          failedDays.push(plan.dateCode || `plan-${index + 1}`)
+          emitLog('error', `[Phase 2] Lỗi ở ngày ${plan.dateCode || index + 1}: ${err?.message || err}`)
+          if (isCancelling) break
+        }
+      }
+    }
+    
+    // PHASE 3: Burn subtitles for all videos
+    if (subtitleDays.length > 0 && !isCancelling) {
+      emitLog('info', `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`)
+      emitLog('info', `[Phase 3] Bắt đầu burn subtitle cho ${subtitleDays.length} ngày có subtitle...`)
+      emit({
+        currentStep: 4,
+        stepPercent: 70,
+        message: `Phase 3: Đang burn subtitle cho ${subtitleDays.length} ngày có subtitle...`,
+      })
+      
+      for (let idx = 0; idx < subtitleDays.length; idx++) {
+        if (isCancelling) break
+        const { plan, index } = subtitleDays[idx]
+        const dateCode = plan.dateCode || ''
+        const tempVideoPaths = allTempVideoPaths.get(dateCode)
+        const subtitleFiles = allSubtitleFiles.get(dateCode)
+        
+        if (!tempVideoPaths || !subtitleFiles) {
+          emitLog('warn', `[Phase 3] ⚠️ Thiếu tempVideoPaths hoặc subtitleFiles cho ngày ${dateCode}, bỏ qua`)
+          continue
+        }
+        
+        emit({
+          currentDayIndex: index,
+          currentStep: 4,
+          stepPercent: 70 + Math.round((idx / subtitleDays.length) * 25),
+          message: `Phase 3: Đang burn subtitle cho ngày ${dateCode}...`,
+        })
+        emitLog('info', `[Phase 3] 📅 Đang burn subtitle cho ngày ${dateCode}...`)
+        try {
+          await runAutopilotForDay(plan, index, { ...config, dayPlans: validPlans }, scanResult, 'step2', tempVideoPaths, subtitleFiles)
+          emitLog('info', `[Phase 3] ✓ Đã burn subtitle cho ngày ${dateCode}`)
+        } catch (err: any) {
+          failedDays.push(plan.dateCode || `plan-${index + 1}`)
+          emitLog('error', `[Phase 3] Lỗi ở ngày ${plan.dateCode || index + 1}: ${err?.message || err}`)
+          if (isCancelling) break
+        }
+      }
+    }
+    
+    // Process normal days (no subtitle, run normally)
+    for (const { plan, index } of normalDays) {
+      if (isCancelling) break
+      emit({
+        currentDayIndex: index,
+        currentStep: 1,
+        stepPercent: currentProgress.stepPercent,
+        message: `Bắt đầu ngày ${plan.dateCode} (${index + 1}/${totalDays})...`,
+      })
+      emitLog('info', `📅 Bắt đầu ngày ${plan.dateCode} (${index + 1}/${totalDays})`)
+      try {
+        await runAutopilotForDay(plan, index, { ...config, dayPlans: validPlans }, scanResult, 'all')
+        const overallPercent = Math.round(((index + 1) / totalDays) * 100)
+        emit({
+          currentDayIndex: index,
+          currentStep: 5,
+          stepPercent: Math.max(currentProgress.stepPercent ?? 0, overallPercent),
+          message: `Hoàn tất ngày ${plan.dateCode} (${index + 1}/${totalDays}). Tiến độ tổng: ${overallPercent}%.`,
+        })
+        emitLog('info', `✓ Hoàn tất ngày ${plan.dateCode} (${index + 1}/${totalDays}). Tiến độ tổng: ${overallPercent}%.`)
+      } catch (err: any) {
+        failedDays.push(plan.dateCode || `plan-${index + 1}`)
+        emitLog('error', `[Autopilot] Lỗi ở ngày ${plan.dateCode || index + 1}: ${err?.message || err}`)
+        if (isCancelling) break
+      }
+    }
+
+    if (isCancelling) {
+      emit({
+        status: 'idle',
+        currentStep: null,
+        stepPercent: 0,
+        message: 'Đã dừng Autopilot theo yêu cầu người dùng.',
+      })
+    } else if (failedDays.length > 0) {
+      emit({
+        status: 'completed_with_errors',
+        currentStep: currentProgress.currentStep,
+        stepPercent: currentProgress.stepPercent,
+        message: `Autopilot hoàn tất nhưng có ${failedDays.length} ngày lỗi: ${failedDays.join(', ')}`,
+        error: `Ngày lỗi: ${failedDays.join(', ')}`,
+      })
+    } else if (currentProgress.status !== 'error') {
+      emit({
+        status: 'completed',
+        currentStep: 5,
+        stepPercent: 100,
+        message: 'Autopilot đã hoàn tất tất cả ngày trong kế hoạch.',
+      })
+    }
+  } catch (error: any) {
+    emit({
+      status: 'error',
+      currentStep: currentProgress.currentStep,
+      error: error?.message || 'Lỗi không xác định trong Autopilot.',
+      message: error?.message || 'Lỗi khi chạy Autopilot.',
+    })
+    throw error
+  } finally {
+    const finalStatus = currentProgress.status
+    isCancelling = false
+    activeAbortControllers = []
+    // Reset status to idle so autopilot can be started again
+    if (finalStatus === 'running' || finalStatus === 'cancelling') {
+      currentProgress.status = 'idle'
+    }
+    if (finalStatus === 'error' || finalStatus === 'cancelling') {
+      progressListener = null
+      logListener = null
+    }
+  }
+}
+
