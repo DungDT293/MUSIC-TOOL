@@ -216,21 +216,6 @@ export class VisualizerRuntime {
   }
 
   /**
-   * Alt engine render: vẽ content từ alt engine vào webglCanvas.
-   * Alt engine render vào canvas/container riêng → blit vào webglCanvas.
-   */
-  private renderAltEngineBackground(set: CanvasSet, frame: any): void {
-    const ctx = set.webglCanvas.getContext('2d')
-    if (!ctx) return
-    const w = set.webglCanvas.width
-    const h = set.webglCanvas.height
-
-    // Vẽ background mode trước
-    ctx.clearRect(0, 0, w, h)
-    this.drawBackground(ctx, w, h)
-  }
-
-  /**
    * Vẽ background theo bgMode.
    */
   private drawBackground(ctx: CanvasRenderingContext2D, w: number, h: number): void {

@@ -1798,10 +1798,12 @@ export class YouTubeDownloader extends EventEmitter {
   }
   
   /**
-   * Upscale video to 4K using FFmpeg (placeholder - will be implemented later)
+   * Upscale video to 4K using FFmpeg (not yet implemented)
+   * Returns early with a warning instead of throwing to avoid crashing callers.
    */
   async upscaleTo4K(_inputPath: string, _outputPath: string, _onProgress?: (percent: number) => void): Promise<void> {
-    throw new Error('upscaleTo4K will be implemented later');
+    console.warn('[YouTubeDownloader] upscaleTo4K is not yet implemented — skipping')
+    return
   }
 }
 

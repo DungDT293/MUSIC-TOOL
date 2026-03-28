@@ -30,42 +30,43 @@ interface KeepAlivePage {
   redirectTo?: string // for redirect-only routes
 }
 
+// Module-scope constant — derived from compile-time flag, safe to hoist out of component
+// This prevents stale closure in useEffect dependency array
+const KEEP_ALIVE_PAGES: KeepAlivePage[] = [
+  { path: '/music/scan', component: ScanMusicPage },
+  { path: '/music/playlist', component: CreatePlaylistPage },
+  { path: '/music/preview', component: PreviewPlaylistPage },
+  { path: '/music/export', component: ExportAudioPage },
+  { path: '/music/song-nhac', component: SongNhacPage },
+  { path: '/video/tools', component: VideoToolsPage },
+  { path: '/video/cut-merge', component: CutMergeVideoPage },
+  { path: '/video/final-export', component: FinalExportPage },
+  { path: '/video/youtube-downloader', component: YouTubeDownloaderTab },
+  { path: '/video/seo', component: SeoToolPage },
+  ...(!HIDE_FEATURE_AUTOPILOT ? [{ path: '/autopilot', component: AutopilotPage }] : []),
+  { path: '/settings', component: SettingsPage },
+]
+
 function Router() {
   const location = useLocation()
   const currentPath = location.pathname
-
-  // Danh sách tất cả pages cần keep-alive
-  const keepAlivePages: KeepAlivePage[] = [
-    { path: '/music/scan', component: ScanMusicPage },
-    { path: '/music/playlist', component: CreatePlaylistPage },
-    { path: '/music/preview', component: PreviewPlaylistPage },
-    { path: '/music/export', component: ExportAudioPage },
-    { path: '/music/song-nhac', component: SongNhacPage },
-    { path: '/video/tools', component: VideoToolsPage },
-    { path: '/video/cut-merge', component: CutMergeVideoPage },
-    { path: '/video/final-export', component: FinalExportPage },
-    { path: '/video/youtube-downloader', component: YouTubeDownloaderTab },
-    { path: '/video/seo', component: SeoToolPage },
-    ...(!HIDE_FEATURE_AUTOPILOT ? [{ path: '/autopilot', component: AutopilotPage }] : []),
-    { path: '/settings', component: SettingsPage },
-  ]
 
   // Track mounted pages — lazy mount (chỉ mount khi user vào lần đầu)
   const [mountedPaths, setMountedPaths] = useState<Set<string>>(() => {
     // Mount current page ngay lập tức
     const initial = new Set<string>()
-    const match = keepAlivePages.find(p => p.path === currentPath)
+    const match = KEEP_ALIVE_PAGES.find(p => p.path === currentPath)
     if (match) initial.add(match.path)
     else initial.add('/music/scan') // default
     return initial
   })
 
   useEffect(() => {
-    const match = keepAlivePages.find(p => p.path === currentPath)
+    const match = KEEP_ALIVE_PAGES.find(p => p.path === currentPath)
     if (match && !mountedPaths.has(match.path)) {
       setMountedPaths(prev => new Set(prev).add(match.path))
     }
-  }, [currentPath])
+  }, [currentPath, mountedPaths])
 
   return (
     <>
@@ -73,7 +74,7 @@ function Router() {
       {currentPath === '/' && <Navigate to="/music/scan" replace />}
 
       {/* Keep-alive: tất cả pages luôn mounted sau lần đầu, chỉ ẩn/hiện bằng CSS */}
-      {keepAlivePages.map(({ path, component: Component }) => {
+      {KEEP_ALIVE_PAGES.map(({ path, component: Component }) => {
         if (!mountedPaths.has(path)) return null
         const isActive = currentPath === path
         return (

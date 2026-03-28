@@ -3,6 +3,8 @@
  * Phát hiện và báo cáo các hoạt động đáng ngờ (crack attempts)
  */
 
+import { version as APP_VERSION } from '../../package.json'
+
 import { getMachineHash } from '../license/machineId'
 
 export type SecurityEventType =
@@ -81,7 +83,7 @@ export async function reportSecurityEvent(event: SecurityEvent): Promise<void> {
         timestamp: event.timestamp,
         machineId: event.machineId,
         username: event.username,
-        appVersion: '1.0.4',
+        appVersion: APP_VERSION,
       }),
     })
 

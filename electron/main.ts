@@ -97,7 +97,6 @@ let licenseState: LicenseState = {
 // =========================
 import { getDecryptedString } from '../backend/security/stringEncryption'
 import { initTamperDetection, checkTampering } from '../backend/security/tamperDetection'
-import { createSignedHeaders } from '../backend/security/apiSigning'
 import { requireValidLicense } from '../backend/security/licenseCheck'
 import { initSecurityMonitoring, reportMachineIdMismatch } from '../backend/security/securityMonitoring'
 
@@ -688,9 +687,28 @@ function createWindow() {
 }
 
 async function confirmResourcesForVideoJob(kind: 'merge' | 'final-export' | 'mute', targetDir: string): Promise<boolean> {
-  // FIX: Loại bỏ hoàn toàn tính năng chặn khi thiếu dung lượng
-  // Luôn cho phép user tiếp tục, không hiển thị dialog cảnh báo
-  return true
+  try {
+    const diskSpace = await getDiskSpace(targetDir)
+    // Minimum thresholds per job type (bytes)
+    const minRequired: Record<string, number> = {
+      'merge': 2 * 1024 * 1024 * 1024,       // 2 GB
+      'final-export': 4 * 1024 * 1024 * 1024, // 4 GB
+      'mute': 512 * 1024 * 1024,               // 512 MB
+    }
+    const required = minRequired[kind] ?? 1 * 1024 * 1024 * 1024
+    const hasEnough = checkMinimumSpace(diskSpace, required)
+    if (!hasEnough) {
+      console.warn(
+        `[confirmResources] Not enough disk space for ${kind}: ` +
+        `available=${formatBytes(diskSpace.free)}, required=${formatBytes(required)}`
+      )
+    }
+    return hasEnough
+  } catch (err) {
+    // Nếu không lấy được disk info — cho phép tiếp tục (fail open)
+    console.warn('[confirmResources] Could not check disk space:', err)
+    return true
+  }
 }
 
 // Log FFmpeg info
@@ -1104,27 +1122,6 @@ function registerIpcHandlers() {
   // Nếu hiện tại file main.ts đang có logic nào cho những channel này
   // thì HÃY GIỮ LẠI NGUYÊN VẸN và chỉ đặt chúng trong hàm này.
 
-  ipcMain.handle('music:scan', async (_event, payload) => {
-    console.log('[IPC] music:scan', payload)
-    // TODO: sẽ implement sau
-    return { ok: true }
-  })
-
-  ipcMain.handle('music:createPlaylist', async (_event, payload) => {
-    console.log('[IPC] music:createPlaylist', payload)
-    return { ok: true }
-  })
-
-  ipcMain.handle('music:preview', async (_event, payload) => {
-    console.log('[IPC] music:preview', payload)
-    return { ok: true }
-  })
-
-  ipcMain.handle('music:export', async (_event, payload) => {
-    console.log('[IPC] music:export', payload)
-    return { ok: true }
-  })
-
   // Job queue inspectors
   ipcMain.handle('jobQueue:list', async () => {
     return jobQueue.getJobs()
@@ -1137,26 +1134,6 @@ function registerIpcHandlers() {
   ipcMain.handle('jobQueue:cancel', async (_event, jobId: string) => {
     await jobQueue.cancelJob(jobId)
     return { success: true }
-  })
-
-  ipcMain.handle('video:cutSingle', async (_event, payload) => {
-    console.log('[IPC] video:cutSingle', payload)
-    return { ok: true }
-  })
-
-  ipcMain.handle('video:cutBatch', async (_event, payload) => {
-    console.log('[IPC] video:cutBatch', payload)
-    return { ok: true }
-  })
-
-  ipcMain.handle('video:merge', async (_event, payload) => {
-    console.log('[IPC] video:merge', payload)
-    return { ok: true }
-  })
-
-  ipcMain.handle('video:finalExport', async (_event, payload) => {
-    console.log('[IPC] video:finalExport', payload)
-    return { ok: true }
   })
 
   // FFprobe IPC
@@ -2626,8 +2603,7 @@ app.whenReady()
     // Periodic license check (mỗi 30 phút)
     setInterval(async () => {
       try {
-        await refreshLicenseState(true) // Force remote check
-        const currentState = await refreshLicenseState(false)
+        const currentState = await refreshLicenseState(true) // Force remote check
         if (currentState.status !== 'ok') {
           console.warn('[Security] License check failed during periodic check:', currentState.status)
         }

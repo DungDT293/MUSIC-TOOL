@@ -144,12 +144,8 @@ const api: IPCAPI = {
       }
     },
   },
-  // Turbo Engine APIs (DEPRECATED - không dùng nữa)
-  // detectDiskType: (filePath: string) => ipcRenderer.invoke('video:detectDiskType', filePath),
-  // videoGetDiskInfo: (filePath: string) => ipcRenderer.invoke('video:getDiskInfo', filePath),
-  videoCutSingleTurbo: (req: any) => ipcRenderer.invoke('video:cutSingleTurbo', req),
-  videoSplitManyTurbo: (req: any) => ipcRenderer.invoke('video:splitManyTurbo', req),
-  videoMergeTurbo: (req: any) => ipcRenderer.invoke('video:mergeTurbo', req),
+  // Turbo Engine APIs (REMOVED — handlers deleted in main process)
+  // videoCutSingleTurbo, videoSplitManyTurbo, videoMergeTurbo removed
   videoCancelJob: (requestId: string) => ipcRenderer.invoke('video:cancelJob', requestId),
   videoGetAllJobIds: () => ipcRenderer.invoke('video:getAllJobIds'),
   videoGetActiveMergeJobId: () => ipcRenderer.invoke('video:getActiveMergeJobId'),
