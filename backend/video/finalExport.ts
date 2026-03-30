@@ -1052,7 +1052,7 @@ export async function executeFinalExport(
       // CRITICAL: Skip Whisper and Step 2 if onlyStep1=true (already handled above, but double-check)
       if (onlyStep1) {
         console.log(`[FinalExport] Phase 1: Already completed Step 1, skipping Whisper and Step 2 for job ${currentJobIndex}`)
-        continue // Skip to next job - DO NOT run Whisper or Step 2
+        return // Skip rest of processJob - DO NOT run Whisper or Step 2
       }
       
       // CRITICAL: Only run Whisper if NOT onlyStep1 and NOT onlyStep2
