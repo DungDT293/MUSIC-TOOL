@@ -344,6 +344,20 @@ export function setupYouTubeHandlers(mainWindow: BrowserWindow) {
     }
   });
   
+  // ============================================
+  // Handler: Update yt-dlp
+  // ============================================
+  ipcMain.handle('youtube:update-ytdlp', async () => {
+    try {
+      if (!downloader) throw new Error('Downloader not initialized');
+      const result = await downloader.updateYtDlp();
+      return result;
+    } catch (error: any) {
+      console.error('[IPC] youtube:update-ytdlp error:', error);
+      return { success: false, message: error.message };
+    }
+  });
+
   console.log('[IPC] YouTube handlers setup complete');
 }
 
@@ -367,7 +381,7 @@ export function cleanupYouTubeHandlers() {
   ipcMain.removeHandler('youtube:estimate-channel-size');
   ipcMain.removeHandler('youtube:download-video');
   ipcMain.removeHandler('youtube:download-channel');
-  ipcMain.removeHandler('youtube:cancel-download');
+  ipcMain.removeHandler('youtube:update-ytdlp');
   
   console.log('[IPC] YouTube handlers cleaned up');
 }

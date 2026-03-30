@@ -261,7 +261,10 @@ const api: IPCAPI = {
     
     removeBatchProgressListener: () => {
       ipcRenderer.removeAllListeners('youtube:batch-progress')
-    }
+    },
+
+    // Update yt-dlp binary to latest version
+    updateYtDlp: () => ipcRenderer.invoke('youtube:update-ytdlp'),
   },
   jobQueue: {
     list: () => ipcRenderer.invoke('jobQueue:list'),

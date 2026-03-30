@@ -143,6 +143,41 @@ export class YouTubeDownloader extends EventEmitter {
   }
   
   /**
+   * Update yt-dlp to latest version
+   */
+  async updateYtDlp(): Promise<{ success: boolean; version?: string; message: string }> {
+    return new Promise((resolve) => {
+      const proc = spawn(this.ytDlpPath, ['-U', '--no-update-to-nightly']);
+      let output = '';
+      let stderr = '';
+      proc.stdout.on('data', (d) => { output += d.toString(); });
+      proc.stderr.on('data', (d) => { stderr += d.toString(); });
+      proc.on('close', async (code) => {
+        const combined = (output + stderr).trim();
+        // Get new version after update
+        let version: string | undefined;
+        try { version = await this.getVersion(); } catch (_) {}
+        if (code === 0 || combined.toLowerCase().includes('up-to-date') || combined.toLowerCase().includes('updated')) {
+          resolve({
+            success: true,
+            version,
+            message: combined || `yt-dlp updated successfully to ${version ?? 'latest'}`,
+          });
+        } else {
+          resolve({
+            success: false,
+            version,
+            message: combined || 'Update failed (unknown error)',
+          });
+        }
+      });
+      proc.on('error', (err) => {
+        resolve({ success: false, message: `Failed to run yt-dlp update: ${err.message}` });
+      });
+    });
+  }
+
+  /**
    * Check if URL is valid YouTube URL
    */
   isValidYouTubeUrl(url: string): boolean {
@@ -740,15 +775,21 @@ export class YouTubeDownloader extends EventEmitter {
       '--add-header', 'Sec-Fetch-Site:none',
       '--add-header', 'Sec-Fetch-User:?1',
       '--no-check-certificate',
-      '--ignore-errors',
       '--no-warnings',
-      '--extractor-args', 'youtube:player_client=web,android',
-      '--fragment-retries', '5',  // Giống tool Python (thứ tự)
-      '--retries', '3'  // Giống tool Python (thứ tự)
+      // Fix: Dùng tv,android_vr làm primary — không cần PO token, không bị SABR,
+      // có thể lấy DASH 4K. web_safari fallback cho HLS 1080p.
+      // (Theo yt-dlp docs 2025: web/android đã bị SABR/broken)
+      '--extractor-args', 'youtube:player_client=tv,android_vr,web_safari',
+      '--fragment-retries', '10',
+      '--retries', '5',
+      '--throttled-rate', '100K',
+      '--sleep-interval', '1',
+      '--max-sleep-interval', '5'
     );
-    
-    // Chỉ thêm cookies nếu user CỤ THỂ yêu cầu (sau extractor args)
-    let tempCookieFile: string | null = null // Track temp file để cleanup sau
+
+    // Cookies: thêm nếu user yêu cầu, nhưng KHÔNG crash nếu fail
+    // (Chrome lock DB khi đang chạy — phải graceful fallback)
+    let tempCookieFile: string | null = null
     if (request.cookiesFile) {
       cmd.push('--cookies', request.cookiesFile);
       console.log(`[YouTubeDownloader] Using cookies file: ${request.cookiesFile}`);
@@ -763,10 +804,12 @@ export class YouTubeDownloader extends EventEmitter {
           cmd.push('--cookies', cookieResult.cookie_file);
           console.log(`[YouTubeDownloader] Using cookies from ${cookieResult.browser}`);
         } else {
-          throw new Error(`Failed to extract cookies from ${request.cookiesFromBrowser}`);
+          // Graceful: warn but continue without cookies
+          console.warn(`[YouTubeDownloader] Could not extract cookies from ${request.cookiesFromBrowser}, downloading without cookies`);
         }
       } catch (extractError: any) {
-        throw new Error(`Không thể lấy cookies từ ${request.cookiesFromBrowser}: ${extractError?.message}`);
+        // Graceful: warn but continue without cookies (Chrome DB locked, etc.)
+        console.warn(`[YouTubeDownloader] Cookie extraction failed (${extractError?.message}), downloading without cookies`);
       }
     }
     
@@ -905,9 +948,12 @@ export class YouTubeDownloader extends EventEmitter {
     
     // Strategy: Đơn giản hóa như tool Python - CHỈ dùng android,web client
     // Tool Python thành công vì đơn giản: không cookies, không phức tạp
-    // Bug fix: dùng web client trước để lấy đủ format cao (1080p/4K DASH)
-    // player_skip=webpage bị xóa vì nó chặn high-res formats
-    args.push('--extractor-args', 'youtube:player_client=web,android');
+    // Bug fix: dùng tv,android_vr,web_safari — có DASH 4K, không PO token, không bị SABR
+    // (Theo yt-dlp docs 2025: tv client stable nhất, android_vr backup, web_safari cho HLS)
+    args.push('--extractor-args', 'youtube:player_client=tv,android_vr,web_safari');
+    args.push('--throttled-rate', '100K');
+    args.push('--sleep-interval', '1');
+    args.push('--max-sleep-interval', '5');
     
     // Thêm cookies nếu có (chỉ khi user cung cấp)
     if (cookieArgs.length > 0) {
@@ -1644,7 +1690,7 @@ export class YouTubeDownloader extends EventEmitter {
       '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       '--referer', 'https://www.youtube.com/',
       '--add-header', 'Accept-Language:en-US,en;q=0.9',
-      '--extractor-args', 'youtube:player_client=web,android', // Dùng web+Android client để lấy đủ format cao
+      '--extractor-args', 'youtube:player_client=tv,android_vr,web_safari', // Dùng tv+android_vr để lấy đủ format cao
     ];
 
     if (audioOnly) {
