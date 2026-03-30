@@ -734,6 +734,7 @@ export interface IPCAPI {
       error?: string
     }) => void) => () => void
     cancelNormalizeAudio?: () => Promise<{ ok: boolean }>
+    spotifyMeta?: (url: string) => Promise<{ success: boolean; title?: string; artist?: string; thumbnailUrl?: string; error?: string }>
     getExportHistory: () => Promise<ExportHistoryEntry[]>
     downloadPlaylistHistory: (dates: string[], outputDir?: string) => Promise<{
       success: boolean
@@ -756,6 +757,12 @@ export interface IPCAPI {
     finalExport?: (payload: VideoFinalExportPayload) => Promise<any>
   }
   probeFile: (path: string) => Promise<ProbeResult>
+  preset?: {
+    list: () => Promise<{ success: boolean; presets: any[] }>
+    save: (name: string, settings: any) => Promise<{ success: boolean; preset?: any; error?: string }>
+    update: (id: string, name: string, settings: any) => Promise<{ success: boolean; preset?: any; error?: string }>
+    delete: (id: string) => Promise<{ success: boolean; deleted?: boolean; error?: string }>
+  }
   getSystemInfo: () => Promise<SystemInfo>
   getRealtimeStats: () => Promise<RealtimeStatsPayload>
   getDiskInfo: () => Promise<DiskInfoSummary>

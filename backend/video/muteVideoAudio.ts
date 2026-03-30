@@ -67,6 +67,7 @@ export async function muteVideoAudio(
     const totalFiles = inputFiles.length
     let processed = 0
     let failed = 0
+    let validFailed = 0  // chỉ đếm valid files bị lỗi FFmpeg (không tính invalid)
     const outputPaths: string[] = []
     let lastError: string | undefined
 
@@ -82,6 +83,8 @@ export async function muteVideoAudio(
       })
       failed += invalid.length
     }
+
+    const validTotal = valid.length  // dùng valid.length cho % progress
 
     const { ffmpeg } = getFfmpegPaths()
 
@@ -101,8 +104,8 @@ export async function muteVideoAudio(
         currentFile: path.basename(inputPath),
         currentIndex: index + 1,
         totalFiles,
-        percent: (index / totalFiles) * 100,
-        message: `Đang tắt âm thanh video ${index + 1}/${totalFiles}...`,
+        percent: (index / validTotal) * 100,
+        message: `Đang tắt âm thanh video ${index + 1}/${validTotal}...`,
       })
 
       // Chạy FFmpeg để copy video stream và bỏ audio (-an)
@@ -146,11 +149,12 @@ export async function muteVideoAudio(
           if (videoJobManager.isCancelled(requestId)) {
             lastError = 'Đã dừng bởi người dùng'
             failed++
+            validFailed++
             emitProgress({
               currentFile: path.basename(inputPath),
               currentIndex: index + 1,
               totalFiles,
-              percent: (index + 1) / totalFiles * 100,
+              percent: (index + 1) / validTotal * 100,
               error: lastError,
             })
             resolve()
@@ -164,11 +168,12 @@ export async function muteVideoAudio(
               currentFile: path.basename(inputPath),
               currentIndex: index + 1,
               totalFiles,
-              percent: ((index + 1) / totalFiles) * 100,
-              message: `Đã tắt âm thanh video ${index + 1}/${totalFiles}`,
+              percent: ((index + 1) / validTotal) * 100,
+              message: `Đã tắt âm thanh video ${index + 1}/${validTotal}`,
             })
           } else {
             failed++
+            validFailed++
             const stderrSnippet = stderrBuffer.slice(-400)
             lastError = `FFmpeg exited with code ${code}. ${stderrSnippet}`
             console.error('[muteVideoAudio] FFmpeg error for file:', inputPath, '\n', stderrSnippet)
@@ -176,7 +181,7 @@ export async function muteVideoAudio(
               currentFile: path.basename(inputPath),
               currentIndex: index + 1,
               totalFiles,
-              percent: ((index + 1) / totalFiles) * 100,
+              percent: ((index + 1) / validTotal) * 100,
               error: lastError,
             })
           }
@@ -185,13 +190,14 @@ export async function muteVideoAudio(
 
         proc.on('error', (err) => {
           failed++
+          validFailed++
           lastError = `FFmpeg process error: ${err.message}`
           console.error('[muteVideoAudio] FFmpeg process error for file:', inputPath, err)
           emitProgress({
             currentFile: path.basename(inputPath),
             currentIndex: index + 1,
             totalFiles,
-            percent: ((index + 1) / totalFiles) * 100,
+            percent: ((index + 1) / validTotal) * 100,
             error: lastError,
           })
           resolve()
@@ -204,7 +210,8 @@ export async function muteVideoAudio(
       `[muteVideoAudio] Completed. processed=${processed}, failed=${failed}, elapsed=${(elapsedMs / 1000).toFixed(1)}s`
     )
 
-    const success = failed === 0
+    // success = true nếu tất cả valid files đều xuất thành công (bỏ qua invalid files)
+    const success = validFailed === 0 && processed > 0
     return {
       requestId,
       outputPaths,

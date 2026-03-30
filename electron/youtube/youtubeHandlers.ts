@@ -358,7 +358,53 @@ export function setupYouTubeHandlers(mainWindow: BrowserWindow) {
     }
   });
 
-  console.log('[IPC] YouTube handlers setup complete');
+  console.log('[IPC] YouTube handlers setup complete')
+
+  // ── Auto-update yt-dlp on startup (background, silent) ──────────────────────
+  // Chạy sau 5s để không block startup UI
+  setTimeout(async () => {
+    if (!downloader) return
+    try {
+      const version = await downloader.getVersion()
+      // yt-dlp version format: YYYY.MM.DD (e.g. "2025.03.15")
+      const match = version.match(/(\d{4})\.(\d{2})\.(\d{2})/)
+      if (!match) return
+
+      const versionDate = new Date(`${match[1]}-${match[2]}-${match[3]}`)
+      const ageMs = Date.now() - versionDate.getTime()
+      const ageDays = Math.floor(ageMs / 86_400_000)
+
+      if (ageDays >= 30) {
+        console.log(`[yt-dlp] Version ${version} is ${ageDays} days old — auto-updating silently...`)
+        const result = await downloader.updateYtDlp()
+        if (result.success) {
+          console.log(`[yt-dlp] Auto-update success: ${result.message}`)
+          // Notify renderer về update thành công
+          if (!mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('youtube:ytdlp-auto-updated', {
+              success: true,
+              version: result.version,
+              ageDays,
+              message: result.message,
+            })
+          }
+        } else {
+          console.warn(`[yt-dlp] Auto-update failed (non-blocking): ${result.message}`)
+        }
+      } else {
+        console.log(`[yt-dlp] Version ${version} is ${ageDays} days old — no update needed`)
+        // Hiển thị warning nếu > 15 ngày (nhưng chưa 30)
+        if (ageDays >= 15 && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('youtube:ytdlp-age-warning', {
+            version,
+            ageDays,
+          })
+        }
+      }
+    } catch (err: any) {
+      console.warn('[yt-dlp] Auto-update check failed (non-blocking):', err?.message)
+    }
+  }, 5000)
 }
 
 /**

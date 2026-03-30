@@ -41,6 +41,8 @@ export interface AutopilotFoldersConfig {
   priorityMusicFolder: string
   randomMusicFolder: string
   priorityVideoFolder?: string
+  /** Số clip video tối thiểu cần chọn (mặc định 1000) */
+  minVideoClipsTarget?: number
 }
 
 type AutopilotRunStatus = 'idle' | 'running' | 'paused' | 'completed' | 'error' | 'cancelling'
@@ -1720,6 +1722,35 @@ function FoldersAndSourcesSection({ foldersConfig, onChange, videoSelectionInfo 
                 {(videoSelectionInfo.target || 0).toLocaleString()} (mục tiêu)
               </span>
             )}
+            {/* Mục tiêu clip video */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px' }}>
+              <label style={{ fontSize: '12px', color: '#9ca3af', whiteSpace: 'nowrap' }}>
+                Số clip mục tiêu:
+              </label>
+              <input
+                type="number"
+                min={100}
+                max={100000}
+                step={100}
+                value={foldersConfig.minVideoClipsTarget ?? 1000}
+                onChange={(e) => {
+                  const v = Math.min(100000, Math.max(100, Number(e.target.value) || 1000))
+                  onChange({ minVideoClipsTarget: v })
+                }}
+                style={{
+                  width: '90px',
+                  padding: '3px 6px',
+                  borderRadius: '4px',
+                  border: '1px solid #4b5563',
+                  backgroundColor: '#020617',
+                  color: '#e5e7eb',
+                  fontSize: '12px',
+                }}
+              />
+              <span style={{ fontSize: '11px', color: '#6b7280' }}>
+                (Autopilot sẽ cố chọn ít nhất số clip này từ thư mục video)
+              </span>
+            </div>
           </div>
         </div>
         <div
@@ -2297,6 +2328,7 @@ function AutopilotPageLegacy() {
         priorityMusicFolder: parsed?.folders?.priorityMusicFolder || '',
         randomMusicFolder: parsed?.folders?.randomMusicFolder || '',
         priorityVideoFolder: parsed?.folders?.priorityVideoFolder || '',
+        minVideoClipsTarget: typeof parsed?.folders?.minVideoClipsTarget === 'number' ? parsed.folders.minVideoClipsTarget : 1000,
       }
     } catch {
       return {

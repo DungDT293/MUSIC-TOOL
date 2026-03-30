@@ -2,12 +2,13 @@ import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { buildPlaylists, clearPlaylists, savePlaylists, type BuildPlaylistsOptions } from '../music/playlistEngine'
+import { buildPlaylists, clearPlaylists, savePlaylists, type BuildPlaylistsOptions, type PlaylistDefinition } from '../music/playlistEngine'
 import { exportPlaylistToFile, type ExportPlaylistRequest } from '../music/exportAudio'
 import { scanMusicFolders, type ScanMusicResult } from '../music/scanMusic'
-import { exportFinalVideo, type FinalExportJobRequest, planFinalExport, executeFinalExport, type ExecuteFinalExportOptions } from '../video/finalExport'
+import { exportFinalVideo, type FinalExportJobRequest, type FinalExportEmitter, planFinalExport, executeFinalExport, type ExecuteFinalExportOptions } from '../video/finalExport'
 import { videoJobManager } from '../video/videoJobManager'
 import { getDiskSpace, formatBytes } from '../utils/diskSpace'
+import { syncPoolWithFiles, pickUniqueSequence, markClipsUsed, getPoolStats } from './videoPool'
 
 export type DayPresetId = 'tomorrowland' | 'partymix' | 'custom'
 
@@ -54,6 +55,8 @@ export interface AutopilotFoldersConfig {
   randomMusicFolder?: string
   /** Thư mục video ưu tiên (tùy chọn) – các clip trong thư mục này sẽ được ưu tiên xuất hiện đầu video khi Final Export */
   priorityVideoFolder?: string
+  /** Số clip video tối thiểu cần chọn (mặc định 1000) */
+  minVideoClipsTarget?: number
 }
 
 export interface AutopilotConfig {
@@ -300,7 +303,7 @@ async function validateFolder(folderPath: string, folderName: string): Promise<v
   if (!folderPath || typeof folderPath !== 'string' || folderPath.trim().length === 0) {
     throw new Error(`Thư mục "${folderName}" chưa được chọn.`)
   }
-  
+
   try {
     const stat = await fsp.stat(folderPath)
     if (!stat.isDirectory()) {
@@ -314,6 +317,54 @@ async function validateFolder(folderPath: string, folderName: string): Promise<v
     } else {
       throw new Error(`Lỗi khi kiểm tra thư mục "${folderName}": ${error.message}`)
     }
+  }
+}
+
+/**
+ * Validate multi-line folder path (rootVideo có thể có nhiều thư mục, mỗi dòng một thư mục)
+ * Chỉ cần ít nhất 1 thư mục tồn tại là hợp lệ
+ */
+async function validateMultiFolder(folderPathMultiline: string, folderName: string): Promise<void> {
+  if (!folderPathMultiline || typeof folderPathMultiline !== 'string' || folderPathMultiline.trim().length === 0) {
+    throw new Error(`Thư mục "${folderName}" chưa được chọn.`)
+  }
+
+  const lines = folderPathMultiline
+    .split('\n')
+    .map(l => l.trim())
+    .filter(l => l.length > 0)
+
+  if (lines.length === 0) {
+    throw new Error(`Thư mục "${folderName}" chưa được chọn.`)
+  }
+
+  const errors: string[] = []
+  for (const line of lines) {
+    try {
+      const stat = await fsp.stat(line)
+      if (!stat.isDirectory()) {
+        errors.push(`"${line}" không phải thư mục`)
+      }
+      // Nếu ít nhất 1 thư mục OK → tiếp tục (không fail toàn bộ)
+    } catch (err: any) {
+      if (err.code === 'ENOENT') {
+        errors.push(`"${line}" không tồn tại`)
+      } else if (err.code === 'EACCES') {
+        errors.push(`"${line}" không có quyền truy cập`)
+      } else {
+        errors.push(`"${line}" lỗi: ${err.message}`)
+      }
+    }
+  }
+
+  // Nếu TẤT CẢ đều lỗi → fail
+  if (errors.length === lines.length) {
+    throw new Error(`Thư mục "${folderName}" không tồn tại:\n${folderPathMultiline}`)
+  }
+
+  // Nếu một số lỗi → chỉ warn, không fail
+  if (errors.length > 0) {
+    console.warn(`[Autopilot] ${folderName}: ${errors.length}/${lines.length} thư mục không truy cập được:`, errors)
   }
 }
 
@@ -997,7 +1048,7 @@ function generateSimpleTitles(
 async function runExportVideoWithOptions(
   jobRequest: FinalExportJobRequest,
   dateCode: string,
-  playlists: Playlist[],
+  playlists: PlaylistDefinition[],
   options?: ExecuteFinalExportOptions
 ): Promise<{ tempVideoPaths: Map<number, string>, subtitleFiles: Map<number, string> } | void> {
   const requestId = jobRequest.requestId || randomUUID()
@@ -1091,6 +1142,10 @@ async function runAutopilotForDay(
   subtitleFiles?: Map<number, string>,
 ): Promise<{ tempVideoPaths?: Map<number, string>, subtitleFiles?: Map<number, string> } | void> {
   const { folders } = config
+
+  // Pool tracking — set during video selection, used after export
+  let _poolClipIds: string[] = []
+  let _poolFingerprint = ''
 
   const dateCode = plan.dateCode || (() => {
     const now = new Date()
@@ -1295,8 +1350,8 @@ async function runAutopilotForDay(
   )
   
   emit({
-    currentStep: 4,
-    stepPercent: 65,
+    currentStep: 3,
+    stepPercent: 60,
     message: `Ngày ${dateCode}: Đang ghép video với audio (Final Export)...`,
   })
   emitLog('info', `[Bước 4] Ngày ${dateCode}: Đang chọn video từ thư mục (${videoPickPercent}% mỗi thư mục)...`)
@@ -1305,7 +1360,7 @@ async function runAutopilotForDay(
   // - Cho phép nhiều thư mục video đã cắt (mỗi dòng trong ô cấu hình)
   // - Mỗi thư mục chỉ lấy khoảng X% video (videoPickPercent) để tránh lấy hết
 
-  const MIN_VIDEO_TOTAL = 1000
+  const MIN_VIDEO_TOTAL = Math.max(100, folders.minVideoClipsTarget ?? 1000)
   const { paths: selectedVideoPaths, summary: videoSelectionSummary } = await withTimeout(
     pickVideosFromFolders(
       folders.rootVideo,
@@ -1339,6 +1394,50 @@ async function runAutopilotForDay(
   }
 
   await ensureVideoDiskSpaceEstimate(finalDir, selectedVideoPaths, playlists.length, 'Xuất video hoàn chỉnh (Autopilot)')
+
+  // ── Video Pool: sync + unique sequence ──────────────────────────────────────
+  emitLog('info', `[Bước 4] Đang sync ${selectedVideoPaths.length} clip vào Video Pool...`)
+  try {
+    const { added, updated } = syncPoolWithFiles(selectedVideoPaths, (cur, total) => {
+      if (cur % 500 === 0) emitLog('info', `[VideoPool] Đang sync ${cur}/${total}...`)
+    })
+    if (added > 0 || updated > 0) {
+      emitLog('info', `[VideoPool] Sync xong: +${added} clip mới, ${updated} clip cập nhật path`)
+    }
+
+    // Chọn sequence UNIQUE (LRU + shuffle đến khi fingerprint mới)
+    const poolResult = pickUniqueSequence(selectedVideoPaths, selectedVideoPaths.length, dateCode, 30)
+    emitLog('info',
+      `[VideoPool] Sequence: ${poolResult.isUnique ? '✅ Unique' : '⚠️ Có thể trùng'} | ` +
+      `Thử: ${poolResult.attemptCount} lần | ` +
+      `Tái dùng: ${poolResult.reusedCount}/${poolResult.totalAvailable} clip | ` +
+      `Fingerprint: ${poolResult.fingerprint}`
+    )
+
+    // Ghi đè selectedVideoPaths bằng sequence unique từ pool
+    // (poolResult.filePaths là cùng clips nhưng thứ tự LRU-shuffled unique)
+    selectedVideoPaths.length = 0
+    selectedVideoPaths.push(...poolResult.filePaths)
+
+    // Ghi lại pool info vào local vars để markClipsUsed sau khi export xong
+    _poolClipIds = poolResult.clipIds
+    _poolFingerprint = poolResult.fingerprint
+
+    const stats = getPoolStats()
+    emitLog('info',
+      `[VideoPool] Stats: ${stats.totalClips} clip trong pool | ` +
+      `Chưa dùng: ${stats.neverUsed} | Dùng 24h qua: ${stats.usedInLast24h} | ` +
+      `Tổng sessions: ${stats.totalSessions}`
+    )
+  } catch (poolErr: any) {
+    emitLog('warn', `[VideoPool] Lỗi pool (fallback về random): ${poolErr?.message}`)
+    // Fallback: shuffle random như cũ, không crash
+    for (let i = selectedVideoPaths.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1))
+      ;[selectedVideoPaths[i], selectedVideoPaths[j]] = [selectedVideoPaths[j], selectedVideoPaths[i]]
+    }
+  }
+  // ────────────────────────────────────────────────────────────────────────────
 
   emit({
     currentStep: 4,
@@ -1418,24 +1517,25 @@ async function runAutopilotForDay(
     outputFolder: finalDir,
     outputFilename: `${baseOutputName}.mp4`,
     outputNames,
-    shuffle: true,
+    // Pool đã chọn sequence LRU-unique → KHÔNG shuffle lại để giữ đúng thứ tự
+    shuffle: false,
     // Mặc định copy-stream video; nếu user chọn "Chuẩn hoá video đầu vào" thì re-encode + deep verify
     forceReencode: !!overrides.normalizeVideoInput,
     normalizeAudio: false,
     tracklistAuto: !!overrides.generateTracklist,
     priorityVideoSource:
       config.folders.priorityVideoFolder && config.folders.priorityVideoFolder.trim().length > 0
-        ? {
-            type: 'folder',
-            path: pickFirstFolder(config.folders.priorityVideoFolder),
-          }
+        ? (() => {
+            const p = pickFirstFolder(config.folders.priorityVideoFolder)
+            return p ? { type: 'folder' as const, path: p } : undefined
+          })()
         : undefined,
     subtitle: overrides.subtitle,
   }
 
   emitLog('info', `[Bước 4] Ngày ${dateCode}: Bắt đầu xuất ${playlists.length} video hoàn chỉnh...`)
   if (overrides.subtitle) {
-    emitLog('info', `[Bước 4] Subtitle config:`, JSON.stringify({
+    emitLog('info', `[Bước 4] Subtitle config: ${JSON.stringify({
       enabled: overrides.subtitle.enabled,
       useWhisper: overrides.subtitle.useWhisper,
       autoLyrics: overrides.subtitle.autoLyrics,
@@ -1443,7 +1543,7 @@ async function runAutopilotForDay(
       subtitleFormat: overrides.subtitle.subtitleFormat,
       whisperLanguage: overrides.subtitle.whisperLanguage,
       hasText: !!overrides.subtitle.text,
-    }))
+    })}`)
     
     // CRITICAL: Log forceReencode status for subtitle 2-step process
     if (overrides.subtitle.enabled) {
@@ -1506,6 +1606,16 @@ async function runAutopilotForDay(
     emitLog('info', `[Bước 4] DEBUG: Chạy normal flow (phase=${phase || 'undefined'}) cho ngày ${dateCode}`)
     await runExportVideoWithOptions(jobRequest, dateCode, playlists)
   }
+
+  // ── Đánh dấu clips đã dùng trong Video Pool (sau khi export xong) ────────────
+  if (_poolClipIds.length > 0 && _poolFingerprint) {
+    try {
+      markClipsUsed(_poolClipIds, dateCode, _poolFingerprint)
+      emitLog('info', `[VideoPool] ✅ Đã ghi ${_poolClipIds.length} clip vào pool history (session: ${_poolFingerprint})`)
+    } catch (poolErr: any) {
+      emitLog('warn', `[VideoPool] Không thể ghi pool history: ${poolErr?.message}`)
+    }
+  }
 }
 
 export async function startAutopilot(config: AutopilotConfig): Promise<void> {
@@ -1557,9 +1667,11 @@ export async function startAutopilot(config: AutopilotConfig): Promise<void> {
       await validateFolder(randomFolder, 'Thư mục nhạc random')
     }
 
-    // Validate thư mục output
+    // Validate thư mục output — auto-create nếu chưa tồn tại (không block first-run)
+    await fsp.mkdir(config.folders.rootAudio, { recursive: true }).catch(() => {})
     await validateFolder(config.folders.rootAudio, 'Thư mục xuất Audio')
-    await validateFolder(config.folders.rootVideo, 'Thư mục gốc Video đã cắt')
+    await validateMultiFolder(config.folders.rootVideo, 'Thư mục gốc Video đã cắt')
+    await fsp.mkdir(config.folders.rootFinal, { recursive: true }).catch(() => {})
     await validateFolder(config.folders.rootFinal, 'Thư mục xuất Video hoàn chỉnh')
 
     // Validate dateCode cho tất cả day plans
@@ -1833,7 +1945,7 @@ export async function startAutopilot(config: AutopilotConfig): Promise<void> {
     })
     throw error
   } finally {
-    const finalStatus = currentProgress.status
+    const finalStatus = currentProgress.status as AutopilotStatus
     isCancelling = false
     activeAbortControllers = []
     // Reset status to idle so autopilot can be started again

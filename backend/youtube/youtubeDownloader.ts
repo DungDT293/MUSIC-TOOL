@@ -178,38 +178,59 @@ export class YouTubeDownloader extends EventEmitter {
   }
 
   /**
-   * Check if URL is valid YouTube URL
+   * Check if URL is valid YouTube / SoundCloud / TikTok URL
    */
   isValidYouTubeUrl(url: string): boolean {
     const patterns = [
+      // YouTube
       /^https?:\/\/(www\.)?youtube\.com\/watch\?v=.+/,           // Video
       /^https?:\/\/youtu\.be\/.+/,                                // Short URL
       /^https?:\/\/(www\.)?youtube\.com\/channel\/.+/,           // Channel
       /^https?:\/\/(www\.)?youtube\.com\/c\/.+/,                 // Custom channel
       /^https?:\/\/(www\.)?youtube\.com\/@.+/,                   // Handle
       /^https?:\/\/(www\.)?youtube\.com\/playlist\?list=.+/,     // Playlist
-      /^https?:\/\/(www\.)?youtube\.com\/user\/.+/               // User
+      /^https?:\/\/(www\.)?youtube\.com\/user\/.+/,              // User
+      // SoundCloud
+      /^https?:\/\/(www\.)?soundcloud\.com\/.+/,                 // SoundCloud track/set/artist
+      // TikTok
+      /^https?:\/\/(www\.)?tiktok\.com\/.+/,                     // TikTok video/user
+      /^https?:\/\/vm\.tiktok\.com\/.+/,                         // TikTok short URL
     ];
-    
+
     return patterns.some(pattern => pattern.test(url));
   }
-  
+
   /**
    * Detect URL type
    */
   detectUrlType(url: string): 'video' | 'channel' | 'playlist' | 'unknown' {
+    // YouTube
     if (url.includes('/watch?v=') || url.includes('youtu.be/')) {
       return 'video';
     }
-    
     if (url.includes('/channel/') || url.includes('/c/') || url.includes('/@') || url.includes('/user/')) {
       return 'channel';
     }
-    
     if (url.includes('/playlist?list=')) {
       return 'playlist';
     }
-    
+
+    // SoundCloud
+    if (url.includes('soundcloud.com/')) {
+      // soundcloud.com/artist/sets/... = playlist, soundcloud.com/artist = channel, else = video
+      if (url.includes('/sets/')) return 'playlist';
+      const scPath = url.replace(/^https?:\/\/(www\.)?soundcloud\.com\//, '').split('?')[0];
+      const segments = scPath.split('/').filter(Boolean);
+      return segments.length === 1 ? 'channel' : 'video';
+    }
+
+    // TikTok
+    if (url.includes('tiktok.com/')) {
+      if (url.includes('/video/') || url.match(/\/t\/[A-Za-z0-9]+/)) return 'video';
+      if (url.includes('/@')) return 'channel';
+      return 'video'; // vm.tiktok.com short links
+    }
+
     return 'unknown';
   }
   
@@ -325,9 +346,11 @@ export class YouTubeDownloader extends EventEmitter {
       args.push(
         '--extractor-args', 'tiktok:webpage_url_basename=t',
         '--sleep-interval', '1',
-        '--add-header', 'Referer:https://www.tiktok.com/'
+        '--add-header', 'Referer:https://www.tiktok.com/',
+        // Ưu tiên format không watermark: download_addr-0 = no watermark, play_addr = có watermark
+        '--format', 'download_addr-0+bestaudio/bestvideo+bestaudio/best'
       );
-      console.log(`[YouTubeDownloader] Added TikTok-specific options`);
+      console.log(`[YouTubeDownloader] Added TikTok-specific options (no watermark)`);
     }
     // Vietnamese movie platforms
     else if (hostname.includes('rophim.me') || hostname.includes('phimmoi.net') || 
@@ -724,7 +747,7 @@ export class YouTubeDownloader extends EventEmitter {
   async downloadVideo(request: DownloadVideoRequest): Promise<string> {
     // Check URL
     if (!this.isValidYouTubeUrl(request.url)) {
-      throw new Error(`Invalid YouTube URL: ${request.url}`);
+      throw new Error(`Invalid URL (YouTube / SoundCloud / TikTok only): ${request.url}`);
     }
     
     // Validate (including disk space)
@@ -954,6 +977,7 @@ export class YouTubeDownloader extends EventEmitter {
     args.push('--throttled-rate', '100K');
     args.push('--sleep-interval', '1');
     args.push('--max-sleep-interval', '5');
+    args.push('--continue'); // Resume interrupted downloads
     
     // Thêm cookies nếu có (chỉ khi user cung cấp)
     if (cookieArgs.length > 0) {
@@ -1691,6 +1715,7 @@ export class YouTubeDownloader extends EventEmitter {
       '--referer', 'https://www.youtube.com/',
       '--add-header', 'Accept-Language:en-US,en;q=0.9',
       '--extractor-args', 'youtube:player_client=tv,android_vr,web_safari', // Dùng tv+android_vr để lấy đủ format cao
+      '--continue', // Resume interrupted downloads
     ];
 
     if (audioOnly) {

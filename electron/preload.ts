@@ -57,6 +57,13 @@ const api: IPCAPI = {
       }
     },
     cancelNormalizeAudio: () => ipcRenderer.invoke('music:normalizeAudio:cancel'),
+    spotifyMeta: (url: string) => ipcRenderer.invoke('music:spotifyMeta', url),
+  },
+  preset: {
+    list: () => ipcRenderer.invoke('preset:list'),
+    save: (name: string, settings: any) => ipcRenderer.invoke('preset:save', name, settings),
+    update: (id: string, name: string, settings: any) => ipcRenderer.invoke('preset:update', id, name, settings),
+    delete: (id: string) => ipcRenderer.invoke('preset:delete', id),
   },
   probeFile: (path: string) => ipcRenderer.invoke('ffmpeg:probe', path),
   getSystemInfo: () => ipcRenderer.invoke('system:info'),
@@ -265,6 +272,18 @@ const api: IPCAPI = {
 
     // Update yt-dlp binary to latest version
     updateYtDlp: () => ipcRenderer.invoke('youtube:update-ytdlp'),
+
+    // Listen to auto-update events (fired on startup)
+    onAutoUpdated: (callback: (data: { success: boolean; version?: string; ageDays: number; message: string }) => void) => {
+      const listener = (_event: IpcRendererEvent, data: any) => callback(data)
+      ipcRenderer.on('youtube:ytdlp-auto-updated', listener)
+      return () => { ipcRenderer.removeListener('youtube:ytdlp-auto-updated', listener) }
+    },
+    onAgeWarning: (callback: (data: { version: string; ageDays: number }) => void) => {
+      const listener = (_event: IpcRendererEvent, data: any) => callback(data)
+      ipcRenderer.on('youtube:ytdlp-age-warning', listener)
+      return () => { ipcRenderer.removeListener('youtube:ytdlp-age-warning', listener) }
+    },
   },
   jobQueue: {
     list: () => ipcRenderer.invoke('jobQueue:list'),
@@ -284,6 +303,9 @@ const api: IPCAPI = {
     getStatus: () => ipcRenderer.invoke('autopilot:getStatus'),
     start: (config: any) => ipcRenderer.invoke('autopilot:start', config),
     cancel: () => ipcRenderer.invoke('autopilot:cancel'),
+    scanVideoFolders: (rootVideo: string) => ipcRenderer.invoke('autopilot:scan-video-folders', rootVideo),
+    getVideoPoolStats: () => ipcRenderer.invoke('autopilot:video-pool-stats'),
+    clearVideoPool: () => ipcRenderer.invoke('autopilot:video-pool-clear'),
     onStatus: (handler: (progress: any) => void) => {
       const channel = 'autopilot:status'
       const listener = (_event: IpcRendererEvent, payload: any) => handler(payload)

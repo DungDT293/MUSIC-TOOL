@@ -124,12 +124,55 @@ function FinalExportTab() {
   const [videoItems, setVideoItems] = useState<FinalExportScanItem[]>([])
   const [diskSpaceError, setDiskSpaceError] = useState<string | null>(null)
 
-  // Video ưu tiên (luôn xuất hiện đầu video khi build playlist)
   const [usePriorityVideos, setUsePriorityVideos] = useState<boolean>(false)
   const [priorityVideoFolder, setPriorityVideoFolder] = useState<string | null>(null)
   const [priorityVideoPaths, setPriorityVideoPaths] = useState<string[]>([]) // Danh sách video khi chọn trực tiếp
   const [priorityVideoCount, setPriorityVideoCount] = useState<number | null>(null)
   const [priorityVideoTotalSec, setPriorityVideoTotalSec] = useState<number | null>(null)
+
+  // Export Presets (Sprint 3.1)
+  const [presets, setPresets] = useState<Array<{ id: string; name: string; settings: any }>>([])
+  const [presetName, setPresetName] = useState('')
+  const [showPresets, setShowPresets] = useState(false)
+
+  const loadPresets = async () => {
+    const w = window as any
+    if (!w.api?.preset?.list) return
+    const res = await w.api.preset.list()
+    if (res?.success) setPresets(res.presets ?? [])
+  }
+
+  const handleSavePreset = async () => {
+    const w = window as any
+    if (!w.api?.preset?.save) return
+    const name = presetName.trim() || `Preset ${new Date().toLocaleString('vi-VN')}`
+    const settings = {
+      outputFilename, tracklistEnabled, forceReencode, normalizeAudio,
+      useGpuEncoding, deleteSourceFiles, usePriorityVideos,
+    }
+    const res = await w.api.preset.save(name, settings)
+    if (res?.success) {
+      setPresetName('')
+      loadPresets()
+    }
+  }
+
+  const handleApplyPreset = (settings: any) => {
+    if (settings.outputFilename !== undefined) setOutputFilename(settings.outputFilename)
+    if (settings.tracklistEnabled !== undefined) setTracklistEnabled(settings.tracklistEnabled)
+    if (settings.forceReencode !== undefined) setForceReencode(settings.forceReencode)
+    if (settings.normalizeAudio !== undefined) setNormalizeAudio(settings.normalizeAudio)
+    if (settings.useGpuEncoding !== undefined) setUseGpuEncoding(settings.useGpuEncoding)
+    if (settings.deleteSourceFiles !== undefined) setDeleteSourceFiles(settings.deleteSourceFiles)
+    if (settings.usePriorityVideos !== undefined) setUsePriorityVideos(settings.usePriorityVideos)
+  }
+
+  const handleDeletePreset = async (id: string) => {
+    const w = window as any
+    if (!w.api?.preset?.delete) return
+    await w.api.preset.delete(id)
+    loadPresets()
+  }
 
   // Restore state từ running job khi component mount lại (sau khi chuyển tab)
   useEffect(() => {
@@ -1194,11 +1237,78 @@ function FinalExportTab() {
             Xóa file audio và video sau khi xuất xong
           </label>
           <div style={{ marginTop: '6px', fontSize: '12px', color: '#9f9f9f' }}>
-            Nếu bật, tool sẽ xóa các file audio và video đã chọn ở bước 1 sau khi xuất xong. 
-            Video ưu tiên (nếu chọn riêng) sẽ không bị xóa. 
+            Nếu bật, tool sẽ xóa các file audio và video đã chọn ở bước 1 sau khi xuất xong.
+            Video ưu tiên (nếu chọn riêng) sẽ không bị xóa.
             <strong style={{ color: '#ffaa66' }}> Cảnh báo: Hành động này không thể hoàn tác!</strong>
           </div>
         </div>
+      </div>
+
+      {/* Export Presets Panel (Sprint 3.1) */}
+      <div style={{ ...cardStyle, marginTop: '8px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px' }}>
+          <h3 style={{ margin: 0, fontSize: '15px' }}>💾 Export Presets</h3>
+          <button
+            onClick={() => { setShowPresets(p => !p); if (!showPresets) loadPresets(); }}
+            style={{ ...buttonStyle, padding: '4px 12px', fontSize: '12px', backgroundColor: '#374151' }}
+          >
+            {showPresets ? 'Ẩn' : 'Hiện preset'}
+          </button>
+        </div>
+
+        {/* Save current settings */}
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          <input
+            type="text"
+            value={presetName}
+            onChange={e => setPresetName(e.target.value)}
+            placeholder="Tên preset..."
+            style={{
+              flex: 1, minWidth: '180px', padding: '6px 10px', borderRadius: '6px',
+              border: '1px solid #555', backgroundColor: '#1a1a1a', color: '#e0e0e0', fontSize: '13px',
+            }}
+          />
+          <button
+            onClick={handleSavePreset}
+            style={{ ...buttonStyle, padding: '6px 14px', fontSize: '12px', backgroundColor: '#1e4d2b' }}
+            disabled={isExporting}
+          >
+            💾 Lưu preset hiện tại
+          </button>
+        </div>
+
+        {/* Preset list */}
+        {showPresets && (
+          <div style={{ marginTop: '12px' }}>
+            {presets.length === 0 ? (
+              <div style={{ fontSize: '12px', color: '#9ca3af' }}>Chưa có preset nào.</div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                {presets.map(p => (
+                  <div key={p.id} style={{
+                    display: 'flex', alignItems: 'center', gap: '8px',
+                    padding: '6px 10px', borderRadius: '6px', backgroundColor: '#252525',
+                    border: '1px solid #374151', fontSize: '13px',
+                  }}>
+                    <span style={{ flex: 1, color: '#e5e7eb' }}>{p.name}</span>
+                    <button
+                      onClick={() => handleApplyPreset(p.settings)}
+                      style={{ ...buttonStyle, padding: '3px 10px', fontSize: '11px', backgroundColor: '#1e3a5f' }}
+                    >
+                      Áp dụng
+                    </button>
+                    <button
+                      onClick={() => handleDeletePreset(p.id)}
+                      style={{ ...buttonStyle, padding: '3px 8px', fontSize: '11px', backgroundColor: '#4a1010' }}
+                    >
+                      Xóa
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {errorMessage && (

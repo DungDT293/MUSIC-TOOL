@@ -16,6 +16,15 @@ export interface NormalizeAudioRequest {
   outputFormat?: 'mp3' | 'aac' | 'keep' // Format output, 'keep' = giữ nguyên format gốc
   backupOriginal?: boolean // Có backup file gốc không
   outputFolder?: string // Thư mục xuất (nếu không có thì lưu cùng thư mục với file gốc)
+  /**
+   * Loudness normalization preset (EBU R128 / ITU-R BS.1770-4)
+   * - 'streaming': -14 LUFS (Spotify, Apple Music, YouTube Music)
+   * - 'youtube':   -14 LUFS (YouTube standard)
+   * - 'broadcast': -23 LUFS (EBU R128 broadcast)
+   * - 'club':      -9 LUFS  (DJ/club, louder mix)
+   * - undefined:   Chỉ convert bitrate, không normalize loudness
+   */
+  loudnessPreset?: 'streaming' | 'youtube' | 'broadcast' | 'club'
 }
 
 export interface NormalizeAudioProgress {
@@ -126,6 +135,20 @@ function determineOutputFormat(
 }
 
 /**
+ * Trả về loudnorm filter string theo preset
+ * EBU R128 / ITU-R BS.1770-4: I=integrated LUFS, TP=true peak dBTP, LRA=loudness range
+ */
+function getLoudnormFilter(preset: 'streaming' | 'youtube' | 'broadcast' | 'club'): string {
+  const presets = {
+    streaming: 'loudnorm=I=-14:TP=-1.5:LRA=11',   // Spotify, Apple Music, YouTube Music
+    youtube:   'loudnorm=I=-14:TP=-1.5:LRA=11',   // YouTube standard (same as streaming)
+    broadcast: 'loudnorm=I=-23:TP=-1.0:LRA=20',   // EBU R128 broadcast
+    club:      'loudnorm=I=-9:TP=-0.5:LRA=7',     // DJ/club, louder mix
+  }
+  return presets[preset]
+}
+
+/**
  * Normalize một file audio
  */
 async function normalizeSingleFile(
@@ -133,7 +156,8 @@ async function normalizeSingleFile(
   targetBitrate: number,
   outputFormat: 'mp3' | 'aac' | 'keep' | undefined,
   backupOriginal: boolean,
-  outputFolder?: string
+  outputFolder?: string,
+  loudnessPreset?: 'streaming' | 'youtube' | 'broadcast' | 'club'
 ): Promise<{ success: boolean; outputFile?: string; error?: string }> {
   try {
     // Kiểm tra file tồn tại
@@ -206,6 +230,11 @@ async function normalizeSingleFile(
       args.push('-acodec', 'pcm_s16le')
     } else if (format === 'flac') {
       args.push('-acodec', 'flac', '-compression_level', '5')
+    }
+
+    // Thêm loudness normalization filter nếu có preset
+    if (loudnessPreset) {
+      args.push('-af', getLoudnormFilter(loudnessPreset))
     }
 
     args.push('-y', outputFile)
@@ -367,7 +396,8 @@ export async function normalizeAudio(
       request.targetBitrate,
       request.outputFormat,
       request.backupOriginal ?? false,
-      request.outputFolder
+      request.outputFolder,
+      request.loudnessPreset
     )
 
     // Lưu thời gian xử lý file này

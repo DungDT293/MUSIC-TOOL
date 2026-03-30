@@ -77,11 +77,14 @@ export default function BatchModeTab() {
   const logRef = useRef<HTMLDivElement>(null)
   const [showConfigFor, setShowConfigFor] = useState<string | null>(null)
   const [scanningBatchId, setScanningBatchId] = useState<string | null>(null)
+  // Ref để tránh stale closure trong runBatch (luôn trỏ tới batches mới nhất)
+  const batchesRef = useRef(batches)
   const [scanResults, setScanResults] = useState<Record<string, { totalFiles: number; folders: Array<{ folder: string; count: number }> } | null>>({})
   const [lastSaved, setLastSaved] = useState<string | null>(null)
 
   // Save to localStorage
   useEffect(() => {
+    batchesRef.current = batches  // Luôn sync ref với state mới nhất
     try {
       window.localStorage.setItem(BATCH_STORAGE_KEY, JSON.stringify(batches))
       if (batches.length > 0) {
@@ -236,11 +239,14 @@ export default function BatchModeTab() {
     setIsRunning(true)
     setLogMessages([])
 
+    // Dùng batchesRef.current để tránh stale closure
+    const currentBatches = batchesRef.current
+
     // Reset tất cả status
     setBatches(prev => prev.map(b => ({ ...b, status: 'pending', error: undefined })))
 
-    for (let i = 0; i < batches.length; i++) {
-      const batch = batches[i]
+    for (let i = 0; i < currentBatches.length; i++) {
+      const batch = currentBatches[i]
       if (!batch.name.trim()) {
         addLog('warn', `Bỏ qua batch ${i + 1}: chưa đặt tên.`)
         continue
@@ -250,7 +256,7 @@ export default function BatchModeTab() {
       setBatches(prev => prev.map((b, idx) => idx === i ? { ...b, status: 'running' } : b))
 
       addLog('info', `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`)
-      addLog('info', `🎵 Bắt đầu batch ${i + 1}/${batches.length}: "${batch.name}"`)
+      addLog('info', `🎵 Bắt đầu batch ${i + 1}/${currentBatches.length}: "${batch.name}"`)
 
       // Tạo config cho Autopilot
       const config = {
@@ -282,8 +288,8 @@ export default function BatchModeTab() {
           continue
         }
 
-        // Đợi autopilot hoàn thành
-        await waitForAutopilotComplete(w)
+        // Đợi autopilot hoàn thành (timeout 4 giờ để tránh hang vĩnh viễn)
+        await waitForAutopilotComplete(w, 4 * 60 * 60 * 1000)
 
         // Cập nhật status từ backend
         const finalStatus = await w.api.autopilot.getStatus()
@@ -300,14 +306,14 @@ export default function BatchModeTab() {
       }
 
       // Nghỉ 2s giữa các batch để cleanup
-      if (i < batches.length - 1) {
+      if (i < currentBatches.length - 1) {
         addLog('info', `⏳ Nghỉ 2s trước batch tiếp theo...`)
         await new Promise(resolve => setTimeout(resolve, 2000))
       }
     }
 
     addLog('info', `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`)
-    addLog('info', `🏁 Batch Mode hoàn thành! Đã xử lý ${batches.length} thể loại.`)
+    addLog('info', `🏁 Batch Mode hoàn thành! Đã xử lý ${currentBatches.length} thể loại.`)
     setIsRunning(false)
     setCurrentRunIndex(-1)
   }
@@ -776,9 +782,15 @@ export default function BatchModeTab() {
 }
 
 /** Đợi autopilot hoàn thành (poll getStatus mỗi 2s) */
-async function waitForAutopilotComplete(w: any): Promise<void> {
-  return new Promise((resolve) => {
+async function waitForAutopilotComplete(w: any, timeoutMs = 4 * 60 * 60 * 1000): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const startTime = Date.now()
     const check = async () => {
+      // Timeout guard — tránh hang vĩnh viễn
+      if (Date.now() - startTime > timeoutMs) {
+        reject(new Error(`Autopilot timeout sau ${Math.round(timeoutMs / 60000)} phút`))
+        return
+      }
       try {
         const status = await w.api.autopilot.getStatus()
         if (status?.status === 'idle' || status?.status === 'completed' || status?.status === 'error') {

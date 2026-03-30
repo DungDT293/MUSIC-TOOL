@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   YouTubeQuality, 
   YouTubeVideoInfo, 
@@ -62,6 +62,20 @@ export function YouTubeDownloaderTab() {
   } | null>(null);
   
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
+
+  // ── Download Queue (Sprint 2.2) ──────────────────────────────────────────
+  interface QueueItem {
+    id: string;
+    url: string;
+    status: 'pending' | 'running' | 'done' | 'error';
+    error?: string;
+    outputFile?: string;
+  }
+  const [queue, setQueue] = useState<QueueItem[]>([]);
+  const [queueRunning, setQueueRunning] = useState(false);
+  const [queueUrlInput, setQueueUrlInput] = useState('');
+  const queueRef = useRef<QueueItem[]>([]);
+  queueRef.current = queue;
   
   // ============================================
   // Effects
@@ -363,11 +377,68 @@ export function YouTubeDownloaderTab() {
       setShowCancelConfirm(true);
       return;
     }
-    
+
     await window.api.youtube.cancelDownload();
     setIsDownloading(false);
     setShowCancelConfirm(false);
     setError('Download đã bị hủy');
+  };
+
+  // ── Queue handlers ────────────────────────────────────────────────────────
+  const handleAddToQueue = () => {
+    const lines = queueUrlInput.split('\n').map(l => l.trim()).filter(Boolean);
+    if (lines.length === 0) return;
+    const newItems: QueueItem[] = lines.map(u => ({
+      id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      url: u,
+      status: 'pending',
+    }));
+    setQueue(prev => [...prev, ...newItems]);
+    setQueueUrlInput('');
+  };
+
+  const handleRemoveFromQueue = (id: string) => {
+    setQueue(prev => prev.filter(item => item.id !== id));
+  };
+
+  const handleRunQueue = async () => {
+    if (queueRunning) return;
+    if (!outputDir) { setError('Vui lòng chọn thư mục lưu trước khi chạy queue!'); return; }
+    setQueueRunning(true);
+    setError(null);
+
+    const items = queueRef.current;
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.status !== 'pending') continue;
+
+      setQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'running' } : q));
+
+      try {
+        const request: YouTubeDownloadVideoRequest = {
+          url: item.url,
+          outputDir,
+          quality,
+          downloadSubtitles,
+          downloadThumbnail,
+          audioOnly,
+          audioFormat,
+        };
+        const result = await window.api.youtube.downloadVideo(request);
+        if (result.success) {
+          setQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'done', outputFile: result.outputFile } : q));
+        } else {
+          setQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'error', error: result.error || 'Failed' } : q));
+        }
+      } catch (err: any) {
+        setQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'error', error: err?.message || 'Unknown error' } : q));
+      }
+    }
+    setQueueRunning(false);
+  };
+
+  const handleClearQueue = () => {
+    setQueue(prev => prev.filter(q => q.status === 'running'));
   };
   
   // ============================================
@@ -576,6 +647,95 @@ export function YouTubeDownloaderTab() {
       
       {/* Error */}
       {error && renderError()}
+
+      {/* ── Download Queue (Sprint 2.2) ── */}
+      <div className="section" style={{ marginTop: '24px' }}>
+        <h3>🗂️ Download Queue (nhiều URL)</h3>
+        <p style={{ fontSize: '12px', color: '#9ca3af', marginBottom: '8px' }}>
+          Nhập nhiều URL (mỗi dòng một URL), sau đó nhấn "Thêm vào Queue" rồi "Chạy Queue".
+        </p>
+
+        {/* Input */}
+        <textarea
+          value={queueUrlInput}
+          onChange={e => setQueueUrlInput(e.target.value)}
+          placeholder={'https://www.youtube.com/watch?v=...\nhttps://soundcloud.com/...\nhttps://www.tiktok.com/...'}
+          disabled={queueRunning}
+          rows={4}
+          style={{
+            width: '100%', boxSizing: 'border-box',
+            backgroundColor: '#1a1a2e', color: '#e5e7eb',
+            border: '1px solid #374151', borderRadius: '6px',
+            padding: '8px', fontFamily: 'monospace', fontSize: '12px', resize: 'vertical',
+          }}
+        />
+        <div style={{ display: 'flex', gap: '8px', marginTop: '6px', flexWrap: 'wrap' }}>
+          <button className="btn-secondary" onClick={handleAddToQueue} disabled={queueRunning || !queueUrlInput.trim()}
+            style={{ fontSize: '12px', padding: '6px 12px' }}>
+            ➕ Thêm vào Queue
+          </button>
+          <button className="btn-primary" onClick={handleRunQueue} disabled={queueRunning || queue.filter(q => q.status === 'pending').length === 0 || !outputDir}
+            style={{ fontSize: '12px', padding: '6px 12px' }}>
+            {queueRunning ? '⏳ Đang chạy...' : '▶️ Chạy Queue'}
+          </button>
+          <button className="btn-secondary" onClick={handleClearQueue} disabled={queueRunning || queue.length === 0}
+            style={{ fontSize: '12px', padding: '6px 12px' }}>
+            🗑️ Xóa hoàn thành
+          </button>
+          {!outputDir && (
+            <span style={{ fontSize: '12px', color: '#f87171', alignSelf: 'center' }}>
+              ⚠️ Chưa chọn thư mục lưu
+            </span>
+          )}
+        </div>
+
+        {/* Queue list */}
+        {queue.length > 0 && (
+          <div style={{ marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            {queue.map(item => (
+              <div key={item.id} style={{
+                display: 'flex', alignItems: 'center', gap: '8px',
+                padding: '6px 10px', borderRadius: '6px',
+                backgroundColor:
+                  item.status === 'done' ? '#052e16' :
+                  item.status === 'error' ? '#2d0a0a' :
+                  item.status === 'running' ? '#1e3a5f' : '#1f2937',
+                fontSize: '12px',
+              }}>
+                <span style={{ flexShrink: 0 }}>
+                  {item.status === 'pending' ? '⏳' :
+                   item.status === 'running' ? '⬇️' :
+                   item.status === 'done' ? '✅' : '❌'}
+                </span>
+                <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: '#e5e7eb' }}>
+                  {item.url}
+                </span>
+                {item.error && (
+                  <span style={{ color: '#f87171', fontSize: '11px', flexShrink: 0, maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {item.error}
+                  </span>
+                )}
+                {item.status === 'pending' && (
+                  <button onClick={() => handleRemoveFromQueue(item.id)}
+                    style={{ background: 'none', border: 'none', color: '#9ca3af', cursor: 'pointer', fontSize: '14px', flexShrink: 0 }}>
+                    ✕
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Summary */}
+        {queue.length > 0 && (
+          <div style={{ marginTop: '8px', fontSize: '12px', color: '#9ca3af' }}>
+            Tổng: {queue.length} |
+            Chờ: {queue.filter(q => q.status === 'pending').length} |
+            Xong: {queue.filter(q => q.status === 'done').length} |
+            Lỗi: {queue.filter(q => q.status === 'error').length}
+          </div>
+        )}
+      </div>
     </div>
   );
   

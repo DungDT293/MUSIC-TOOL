@@ -47,7 +47,7 @@ export async function verifyOutputVideo(
     null
 
   const videoCodec = (videoStream as any)?.codec_name ?? null
-  const audioCodec = (audioStream as any)?.codec ?? null
+  const audioCodec = (audioStream as any)?.codec_name ?? null
 
   let durationDiffSec: number | null = null
   let durationWarning = false
@@ -93,7 +93,7 @@ export async function verifyOutputVideo(
       child.on('close', (code) => {
         // FFmpeg always writes info/warnings to stderr even on success.
         // Only treat as failure if exit code != 0 OR stderr contains error keywords.
-        const hasError = /Error|error|corrupt|invalid|moov atom not found/i.test(stderr)
+        const hasError = /corrupt|invalid|moov atom not found/i.test(stderr)
         if (code === 0 && !hasError) {
           resolve(true)
         } else {

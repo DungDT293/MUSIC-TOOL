@@ -53,7 +53,7 @@ interface BuiltVideoPlaylist {
   usedFiles: number
 }
 
-interface FinalExportEmitter {
+export interface FinalExportEmitter {
   progress: (payload: FinalExportProgressPayload) => void
   done: (payload: FinalExportDonePayload) => void
   error: (payload: FinalExportErrorPayload) => void
@@ -578,7 +578,11 @@ export async function executeFinalExport(
   console.log('[FinalExport] ==========================================')
   
   const tempDir = await ensureTempDir(`final-export-${requestId}-`)
-  
+
+  // Maps to collect results across processJob calls (used for multi-phase subtitle flow)
+  const resultTempVideoPaths = new Map<number, string>()
+  const resultSubtitleFiles = new Map<number, string>()
+
   try {
     // Generate tracklist cho từng job nếu tracklistAuto = true
     if (tracklistAuto) {

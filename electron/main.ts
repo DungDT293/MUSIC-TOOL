@@ -60,6 +60,8 @@ import { setupYouTubeHandlers, cleanupYouTubeHandlers } from './youtube/youtubeH
 import { getRecentHistory } from '../backend/music/exportHistory'
 import { applySeoMetadata, type SeoMetadataRequest } from '../backend/video/seoMetadata'
 import { normalizeAudio, cancelNormalizeAudio, type NormalizeAudioRequest, type NormalizeAudioProgress } from '../backend/music/normalizeAudio'
+import { getSpotifyMeta } from '../backend/music/spotifyMeta'
+import { listPresets, savePreset, updatePreset, deletePreset } from '../backend/exportPresets'
 import {
   evaluateLicenseState,
   submitLicenseRequest,
@@ -1635,6 +1637,35 @@ function registerIpcHandlers() {
     return { ok: true }
   })
 
+  // Spotify metadata lookup (public oembed, no auth required)
+  ipcMain.handle('music:spotifyMeta', async (_event, spotifyUrl: string) => {
+    try {
+      console.log('[IPC] music:spotifyMeta', spotifyUrl)
+      return await getSpotifyMeta(spotifyUrl)
+    } catch (err: any) {
+      console.error('[IPC] music:spotifyMeta error', err)
+      return { success: false, error: err?.message || String(err) }
+    }
+  })
+
+  // Export Presets IPC (Sprint 3.1)
+  ipcMain.handle('preset:list', async () => {
+    try { return { success: true, presets: listPresets() } }
+    catch (err: any) { return { success: false, error: err?.message } }
+  })
+  ipcMain.handle('preset:save', async (_event, name: string, settings: any) => {
+    try { return { success: true, preset: savePreset(name, settings) } }
+    catch (err: any) { return { success: false, error: err?.message } }
+  })
+  ipcMain.handle('preset:update', async (_event, id: string, name: string, settings: any) => {
+    try { return { success: true, preset: updatePreset(id, name, settings) } }
+    catch (err: any) { return { success: false, error: err?.message } }
+  })
+  ipcMain.handle('preset:delete', async (_event, id: string) => {
+    try { return { success: true, deleted: deletePreset(id) } }
+    catch (err: any) { return { success: false, error: err?.message } }
+  })
+
   // Cut video segment IPC (DEPRECATED - file cutVideo.ts không tồn tại)
   // ipcMain.handle('video:cutSegment', async (event, req: any) => {
   //   throw new Error('video:cutSegment is deprecated')
@@ -2296,6 +2327,59 @@ function registerIpcHandlers() {
 
   ipcMain.handle('autopilot:cancel', async () => {
     cancelAutopilot()
+    return { ok: true }
+  })
+
+  // ─── Autopilot: Scan video folders ─────────────────────────────────────────
+  // Đếm số lượng video file trong rootVideo (multi-line, mỗi dòng = 1 folder)
+  ipcMain.handle('autopilot:scan-video-folders', async (_event, rootVideo: string) => {
+    if (!rootVideo || typeof rootVideo !== 'string') {
+      return { totalFiles: 0, folders: [] }
+    }
+    const VIDEO_EXTENSIONS = new Set(['.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm', '.ts', '.m2ts', '.m4v'])
+    const folders = rootVideo.split('\n').map(f => f.trim()).filter(f => f.length > 0)
+    const result: { totalFiles: number; folders: Array<{ folder: string; count: number }> } = {
+      totalFiles: 0,
+      folders: [],
+    }
+    for (const folder of folders) {
+      if (!fs.existsSync(folder)) {
+        result.folders.push({ folder, count: 0 })
+        continue
+      }
+      let count = 0
+      const walk = (dir: string) => {
+        try {
+          const entries = fs.readdirSync(dir, { withFileTypes: true })
+          for (const entry of entries) {
+            const fullPath = path.join(dir, entry.name)
+            try {
+              if (entry.isDirectory()) {
+                walk(fullPath)
+              } else if (entry.isFile()) {
+                const ext = path.extname(entry.name).toLowerCase()
+                if (VIDEO_EXTENSIONS.has(ext)) count++
+              }
+            } catch { /* skip unreadable entries */ }
+          }
+        } catch { /* skip unreadable dirs */ }
+      }
+      walk(folder)
+      result.folders.push({ folder, count })
+      result.totalFiles += count
+    }
+    return result
+  })
+
+  // ─── Video Pool IPC ─────────────────────────────────────────────────────────
+  ipcMain.handle('autopilot:video-pool-stats', async () => {
+    const { getPoolStats } = await import('../backend/autopilot/videoPool')
+    return getPoolStats()
+  })
+
+  ipcMain.handle('autopilot:video-pool-clear', async () => {
+    const { clearPool } = await import('../backend/autopilot/videoPool')
+    clearPool()
     return { ok: true }
   })
 
