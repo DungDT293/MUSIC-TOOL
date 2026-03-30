@@ -175,7 +175,7 @@ export default function AudioSourceSelector() {
     setSelectedMachinePath(path)
     setMachineFolderPath(null)
     setMachineFiles([])
-    setTrackFromPath(path)
+    await setTrackFromPath(path)
   }
 
   const handleChooseFolder = async () => {
@@ -189,13 +189,13 @@ export default function AudioSourceSelector() {
     if (list.length === 1) {
       const one = list[0]
       setSelectedMachinePath(one.path)
-      setTrackFromPath(one.path, one.fileName)
+      await setTrackFromPath(one.path, one.fileName)
     }
   }
 
-  const handleSelectMachineTrack = (path: string, fileName: string) => {
+  const handleSelectMachineTrack = async (path: string, fileName: string) => {
     setSelectedMachinePath(path)
-    setTrackFromPath(path, fileName)
+    await setTrackFromPath(path, fileName)
   }
 
   const handleClear = () => {

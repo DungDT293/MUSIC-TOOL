@@ -4,7 +4,7 @@
  * Không import runtime/audio/engine.
  */
 
-import { useRef, useCallback } from 'react'
+import { useRef, useCallback, useEffect } from 'react'
 import { useSongNhacTimelineStore } from '../store/songNhacTimelineStore'
 import type { TimelineData } from './types'
 import type { TimelineWorkerInput } from './types'
@@ -18,12 +18,17 @@ export function useTimelineCompute() {
 
   const startCompute = useCallback(
     (channelData: Float32Array, sampleRate: number, duration: number, resolution?: number) => {
-      if (!workerRef.current) {
-        workerRef.current = new Worker(
-          new URL('./worker/timelineWorker.ts', import.meta.url),
-          { type: 'module' }
-        )
+      // Terminate any existing worker to clear all stale listeners before starting fresh.
+      // Without this, rapid calls accumulate multiple message/error listeners on the same
+      // worker, causing stale handlers to fire on a later response.
+      if (workerRef.current) {
+        workerRef.current.terminate()
+        workerRef.current = null
       }
+      workerRef.current = new Worker(
+        new URL('./worker/timelineWorker.ts', import.meta.url),
+        { type: 'module' }
+      )
       const worker = workerRef.current
       setLoadingTimeline(true)
       setTimelineData(null)
@@ -67,6 +72,14 @@ export function useTimelineCompute() {
     },
     [setTimelineData, setLoadingTimeline]
   )
+
+  // Bug #1 fix: terminate worker on unmount to prevent zombie thread
+  useEffect(() => {
+    return () => {
+      workerRef.current?.terminate()
+      workerRef.current = null
+    }
+  }, [])
 
   return { startCompute }
 }

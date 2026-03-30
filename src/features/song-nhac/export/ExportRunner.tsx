@@ -159,6 +159,9 @@ export default function ExportRunner() {
     })
 
     return () => {
+      // Bug #19 fix: signal cancellation so in-progress export stops cleanly
+      // rather than continuing to call IPC after the component unmounts.
+      cancelledRef.current = true
       unsub()
       unsubCancel()
     }

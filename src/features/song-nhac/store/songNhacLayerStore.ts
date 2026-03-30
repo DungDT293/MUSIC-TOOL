@@ -399,15 +399,10 @@ export const useSongNhacLayerStore = create<SongNhacLayerState>((set, get) => ({
     get().pushHistorySnapshot(layers)
     if (layer?.type === 'group') {
       const group = layer as SongNhacGroupLayer
-      const next = layers
-        .filter((l) => l.id !== id)
-        .map((l) => {
-          if ((l as { parentId?: string }).parentId === id) {
-            const { parentId: _, ...rest } = l as { parentId?: string }
-            return rest as SongNhacLayer
-          }
-          return l
-        })
+      // Bug #16 fix: also remove all children of the group, not just strip parentId.
+      // Previously children were kept in the array as orphaned top-level layers.
+      const childIds = new Set(group.children ?? [])
+      const next = layers.filter((l) => l.id !== id && !childIds.has(l.id))
       set({ layers: next, selectedLayerId: get().selectedLayerId === id ? null : get().selectedLayerId })
     } else {
       const parentId = (layer as { parentId?: string }).parentId

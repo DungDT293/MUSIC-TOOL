@@ -12,6 +12,8 @@ export class AudioAnalyzerRealtime {
   private analyser: AnalyserNode
   private freqBuffer: Uint8Array
   private waveformBuffer: Uint8Array
+  // Bug #7 fix: track resume in-flight to avoid 60x/sec Promise spam
+  private _resuming = false
 
   constructor(audioEl: HTMLAudioElement) {
     this.ctx = new AudioContext()
@@ -29,13 +31,20 @@ export class AudioAnalyzerRealtime {
 
   getFrequencyData(): Uint8Array {
     // Auto-resume context if browser suspended it (autoplay policy)
-    if (this.ctx.state === 'suspended') this.ctx.resume()
+    // Bug #7 fix: only call resume() once, not 60x/sec
+    if (this.ctx.state === 'suspended' && !this._resuming) {
+      this._resuming = true
+      this.ctx.resume().finally(() => { this._resuming = false })
+    }
     this.analyser.getByteFrequencyData(this.freqBuffer)
     return this.freqBuffer
   }
 
   getWaveformData(): Uint8Array {
-    if (this.ctx.state === 'suspended') this.ctx.resume()
+    if (this.ctx.state === 'suspended' && !this._resuming) {
+      this._resuming = true
+      this.ctx.resume().finally(() => { this._resuming = false })
+    }
     this.analyser.getByteTimeDomainData(this.waveformBuffer)
     return this.waveformBuffer
   }

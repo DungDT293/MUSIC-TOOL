@@ -150,7 +150,7 @@ export default function ExportDialog() {
     if (!api?.onExportStarted || !api?.onExportProgress) return
     const unsubStarted = api.onExportStarted(({ jobId }) => setCurrentJobId(jobId))
     const unsubProgress = api.onExportProgress((frameIndex, totalFrames) =>
-      setProgress({ frameIndex, totalFrames, timeSec: 0 })
+      setProgress({ frameIndex, totalFrames, timeSec: totalFrames > 0 ? (frameIndex / totalFrames) * (audioDurationSec ?? 0) : 0 })
     )
     unsubRef.current = [unsubStarted, unsubProgress]
     return () => {
@@ -271,10 +271,10 @@ export default function ExportDialog() {
     }
   }
 
-  const handleClose = () => {
+  const handleClose = async () => {
     if (isExporting) {
       if (window.confirm('Cancel export and close?')) {
-        handleCancel()
+        await handleCancel()
         closeExportDialog()
         setHasRetriedOnce(false)
       }

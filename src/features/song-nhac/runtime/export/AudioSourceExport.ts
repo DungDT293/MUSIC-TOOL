@@ -49,12 +49,25 @@ export function createAudioSourceExport(audioEl: HTMLAudioElement): SeekableAudi
       if (Math.abs(audioEl.currentTime - timeSec) < 0.001 && lastSeekTime >= 0) return
       audioEl.currentTime = timeSec
       lastSeekTime = timeSec
-      // Chờ browser seek xong (thường < 5ms cho file local)
-      if (audioEl.seeking) {
-        await new Promise<void>((resolve) => {
-          audioEl.addEventListener('seeked', () => resolve(), { once: true })
-        })
-      }
+      // Bug #9 fix: check seeking AFTER adding the listener to eliminate the
+      // race where 'seeked' fires before addEventListener is called.
+      // Also add a 5s timeout so export never hangs forever.
+      await new Promise<void>((resolve, reject) => {
+        const timeoutId = setTimeout(() => {
+          audioEl.removeEventListener('seeked', onSeeked)
+          reject(new Error('AudioSourceExport: seek timed out after 5s'))
+        }, 5000)
+        const onSeeked = () => {
+          clearTimeout(timeoutId)
+          resolve()
+        }
+        if (!audioEl.seeking) {
+          clearTimeout(timeoutId)
+          resolve()
+          return
+        }
+        audioEl.addEventListener('seeked', onSeeked, { once: true })
+      })
       // Cho analyser nhỏ ms cập nhật buffer
       await delay(POST_SEEK_SETTLE_MS)
     },

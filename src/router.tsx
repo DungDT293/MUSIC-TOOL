@@ -87,7 +87,7 @@ function Router() {
       })}
 
       {/* Fallback routes cho các path không match */}
-      {!keepAlivePages.some(p => p.path === currentPath) && currentPath !== '/' && (
+      {!KEEP_ALIVE_PAGES.some(p => p.path === currentPath) && currentPath !== '/' && (
         <Routes>
           <Route path="/music/visualizer-v2" element={<Navigate to="/music/scan" replace />} />
           <Route path="/visualizer-v2-demo" element={<Navigate to="/music/scan" replace />} />

@@ -742,8 +742,7 @@ export class YouTubeDownloader extends EventEmitter {
       '--no-check-certificate',
       '--ignore-errors',
       '--no-warnings',
-      '--extractor-args', 'youtube:player_client=android,web',
-      '--extractor-args', 'youtube:player_skip=webpage',
+      '--extractor-args', 'youtube:player_client=web,android',
       '--fragment-retries', '5',  // Giống tool Python (thứ tự)
       '--retries', '3'  // Giống tool Python (thứ tự)
     );
@@ -906,10 +905,9 @@ export class YouTubeDownloader extends EventEmitter {
     
     // Strategy: Đơn giản hóa như tool Python - CHỈ dùng android,web client
     // Tool Python thành công vì đơn giản: không cookies, không phức tạp
-    // Tool Python sử dụng: --extractor-args "youtube:player_client=android,web"
-    // yt-dlp sẽ tự động fallback format nếu format yêu cầu không có
-    args.push('--extractor-args', 'youtube:player_client=android,web');
-    args.push('--extractor-args', 'youtube:player_skip=webpage');
+    // Bug fix: dùng web client trước để lấy đủ format cao (1080p/4K DASH)
+    // player_skip=webpage bị xóa vì nó chặn high-res formats
+    args.push('--extractor-args', 'youtube:player_client=web,android');
     
     // Thêm cookies nếu có (chỉ khi user cung cấp)
     if (cookieArgs.length > 0) {
@@ -1646,7 +1644,7 @@ export class YouTubeDownloader extends EventEmitter {
       '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       '--referer', 'https://www.youtube.com/',
       '--add-header', 'Accept-Language:en-US,en;q=0.9',
-      '--extractor-args', 'youtube:player_client=android', // Dùng Android client (không cần cookies)
+      '--extractor-args', 'youtube:player_client=web,android', // Dùng web+Android client để lấy đủ format cao
     ];
 
     if (audioOnly) {
