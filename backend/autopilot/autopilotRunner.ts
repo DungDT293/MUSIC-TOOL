@@ -932,6 +932,7 @@ function generateSimpleTitles(
   baseKeyword: string,
   dateCode: string | undefined,
   overrides?: DayPlanDetailOverrides,
+  presetId?: DayPresetId,
 ): string[] {
   // Nếu bật chế độ tiêu đề thủ công và có danh sách tiêu đề tùy chỉnh
   if (overrides?.useCustomTitles && Array.isArray(overrides.customTitles) && overrides.customTitles.length > 0) {
@@ -993,6 +994,11 @@ function generateSimpleTitles(
     }
     
     return result
+  }
+
+  // Preset Custom + không dùng custom titles → đặt tên đơn giản "video 1, video 2, ..."
+  if (presetId === 'custom' && !overrides?.useCustomTitles) {
+    return Array.from({ length: count }, (_, i) => `video ${i + 1}`)
   }
 
   // Logic tạo tiêu đề tự động như cũ (khi không dùng custom titles)
@@ -1492,7 +1498,7 @@ async function runAutopilotForDay(
     emitLog('info', `[Bước 4] Debug: useCustomTitles=${overrides?.useCustomTitles || false}`)
   }
   
-  const outputNames = generateSimpleTitles(playlists.length, baseOutputName, dateCode, overrides)
+  const outputNames = generateSimpleTitles(playlists.length, baseOutputName, dateCode, overrides, plan.presetId)
   
   // Debug: Log outputNames để kiểm tra kết quả
   if (outputNames.length > 0) {
