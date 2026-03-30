@@ -37,10 +37,30 @@ export class JobQueue extends EventEmitter {
   private abortControllers = new Map<string, AbortController>()
   private pendingQueue: Array<{ jobId: string; fn: () => void }> = []
   private maxConcurrent: number
+  // Bug #4 fix: auto-evict completed/failed/cancelled jobs after 30 min to prevent Map growth
+  private readonly JOB_TTL_MS = 30 * 60 * 1000
+  private cleanupTimer: NodeJS.Timeout
 
   constructor(maxConcurrent = 3) {
     super()
     this.maxConcurrent = maxConcurrent
+    // Periodic cleanup every 10 minutes
+    this.cleanupTimer = setInterval(() => this._evictExpiredJobs(), 10 * 60 * 1000)
+    this.cleanupTimer.unref?.() // Don't prevent process exit
+  }
+
+  private _evictExpiredJobs(): void {
+    const now = Date.now()
+    for (const [id, info] of this.jobs) {
+      if (
+        info.status !== 'pending' &&
+        info.status !== 'running' &&
+        info.completedAt &&
+        now - info.completedAt > this.JOB_TTL_MS
+      ) {
+        this.jobs.delete(id)
+      }
+    }
   }
 
   private get runningCount(): number {
@@ -89,6 +109,12 @@ export class JobQueue extends EventEmitter {
     const runTask = () => {
       const taskPromise = (async () => {
         try {
+          // Bug #5 fix: guard against cancel/drain race — if the job was cancelled
+          // between pendingQueue.shift() and runTask() execution, abort immediately.
+          if (abortController.signal.aborted) {
+            throw new Error('Job cancelled before starting')
+          }
+
           jobInfo.status = 'running'
           jobInfo.startedAt = Date.now()
           this.emit('update', jobInfo)
@@ -184,6 +210,8 @@ export class JobQueue extends EventEmitter {
 
       // Remove cancelled job from pending queue so it is not started when a slot opens
       this.pendingQueue = this.pendingQueue.filter((entry) => entry.jobId !== jobId)
+      // Cleanup abortController to avoid memory leak
+      this.abortControllers.delete(jobId)
     }
   }
 

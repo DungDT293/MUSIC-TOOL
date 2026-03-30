@@ -278,9 +278,11 @@ export async function migrateFromPlaintext(): Promise<boolean> {
     // Write new encrypted format
     await writeEncryptedAuthState(oldState)
 
-    // Backup old file (đổi tên thay vì xóa)
+    // Security fix #17: delete backup file after successful migration — plaintext backup
+    // must not persist on disk as it contains credentials in plain JSON.
     const backupFile = oldFile + '.backup'
     fs.renameSync(oldFile, backupFile)
+    try { fs.unlinkSync(backupFile) } catch (_) {}
 
     console.log('[encryptedAuthStore] Migrated from plaintext to encrypted format')
     return true

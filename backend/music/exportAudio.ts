@@ -350,8 +350,12 @@ export async function exportPlaylistToFile(
           // Ước tính số bài cần thêm
           // Mỗi bài thêm sẽ tăng duration = averageTrackDuration - crossfadeDurationSec (do overlap)
           const durationPerNewTrack = averageTrackDuration - crossfadeDurationSec
-          const estimatedTracksNeeded = Math.ceil(durationDiff / Math.max(durationPerNewTrack, 1))
-          
+          // Bug #13 fix: durationPerNewTrack can be negative when crossfade > avg track duration.
+          // Negative value makes Math.ceil return a negative count → zero tracks added silently.
+          // Fall back to raw averageTrackDuration so the count is always positive.
+          const effectiveDurationPerTrack = durationPerNewTrack > 0 ? durationPerNewTrack : averageTrackDuration
+          const estimatedTracksNeeded = Math.ceil(durationDiff / Math.max(effectiveDurationPerTrack, 1))
+
           console.log(
             `[exportAudio] Ước tính cần thêm ${estimatedTracksNeeded} bài (average: ${averageTrackDuration.toFixed(1)}s, ` +
             `duration per new track: ${durationPerNewTrack.toFixed(1)}s)`
@@ -583,8 +587,12 @@ export async function exportPlaylistToFile(
           // Ước tính số bài cần thêm
           // Mỗi bài thêm sẽ tăng duration = averageTrackDuration - crossfadeDurationSec (do overlap)
           const durationPerNewTrack = averageTrackDuration - crossfadeDurationSec
-          const estimatedTracksNeeded = Math.ceil(durationDiff / Math.max(durationPerNewTrack, 1))
-          
+          // Bug #13 fix: durationPerNewTrack can be negative when crossfade > avg track duration.
+          // Negative value makes Math.ceil return a negative count → zero tracks added silently.
+          // Fall back to raw averageTrackDuration so the count is always positive.
+          const effectiveDurationPerTrack = durationPerNewTrack > 0 ? durationPerNewTrack : averageTrackDuration
+          const estimatedTracksNeeded = Math.ceil(durationDiff / Math.max(effectiveDurationPerTrack, 1))
+
           console.log(
             `[exportAudio] Ước tính cần thêm ${estimatedTracksNeeded} bài (average: ${averageTrackDuration.toFixed(1)}s, ` +
             `duration per new track: ${durationPerNewTrack.toFixed(1)}s)`

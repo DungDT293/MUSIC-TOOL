@@ -159,6 +159,7 @@ async function runConcat(
     }
     
     // C3: Simple args for retry (remove extra flags)
+    // Bug #24 fix: -y must come BEFORE outputPath, not after
     const args = retryCount > 0
       ? [
           '-v', 'error',
@@ -167,8 +168,8 @@ async function runConcat(
           '-i', concatListPath,
           '-c', 'copy',
           ...(mute ? ['-an'] : []),
-          outputPath,
           '-y',
+          outputPath,
         ]
       : [
           '-v', 'error',
@@ -178,8 +179,8 @@ async function runConcat(
           '-i', concatListPath,
           '-c', 'copy',
           ...(mute ? ['-an'] : []),
-          outputPath,
           '-y',
+          outputPath,
         ]
     
     const ffmpeg = spawn(ffmpegPath, args, {
@@ -207,9 +208,14 @@ async function runConcat(
     let dropWarned = false
     const progressStartTime = Date.now()
     
+    let cancelledByInterval = false
+
     // Interval check cancellation (mỗi 500ms) để đảm bảo phản hồi nhanh
     const cancelCheckInterval = setInterval(() => {
       if (requestId && videoJobManager.isCancelled(requestId)) {
+        // Bug #26 fix: guard double-kill/double-reject with flag
+        if (cancelledByInterval) return
+        cancelledByInterval = true
         clearInterval(cancelCheckInterval)
         clearTimeout(timeoutId) // Also clear timeout when cancelling
         console.log(`[runConcat] Job ${requestId} cancelled (interval check), killing FFmpeg process`)
@@ -228,10 +234,13 @@ async function runConcat(
         reject(new Error('Đã dừng bởi người dùng'))
       }
     }, CANCEL_CHECK_INTERVAL_MS)
-    
+
     ffmpeg.stderr?.on('data', (data: Buffer) => {
       // Check nếu job đã bị cancel - kill process ngay lập tức
+      // Bug #26 fix: skip if already handled by interval to avoid double-kill/double-reject
+      if (cancelledByInterval) return
       if (requestId && videoJobManager.isCancelled(requestId)) {
+        cancelledByInterval = true
         clearInterval(cancelCheckInterval)
         clearTimeout(timeoutId) // Also clear timeout when cancelling
         console.log(`[runConcat] Job ${requestId} cancelled, killing FFmpeg process`)
@@ -407,6 +416,7 @@ async function runConcatWithCut(
   
   return new Promise<void>((resolve, reject) => {
     // D3: Gộp concat + cut thành 1 lệnh
+    // Bug #24 fix: -y must come BEFORE outputPath, not after
     const args = retryCount > 0
       ? [
           '-v', 'error',
@@ -416,8 +426,8 @@ async function runConcatWithCut(
           '-t', String(targetDurationSec),
           '-c', 'copy',
           ...(mute ? ['-an'] : []),
-          outputPath,
           '-y',
+          outputPath,
         ]
       : [
           '-v', 'error',
@@ -428,8 +438,8 @@ async function runConcatWithCut(
           '-t', String(targetDurationSec),
           '-c', 'copy',
           ...(mute ? ['-an'] : []),
-          outputPath,
           '-y',
+          outputPath,
         ]
     
     const ffmpeg = spawn(ffmpegPath, args, {

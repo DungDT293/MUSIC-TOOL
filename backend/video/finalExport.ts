@@ -315,6 +315,9 @@ async function prepareAudioForOutput(
     ])
 
     child.on('error', reject)
+    // Bug #16 fix: drain stdout/stderr to prevent pipe buffer full → process hang
+    child.stdout?.resume()
+    child.stderr?.resume()
     child.on('close', (code) => {
       if (code === 0) resolve()
       else reject(new Error(`FFmpeg lỗi khi chuẩn hoá audio ${audioFile.path} (code ${code}).`))

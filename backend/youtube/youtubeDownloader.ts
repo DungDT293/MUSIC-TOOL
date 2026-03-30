@@ -78,8 +78,10 @@ export class YouTubeDownloader extends EventEmitter {
     console.log(`[YouTubeDownloader] isPackaged: ${isPackaged}, binDir: ${binDir}, cwd: ${process.cwd()}`);
     
     // Verify yt-dlp exists on startup
+    // Bug #33 fix: guard against non-Error throws in catch (strings, null, etc.)
     this.verify().catch((err) => {
-      console.error(`[YouTubeDownloader] WARNING: yt-dlp not found at startup: ${err.message}`);
+      const msg = err instanceof Error ? err.message : String(err)
+      console.error(`[YouTubeDownloader] WARNING: yt-dlp not found at startup: ${msg}`);
     });
     
     // Get FFmpeg path (reserved for future upscale feature)

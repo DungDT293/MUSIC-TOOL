@@ -698,9 +698,19 @@ function createWindow() {
     mainWindow.webContents.openDevTools()
   }
 
-  // (Optional) xử lý link mở ngoài
+  // Security fix #7: validate URL before openExternal — prevent RCE via renderer XSS
+  // Only allow https:// URLs to pass to the OS shell.
   mainWindow.webContents.setWindowOpenHandler((details) => {
-    shell.openExternal(details.url)
+    try {
+      const parsed = new URL(details.url)
+      if (parsed.protocol === 'https:' || parsed.protocol === 'http:') {
+        shell.openExternal(details.url)
+      } else {
+        console.warn('[main] Blocked shell.openExternal for non-http(s) URL:', details.url)
+      }
+    } catch {
+      console.warn('[main] Blocked shell.openExternal for invalid URL:', details.url)
+    }
     return { action: 'deny' }
   })
   

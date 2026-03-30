@@ -58,12 +58,6 @@ const api: IPCAPI = {
     },
     cancelNormalizeAudio: () => ipcRenderer.invoke('music:normalizeAudio:cancel'),
   },
-  video: {
-    // NOTE: video:cutSingle, video:cutBatch, video:merge, video:finalExport
-    // không có handler trong main.ts — dùng các API cụ thể:
-    // videoCutSingleSimple, videoSplitManySimple, videoMergeSimple, videoFinalExport thay thế.
-    finalExport: (payload: any) => ipcRenderer.invoke('video:finalExport', payload)
-  },
   probeFile: (path: string) => ipcRenderer.invoke('ffmpeg:probe', path),
   getSystemInfo: () => ipcRenderer.invoke('system:info'),
   getRealtimeStats: () => ipcRenderer.invoke('system:realtime'),
@@ -310,8 +304,6 @@ const api: IPCAPI = {
   },
   songNhac: {
     exportVideo: (options: any) => ipcRenderer.invoke('song-nhac:export-video', options),
-    sendFrame: (frameData: Buffer) => ipcRenderer.send('song-nhac:frame', frameData),
-    endFrames: () => ipcRenderer.send('song-nhac:end'),
     getAudioDuration: (filePath: string) => ipcRenderer.invoke('song-nhac:get-audio-duration', filePath),
     readAudioFile: (filePath: string) => ipcRenderer.invoke('song-nhac:read-audio-file', filePath),
     decodeAudioForTimeline: (filePath: string) => ipcRenderer.invoke('song-nhac:decode-audio-timeline', filePath),

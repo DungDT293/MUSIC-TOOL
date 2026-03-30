@@ -66,32 +66,36 @@ export async function runFfmpeg(opts: FfmpegExecOptions): Promise<{
       videoJobManager.registerJob(requestId, child)
     }
 
-    // Listen AbortSignal để cancel khi cần
-    if (signal) {
-      signal.addEventListener('abort', () => {
-        console.log(`[runFfmpeg] Job ${requestId || 'unknown'} cancelled via AbortSignal`)
-        if (!child.killed) {
-          child.kill('SIGTERM')
-          setTimeout(() => {
-            if (!child.killed) {
-              child.kill('SIGKILL')
-            }
-          }, 2000)
-        }
-      })
-    }
-
     let timeoutId: NodeJS.Timeout | null = null
 
     if (timeoutMs && timeoutMs > 0) {
       timeoutId = setTimeout(() => {
         try {
-          child.kill()
+          child.kill('SIGTERM')
+          // SIGKILL fallback after 2s — needed on Windows where SIGTERM is a no-op
+          setTimeout(() => {
+            try { if (!child.killed) child.kill('SIGKILL') } catch {}
+          }, 2000)
         } catch (err) {
           // Ignore kill errors
         }
         reject(new Error(`FFmpeg timeout after ${timeoutMs}ms`))
       }, timeoutMs)
+    }
+
+    // Listen AbortSignal để cancel khi cần
+    if (signal) {
+      signal.addEventListener('abort', () => {
+        console.log(`[runFfmpeg] Job ${requestId || 'unknown'} cancelled via AbortSignal`)
+        // Bug #28 fix: clear timeout so it doesn't race with abort
+        if (timeoutId) clearTimeout(timeoutId)
+        if (!child.killed) {
+          child.kill('SIGTERM')
+          setTimeout(() => {
+            try { if (!child.killed) child.kill('SIGKILL') } catch {}
+          }, 2000)
+        }
+      })
     }
 
     child.stdout?.on('data', (chunk: Buffer) => {
@@ -157,7 +161,7 @@ export async function runFfmpeg(opts: FfmpegExecOptions): Promise<{
   })
 }
 
-export async function runFfprobe(args: string[]): Promise<string> {
+export async function runFfprobe(args: string[], timeoutMs = 30_000): Promise<string> {
   const paths = getFfmpegPaths()
 
   // Xử lý Windows long path
@@ -176,6 +180,17 @@ export async function runFfprobe(args: string[]): Promise<string> {
       stdio: ['ignore', 'pipe', 'pipe'],
     })
 
+    // Bug #30 fix: add timeout so a hung ffprobe never blocks forever
+    const timeoutId = setTimeout(() => {
+      try {
+        child.kill('SIGTERM')
+        setTimeout(() => {
+          try { if (!child.killed) child.kill('SIGKILL') } catch {}
+        }, 2000)
+      } catch {}
+      reject(new Error(`ffprobe timed out after ${timeoutMs}ms`))
+    }, timeoutMs)
+
     child.stdout?.on('data', (chunk: Buffer) => {
       chunks.push(chunk)
     })
@@ -185,10 +200,12 @@ export async function runFfprobe(args: string[]): Promise<string> {
     })
 
     child.on('error', (err) => {
+      clearTimeout(timeoutId)
       reject(err)
     })
 
     child.on('close', (code) => {
+      clearTimeout(timeoutId)
       const stdout = Buffer.concat(chunks).toString('utf-8')
       const stderr = Buffer.concat(stderrChunks).toString('utf-8')
 
