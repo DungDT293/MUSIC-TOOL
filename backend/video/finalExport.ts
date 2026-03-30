@@ -714,20 +714,30 @@ export async function executeFinalExport(
         }
       } else {
         // Không có priority clips → giữ logic cũ
-        let sourceClipsForJob = baseClips
-        let shouldShuffle = shuffle
         if (canMapOneToOne) {
-          // Dùng job.jobIndex để đảm bảo mapping 1-1 đúng, không phụ thuộc thứ tự chạy
+          // Map 1-1: clip tương ứng đi TRƯỚC, sau đó fill phần còn lại bằng các clip khác
           const mappedClip = baseClips[Math.min(job.jobIndex, baseClips.length - 1)]
           if (mappedClip) {
-            sourceClipsForJob = [mappedClip]
-            shouldShuffle = false
             console.log(
               `[Job ${currentJobIndex}/${plan.totalJobs}] Map 1-1 với clip: ${path.basename(mappedClip.path)}`
             )
+            const mappedDuration = mappedClip.durationSec
+            const remainingTarget = Math.max(0, targetDurationSec - mappedDuration)
+            videoPlaylist = [mappedClip]
+            if (remainingTarget > 0) {
+              // Dùng tất cả các clip còn lại (trừ mappedClip) để fill phần còn lại
+              const restClips = baseClips.filter(c => c.path !== mappedClip.path)
+              const loopSource = restClips.length > 0 ? restClips : baseClips
+              const loopSeed = Date.now() + job.jobIndex * 2000000 + Math.random() * 1000
+              const fillClips = buildPlaylistToFillDuration(loopSource, remainingTarget, true, loopSeed)
+              videoPlaylist.push(...fillClips)
+            }
+          } else {
+            videoPlaylist = buildPlaylistToFillDuration(baseClips, targetDurationSec, shuffle)
           }
+        } else {
+          videoPlaylist = buildPlaylistToFillDuration(baseClips, targetDurationSec, shuffle)
         }
-        videoPlaylist = buildPlaylistToFillDuration(sourceClipsForJob, targetDurationSec, shouldShuffle)
       }
       
       console.log(

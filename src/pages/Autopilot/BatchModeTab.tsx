@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import {
   DayPlanDetailDialog,
   createDefaultOverrides,
@@ -79,6 +79,8 @@ export default function BatchModeTab() {
   const [scanningBatchId, setScanningBatchId] = useState<string | null>(null)
   // Ref để tránh stale closure trong runBatch (luôn trỏ tới batches mới nhất)
   const batchesRef = useRef(batches)
+  // Ref để cancel toàn bộ batch loop (không phụ thuộc vào state re-render)
+  const batchCancelledRef = useRef(false)
   const [scanResults, setScanResults] = useState<Record<string, { totalFiles: number; folders: Array<{ folder: string; count: number }> } | null>>({})
   const [lastSaved, setLastSaved] = useState<string | null>(null)
 
@@ -238,6 +240,7 @@ export default function BatchModeTab() {
 
     setIsRunning(true)
     setLogMessages([])
+    batchCancelledRef.current = false  // Reset cancel flag khi bắt đầu
 
     // Dùng batchesRef.current để tránh stale closure
     const currentBatches = batchesRef.current
@@ -246,6 +249,12 @@ export default function BatchModeTab() {
     setBatches(prev => prev.map(b => ({ ...b, status: 'pending', error: undefined })))
 
     for (let i = 0; i < currentBatches.length; i++) {
+      // Kiểm tra cancel trước mỗi batch
+      if (batchCancelledRef.current) {
+        addLog('warn', `⛔ Đã hủy — dừng tại batch ${i + 1}.`)
+        break
+      }
+
       const batch = currentBatches[i]
       if (!batch.name.trim()) {
         addLog('warn', `Bỏ qua batch ${i + 1}: chưa đặt tên.`)
@@ -285,15 +294,24 @@ export default function BatchModeTab() {
         if (!res?.ok) {
           addLog('error', `Batch "${batch.name}" lỗi: ${res?.error || 'Không rõ'}`)
           setBatches(prev => prev.map((b, idx) => idx === i ? { ...b, status: 'error', error: res?.error } : b))
+          // Nếu đã cancel thì dừng luôn
+          if (batchCancelledRef.current) break
           continue
         }
 
         // Đợi autopilot hoàn thành (timeout 4 giờ để tránh hang vĩnh viễn)
-        await waitForAutopilotComplete(w, 4 * 60 * 60 * 1000)
+        await waitForAutopilotComplete(w, 4 * 60 * 60 * 1000, batchCancelledRef)
+
+        // Nếu đã cancel thì dừng, không chạy batch tiếp theo
+        if (batchCancelledRef.current) {
+          setBatches(prev => prev.map((b, idx) => idx === i ? { ...b, status: 'error', error: 'Đã hủy' } : b))
+          addLog('warn', `⛔ Batch "${batch.name}" đã bị hủy.`)
+          break
+        }
 
         // Cập nhật status từ backend
         const finalStatus = await w.api.autopilot.getStatus()
-        if (finalStatus?.status === 'error') {
+        if (finalStatus?.status === 'error' || finalStatus?.status === 'cancelling') {
           setBatches(prev => prev.map((b, idx) => idx === i ? { ...b, status: 'error', error: finalStatus.error } : b))
           addLog('error', `Batch "${batch.name}" kết thúc với lỗi.`)
         } else {
@@ -301,32 +319,43 @@ export default function BatchModeTab() {
           addLog('info', `✅ Batch "${batch.name}" hoàn thành!`)
         }
       } catch (err: any) {
+        if (batchCancelledRef.current) {
+          setBatches(prev => prev.map((b, idx) => idx === i ? { ...b, status: 'error', error: 'Đã hủy' } : b))
+          addLog('warn', `⛔ Batch "${batch.name}" đã bị hủy.`)
+          break
+        }
         addLog('error', `Batch "${batch.name}" exception: ${err?.message}`)
         setBatches(prev => prev.map((b, idx) => idx === i ? { ...b, status: 'error', error: err?.message } : b))
       }
 
-      // Nghỉ 2s giữa các batch để cleanup
-      if (i < currentBatches.length - 1) {
+      // Nghỉ 2s giữa các batch để cleanup (chỉ khi chưa cancel)
+      if (!batchCancelledRef.current && i < currentBatches.length - 1) {
         addLog('info', `⏳ Nghỉ 2s trước batch tiếp theo...`)
         await new Promise(resolve => setTimeout(resolve, 2000))
       }
     }
 
-    addLog('info', `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`)
-    addLog('info', `🏁 Batch Mode hoàn thành! Đã xử lý ${currentBatches.length} thể loại.`)
+    if (!batchCancelledRef.current) {
+      addLog('info', `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`)
+      addLog('info', `🏁 Batch Mode hoàn thành! Đã xử lý ${currentBatches.length} thể loại.`)
+    }
     setIsRunning(false)
     setCurrentRunIndex(-1)
   }
 
   const handleCancel = async () => {
     const w = window as any
+    // Đánh dấu cancel ngay lập tức — loop sẽ dừng ở iteration tiếp theo
+    batchCancelledRef.current = true
+    addLog('warn', '⛔ Đang dừng Batch Mode...')
     try {
+      // Gửi lệnh cancel xuống backend để dừng autopilot đang chạy
       await w.api?.autopilot?.cancel()
-    } finally {
+    } catch { /* ignore */ } finally {
       setIsRunning(false)
       setCurrentRunIndex(-1)
       setBatches(prev => prev.map(b => b.status === 'running' ? { ...b, status: 'error', error: 'Đã hủy' } : b))
-      addLog('warn', 'Đã hủy Batch Mode.')
+      addLog('warn', '✅ Đã hủy Batch Mode.')
     }
   }
 
@@ -782,10 +811,15 @@ export default function BatchModeTab() {
 }
 
 /** Đợi autopilot hoàn thành (poll getStatus mỗi 2s) */
-async function waitForAutopilotComplete(w: any, timeoutMs = 4 * 60 * 60 * 1000): Promise<void> {
+async function waitForAutopilotComplete(w: any, timeoutMs = 4 * 60 * 60 * 1000, cancelledRef?: React.MutableRefObject<boolean>): Promise<void> {
   return new Promise((resolve, reject) => {
     const startTime = Date.now()
     const check = async () => {
+      // Nếu đã cancel → resolve ngay (không reject, để caller tự xử lý)
+      if (cancelledRef?.current) {
+        resolve()
+        return
+      }
       // Timeout guard — tránh hang vĩnh viễn
       if (Date.now() - startTime > timeoutMs) {
         reject(new Error(`Autopilot timeout sau ${Math.round(timeoutMs / 60000)} phút`))
@@ -793,7 +827,7 @@ async function waitForAutopilotComplete(w: any, timeoutMs = 4 * 60 * 60 * 1000):
       }
       try {
         const status = await w.api.autopilot.getStatus()
-        if (status?.status === 'idle' || status?.status === 'completed' || status?.status === 'error') {
+        if (status?.status === 'idle' || status?.status === 'completed' || status?.status === 'error' || status?.status === 'cancelling') {
           resolve()
           return
         }
