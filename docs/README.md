@@ -73,4 +73,6 @@ Các biến cấu hình (nếu cần) đặt trong `.env` hoặc file config tù
 - Mô tả thay đổi trong PR, kèm ảnh chụp UI (nếu liên quan).
 
 ## License
-MIT (giả định, cập nhật nếu repo có license khác).
+Liên hệ
+email: dungdong333@gmail.com
+sđt/zalo: 0393954568
