@@ -238,8 +238,8 @@ function buildSinglePlaylist(
 
     let cumulative = 0
     for (const track of playlistTracks) {
-      track.cumulativeDuration = cumulative
       cumulative += track.duration
+      track.cumulativeDuration = cumulative
     }
 
     return {
@@ -566,8 +566,8 @@ function buildSinglePlaylist(
   // Tính lại cumulativeDuration cho tất cả tracks
   let cumulative = 0
   for (const track of playlistTracks) {
-    track.cumulativeDuration = cumulative
     cumulative += track.duration
+    track.cumulativeDuration = cumulative
   }
 
   const totalDurationSec = cumulative

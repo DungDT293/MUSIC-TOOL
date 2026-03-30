@@ -811,14 +811,12 @@ const filteredHistory = useMemo(() => {
           ) : (
             playlists.map((pl) => {
               const isSelected = selectedPlaylistIds.includes(pl.id)
-              const priorityPercent = (
-                (pl.priorityDurationSec / pl.totalDurationSec) *
-                100
-              ).toFixed(1)
-              const randomPercent = (
-                (pl.randomDurationSec / pl.totalDurationSec) *
-                100
-              ).toFixed(1)
+              const priorityPercent = pl.totalDurationSec > 0
+                ? ((pl.priorityDurationSec / pl.totalDurationSec) * 100).toFixed(1)
+                : '0.0'
+              const randomPercent = pl.totalDurationSec > 0
+                ? ((pl.randomDurationSec / pl.totalDurationSec) * 100).toFixed(1)
+                : '0.0'
 
               return (
                 <div

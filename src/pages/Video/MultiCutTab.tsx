@@ -161,7 +161,7 @@ function MultiCutTab() {
     return () => {
       mounted = false
     }
-  }, [videoListItems.length]) // Chạy lại khi số lượng video thay đổi
+  }, []) // Chỉ chạy 1 lần khi mount — tránh override state của job đang chạy khi thêm video
 
   // Subscribe to progress events
   useEffect(() => {
@@ -398,7 +398,7 @@ function MultiCutTab() {
 
   // Kiểm tra video có duration < 30s
   const videosTooShort = videoListItems.filter(
-    (item) => item.info && item.info.durationSec !== null && item.info.durationSec < 30
+    (item) => item.durationSec !== undefined && item.durationSec !== null && item.durationSec < 30
   )
   const hasShortVideos = videosTooShort.length > 0
 

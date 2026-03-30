@@ -29,6 +29,7 @@ function PreviewPlaylistPage() {
   const [currentTime, setCurrentTime] = useState<number>(0)
   const [currentDuration, setCurrentDuration] = useState<number>(0)
   const [audioError, setAudioError] = useState<string | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
 
   const audioRef = useRef<HTMLAudioElement | null>(null)
 
@@ -47,6 +48,7 @@ function PreviewPlaylistPage() {
       })
       .catch((err) => {
         console.error('[PreviewPlaylist] listPlaylists error', err)
+        if (mounted) setLoadError('Không tải được danh sách playlist. Hãy sang Tab 2 (Tạo playlist) trước.')
       })
 
     return () => {
@@ -94,6 +96,9 @@ function PreviewPlaylistPage() {
     }
   }
 
+  // Ref để track play request hiện tại — tránh race condition khi click nhanh
+  const playRequestRef = useRef(0)
+
   // Play track tại index
   const playTrack = useCallback(
     async (index: number) => {
@@ -106,12 +111,19 @@ function PreviewPlaylistPage() {
       const audio = audioRef.current
       if (!audio) return
 
+      // Tăng request counter — bất kỳ request cũ nào sẽ bị hủy
+      const requestId = ++playRequestRef.current
+
       // Dừng bài cũ trước
       audio.pause()
       audio.currentTime = 0
       setIsPlaying(false)
 
       const fileUrl = await getFileUrl(track.path)
+
+      // Nếu có request mới hơn đã được kích hoạt trong khi đang await, hủy request này
+      if (requestId !== playRequestRef.current) return
+
       if (!fileUrl) {
         console.error('[PreviewPlaylist] Empty fileUrl for path', track.path)
         setAudioError('Không tạo được file URL cho bài hát. Kiểm tra console.')
@@ -248,6 +260,11 @@ function PreviewPlaylistPage() {
 
   return (
     <div style={{ padding: '20px', display: 'flex', gap: '20px', height: 'calc(100vh - 100px)' }}>
+      {loadError && (
+        <div style={{ position: 'absolute', top: 10, left: 10, right: 10, background: '#5c1e1e', color: '#f88', padding: '10px 16px', borderRadius: 6, zIndex: 100 }}>
+          ⚠️ {loadError}
+        </div>
+      )}
       {/* Cột trái: Danh sách playlist */}
       <div style={{ flex: '0 0 350px', display: 'flex', flexDirection: 'column' }}>
         <h2 style={{ marginBottom: '15px', fontSize: '20px', fontWeight: 'bold' }}>
@@ -363,7 +380,7 @@ function PreviewPlaylistPage() {
                     const isCurrentTrack = index === currentIndex
                     return (
                       <tr
-                        key={track.id}
+                        key={`${track.id}_${index}`}
                         style={{
                           borderBottom: '1px solid #333',
                           backgroundColor: isCurrentTrack ? '#007acc33' : 'transparent',

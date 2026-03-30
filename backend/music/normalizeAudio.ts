@@ -212,6 +212,7 @@ async function normalizeSingleFile(
       '-hide_banner',
       '-loglevel',
       'error',
+      '-stats',  // Cho phép hiển thị progress (time=...) dù loglevel=error
       '-i',
       inputFile,
       '-vn', // Không có video

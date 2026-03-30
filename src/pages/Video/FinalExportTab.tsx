@@ -318,7 +318,7 @@ function FinalExportTab() {
 
   // Logic: Nếu có nhiều audio/video → disable input "Tên file output" (single)
   // Nếu chỉ có 1 audio và 1 video → disable textarea "Tên file output (mỗi dòng một tên)"
-  const multipleAudio = audioItems.length > 1 || videoItems.length > 1
+  const multipleAudio = audioItems.length > 1
   const singleAudioVideo = audioItems.length === 1 && videoItems.length === 1
 
   const parsedOutputNames = useMemo(() => {
@@ -714,17 +714,19 @@ function FinalExportTab() {
     if (!audioItems.length || !videoItems.length) {
       return 'Chưa chọn đủ playlist audio và clips video để lập kế hoạch xuất.'
     }
-    
-    // Verify count match
-    if (audioItems.length !== videoItems.length) {
+
+    // Chỉ cảnh báo count mismatch khi CÙNG chọn files riêng lẻ (type=files)
+    // Khi video source là folder thì backend loop clips — không cần match 1-1
+    const videoIsFolder = videoSource?.type === 'folder'
+    if (!videoIsFolder && audioItems.length !== videoItems.length) {
       return `⚠️ Cảnh báo: Số lượng audio (${audioItems.length}) và video (${videoItems.length}) không khớp. Tab 6 yêu cầu số lượng bằng nhau để ghép 1-1.`
     }
-    
+
     if (audioItems.length === 1) {
       return 'Sẽ xuất 1 video: audio[1] + video[1] → output.mp4 (1-1 mapping)'
     }
     return `Sẽ xuất ${audioItems.length} video với mapping 1-1: audio[i] + video[i] → output_i.mp4 (mỗi video khớp với 1 cặp audio-video tương ứng)`
-  }, [audioItems, videoItems])
+  }, [audioItems, videoItems, videoSource])
 
   const renderAudioPreview = () => {
     if (!audioItems.length) return null

@@ -77,7 +77,13 @@ export interface MergeVideosSimpleResult {
  * Build concat list content for FFmpeg
  */
 function buildConcatListContent(filePaths: string[]): string {
-  return filePaths.map((filePath) => `file '${filePath.replace(/'/g, "'\\''")}'`).join('\n')
+  // Dùng forward slash cho FFmpeg (cross-platform), không dùng bash-style escape
+  return filePaths.map((filePath) => {
+    const normalized = filePath.replace(/\\/g, '/')
+    // Escape dấu nháy đơn theo chuẩn FFmpeg concat demuxer (dùng ký tự escape \')
+    const escaped = normalized.replace(/'/g, "\\'")
+    return `file '${escaped}'`
+  }).join('\n')
 }
 
 const DEFAULT_VIDEO_CLIP_SIZE_BYTES = 200 * 1024 * 1024 // 200 MB fallback
@@ -648,15 +654,16 @@ async function runCut(
     // C3: Simple args for retry
     const args = retryCount > 0
       ? [
+          '-y',
           '-v', 'error',
           '-i', inputPath,
           '-t', String(targetDurationSec),
           '-c', 'copy',
           ...(mute ? ['-an'] : []),
           outputPath,
-          '-y',
         ]
       : [
+          '-y',
           '-v', 'error',
           '-stats',
           '-i', inputPath,
@@ -664,7 +671,6 @@ async function runCut(
           '-c', 'copy',
           ...(mute ? ['-an'] : []),
           outputPath,
-          '-y',
         ]
     
     const ffmpeg = spawn(ffmpegPath, args, {

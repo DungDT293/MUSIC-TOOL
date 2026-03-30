@@ -509,14 +509,12 @@ function CreatePlaylistPage() {
                 Kết quả ({playlists.length} playlist)
               </h2>
               {playlists.map((playlist) => {
-                const priorityPercent = (
-                  (playlist.priorityDurationSec / playlist.totalDurationSec) *
-                  100
-                ).toFixed(1)
-                const randomPercent = (
-                  (playlist.randomDurationSec / playlist.totalDurationSec) *
-                  100
-                ).toFixed(1)
+                const priorityPercent = playlist.totalDurationSec > 0
+                  ? ((playlist.priorityDurationSec / playlist.totalDurationSec) * 100).toFixed(1)
+                  : '0.0'
+                const randomPercent = playlist.totalDurationSec > 0
+                  ? ((playlist.randomDurationSec / playlist.totalDurationSec) * 100).toFixed(1)
+                  : '0.0'
                 const isExpanded = expandedPlaylistId === playlist.id
 
                 return (
