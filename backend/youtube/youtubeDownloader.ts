@@ -147,7 +147,7 @@ export class YouTubeDownloader extends EventEmitter {
    */
   async updateYtDlp(): Promise<{ success: boolean; version?: string; message: string }> {
     return new Promise((resolve) => {
-      const proc = spawn(this.ytDlpPath, ['-U', '--no-update-to-nightly']);
+      const proc = spawn(this.ytDlpPath, ['-U']); // --no-update-to-nightly not supported in older versions
       let output = '';
       let stderr = '';
       proc.stdout.on('data', (d) => { output += d.toString(); });

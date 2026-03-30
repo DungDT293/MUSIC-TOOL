@@ -180,7 +180,10 @@ export async function readEncryptedAuthState(): Promise<StoredAuthState | null> 
     // Decrypt
     const state = await decryptAuthState(encryptedBase64, currentMachineId)
     if (!state) {
-      console.warn('[encryptedAuthStore] Failed to decrypt auth state')
+      // Decryption failed — old format or corrupt data from previous version.
+      // Silently delete and let user re-login (not a security event, just migration).
+      console.warn('[encryptedAuthStore] Failed to decrypt auth state — deleting old/corrupt file')
+      try { fs.unlinkSync(file) } catch (_) {}
       return null
     }
 
