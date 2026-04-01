@@ -1220,6 +1220,8 @@ async function runFinalCommand(opts: RunFinalCommandOptions): Promise<void> {
 
     const child = spawn(ffmpegPath, args, { windowsHide: true })
     videoJobManager.registerJob(requestId, child)
+    // Drain stdout để tránh pipe buffer đầy → FFmpeg bị block/treo với file dài
+    child.stdout?.resume()
 
     let lastEmit = 0
     let lastTimeSec: number | null = null

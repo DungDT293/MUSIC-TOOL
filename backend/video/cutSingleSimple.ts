@@ -263,7 +263,7 @@ export async function cutVideoIntoSegmentsSimple(
     : codecArgs
 
   const ffmpegArgs = [
-    '-fflags', '+genpts', // Regenerate PTS to fix corrupt/discontinuous timestamps
+    '-fflags', '+genpts+igndts', // Regenerate PTS + bỏ qua DTS invalid để tránh black/freeze frame
     ...effectiveHwaccelArgs, // Hardware acceleration flags (if GPU, only when no vfFilter)
     '-i',
     inputPath,
@@ -291,6 +291,7 @@ export async function cutVideoIntoSegmentsSimple(
           progressFilePath!, // Output progress vào file
         ]
       : []),
+    '-movflags', '+faststart', // moov atom đầu file → player có thể seek ngay
     '-y', // Overwrite output files
     outputPattern,
   ]

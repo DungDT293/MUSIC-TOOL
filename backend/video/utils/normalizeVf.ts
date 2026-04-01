@@ -56,7 +56,7 @@ export function buildNormalizeVfFilter(resolution: string, fps: string): string 
   const h = parseInt(hStr, 10)
 
   // Fallback nếu parse không thành công
-  if (!w || !h) return `scale=iw:ih,setsar=1,fps=${fps}`
+  if (!w || !h) return `scale=iw:ih,setsar=1,fps=${fps},format=yuv420p`
 
   // scale: giữ tỉ lệ gốc, fit vào WxH (không cắt), dùng lanczos cho chất lượng cao
   // scale lần 2 trunc(ow/2)*2:trunc(oh/2)*2 đảm bảo dimension chẵn — bắt buộc cho libx264/h264_nvenc

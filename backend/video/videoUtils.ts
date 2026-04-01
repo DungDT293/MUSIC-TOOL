@@ -79,8 +79,8 @@ export async function validateInputFiles(
       batch.push(promise)
     }
     
-    // Đợi batch này hoàn thành trước khi process batch tiếp theo
-    await Promise.all(batch)
+    // Đợi batch này hoàn thành — dùng allSettled để 1 file lỗi không cancel cả batch
+    await Promise.allSettled(batch)
     
     // Move to next batch
     currentIndex += batchSize

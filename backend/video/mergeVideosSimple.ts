@@ -7,6 +7,7 @@ const SIGKILL_DELAY_MS = 1000
  */
 
 import fs from 'node:fs'
+import fsp from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 import { randomUUID, randomBytes } from 'crypto'
@@ -180,6 +181,7 @@ async function runConcat(
           '-i', concatListPath,
           '-c', 'copy',
           '-avoid_negative_ts', 'make_zero',
+          '-movflags', '+faststart',
           ...(mute ? ['-an'] : []),
           '-y',
           outputPath,
@@ -193,6 +195,7 @@ async function runConcat(
           '-i', concatListPath,
           '-c', 'copy',
           '-avoid_negative_ts', 'make_zero',
+          '-movflags', '+faststart',
           ...(mute ? ['-an'] : []),
           '-y',
           outputPath,
@@ -442,6 +445,7 @@ async function runConcatWithCut(
           '-t', String(targetDurationSec),
           '-c', 'copy',
           '-avoid_negative_ts', 'make_zero',
+          '-movflags', '+faststart',
           ...(mute ? ['-an'] : []),
           '-y',
           outputPath,
@@ -456,6 +460,7 @@ async function runConcatWithCut(
           '-t', String(targetDurationSec),
           '-c', 'copy',
           '-avoid_negative_ts', 'make_zero',
+          '-movflags', '+faststart',
           ...(mute ? ['-an'] : []),
           '-y',
           outputPath,
@@ -1011,7 +1016,7 @@ async function fallbackTranscodeAndConcat(
 
     // Build concat list
     const concatListPath = path.join(tmpDir, `concat_safe_${Date.now()}.txt`)
-    fs.writeFileSync(concatListPath, buildConcatListContent(safeOutputs), { encoding: 'utf8' })
+    await fsp.writeFile(concatListPath, buildConcatListContent(safeOutputs), { encoding: 'utf8' })
 
     // Concat (copy) với safe outputs — forward onProgress so UI gets ETA during concat phase
     if (targetDurationSec && targetDurationSec > 0) {
@@ -1441,10 +1446,10 @@ export async function mergeVideosSimple(
         }))
       }
       
-      // D3: Build concat list file
-      const concatListPath = path.join(req.outputDir, `concat_${currentMergeIndex}_${Date.now()}.txt`)
+      // D3: Build concat list file — dùng os.tmpdir() + requestId để tránh race condition khi concurrent jobs
+      const concatListPath = path.join(os.tmpdir(), `concat_${requestId}_${currentMergeIndex}.txt`)
       const concatContent = buildConcatListContent(filesForMerge)
-      fs.writeFileSync(concatListPath, concatContent, { encoding: 'utf8' })
+      await fsp.writeFile(concatListPath, concatContent, { encoding: 'utf8' })
       
       // Verify: log số dòng concat list để debug
       const concatLines = concatContent.split('\n').filter(line => line.trim().length > 0)

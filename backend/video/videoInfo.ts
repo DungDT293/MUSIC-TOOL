@@ -29,7 +29,7 @@ export async function getVideoFileInfo(filePath: string): Promise<VideoFileInfo>
   const paths = getFfmpegPaths()
   const ffprobePath = paths.ffprobe
 
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve, reject) =\u003e {
     // Dùng ffprobe để lấy metadata
     const args = [
       '-v', 'error',
@@ -41,6 +41,13 @@ export async function getVideoFileInfo(filePath: string): Promise<VideoFileInfo>
     const proc = spawn(ffprobePath, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
     })
+
+    // Timeout 30s: file corrupt / network drive mất kết nối có thể khiến ffprobe treo mãi
+    const PROBE_TIMEOUT_MS = 30_000
+    const killTimer = setTimeout(() => {
+      console.warn(`[getVideoFileInfo] ffprobe timeout (30s) for: ${filePath}`)
+      try { proc.kill('SIGKILL') } catch { /* ignore */ }
+    }, PROBE_TIMEOUT_MS)
 
     let stdout = ''
     let stderr = ''
@@ -54,6 +61,7 @@ export async function getVideoFileInfo(filePath: string): Promise<VideoFileInfo>
     })
 
     proc.on('close', (code) => {
+      clearTimeout(killTimer)
       if (code !== 0) {
         console.warn(`[getVideoFileInfo] ffprobe failed for ${filePath}:`, stderr)
         // Trả về null values nhưng không throw
@@ -71,10 +79,10 @@ export async function getVideoFileInfo(filePath: string): Promise<VideoFileInfo>
         const json = JSON.parse(stdout)
         const format = json.format || {}
         const streams = json.streams || []
-        
+
         // Tìm video stream đầu tiên
         const videoStream = streams.find((s: any) => s.codec_type === 'video')
-        
+
         const durationSec = format.duration ? parseFloat(format.duration) : null
         const width = videoStream?.width ? parseInt(videoStream.width, 10) : null
         const height = videoStream?.height ? parseInt(videoStream.height, 10) : null
@@ -99,6 +107,7 @@ export async function getVideoFileInfo(filePath: string): Promise<VideoFileInfo>
     })
 
     proc.on('error', (error) => {
+      clearTimeout(killTimer)
       console.warn(`[getVideoFileInfo] Spawn error:`, error)
       resolve({
         filePath,
