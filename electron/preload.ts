@@ -1,5 +1,4 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
-import { pathToFileURL } from 'node:url'
 import type { AuthLoginPayload, AuthRegisterPayload, AuthState, IPCAPI, LicenseState } from '../src/types/ipc'
 import {
   VIDEO_FINAL_EXPORT_DONE,
@@ -58,6 +57,18 @@ const api: IPCAPI = {
     },
     cancelNormalizeAudio: () => ipcRenderer.invoke('music:normalizeAudio:cancel'),
     spotifyMeta: (url: string) => ipcRenderer.invoke('music:spotifyMeta', url),
+    getExportHistory: () => ipcRenderer.invoke('music:getExportHistory'),
+    deleteExportHistory: (ids: string[]) => ipcRenderer.invoke('music:deleteExportHistory', ids),
+    downloadPlaylistHistory: (dates: string[], outputDir?: string) => ipcRenderer.invoke('music:downloadPlaylistHistory', dates, outputDir),
+    enhanceAudio: (req: any) => ipcRenderer.invoke('music:enhance:run', req),
+    cancelEnhanceAudio: () => ipcRenderer.invoke('music:enhance:cancel'),
+    renderLoudnormPreview: (opts: any) => ipcRenderer.invoke('music:enhance:renderPreview', opts),
+    onEnhanceProgress: (handler: (p: any) => void) => {
+      const ch = 'music:enhance:progress'
+      const fn = (_e: IpcRendererEvent, p: any) => handler(p)
+      ipcRenderer.on(ch, fn)
+      return () => ipcRenderer.removeListener(ch, fn)
+    },
   },
   preset: {
     list: () => ipcRenderer.invoke('preset:list'),
@@ -87,6 +98,8 @@ const api: IPCAPI = {
   getLastScanResult: () => ipcRenderer.invoke('music:getLastScan'),
   createPlaylists: (payload: any) => ipcRenderer.invoke('music:createPlaylists', payload),
   listPlaylists: () => ipcRenderer.invoke('music:listPlaylists'),
+  getMusicPoolStats: (trackIds: string[]) => ipcRenderer.invoke('music:getPoolStats', trackIds),
+  clearMusicPool: () => ipcRenderer.invoke('music:clearPool'),
   getExportHistory: () => ipcRenderer.invoke('music:getExportHistory'),
   exportPlaylist: (req: any) => ipcRenderer.invoke('music:exportPlaylist', req),
   // Fix P1-03: top-level validatePlaylistsForCrossfade đồng bộ với music.validatePlaylistsForCrossfade
@@ -110,6 +123,9 @@ const api: IPCAPI = {
   videoMergeSimple: (req: any) => ipcRenderer.invoke('video:mergeSimple', req),
   videoMuteAudio: (req: any) => ipcRenderer.invoke('video:muteAudio', req),
   videoGetActiveMuteJobId: () => ipcRenderer.invoke('video:getActiveMuteJobId') as Promise<string | null>,
+  videoNormalize: (req: any) => ipcRenderer.invoke('video:normalize', req),
+  videoNormalizeVideo: (req: any) => ipcRenderer.invoke('video:normalize', req),
+  videoGetActiveNormalizeJobId: () => ipcRenderer.invoke('video:getActiveNormalizeJobId') as Promise<string | null>,
   listVideosInFolder: (dir: string) => ipcRenderer.invoke('video:listVideosInFolder', dir),
   listVideosInFolderSimple: (dir: string) => ipcRenderer.invoke('video:listVideosInFolderSimple', dir),
   ultraFastScanFolder: (folderPath: string) => ipcRenderer.invoke('video:ultraFastScanFolder', folderPath),
@@ -205,13 +221,16 @@ const api: IPCAPI = {
   toFileUrl: (filePath: string): string => {
     try {
       if (!filePath) return ''
-      // pathToFileURL sẽ tự xử lý backslash, khoảng trắng, ký tự UTF-8...
-      return pathToFileURL(filePath).toString()
+      // pathToFileURL is not available in sandboxed preload — build URL manually
+      const normalized = filePath.replace(/\\/g, '/')
+      const encoded = normalized.split('/').map(seg => encodeURIComponent(seg)).join('/')
+      return `file:///${encoded.replace(/^\/+/, '')}`
     } catch (err) {
       console.error('[preload] toFileUrl error', filePath, err)
       return ''
     }
   },
+  readFileAsBase64: (filePath: string) => ipcRenderer.invoke('system:readFileAsBase64', filePath),
   // YouTube API
   youtube: {
     // Verify yt-dlp
@@ -299,6 +318,8 @@ const api: IPCAPI = {
     },
   },
   videoSeoApply: (payload: any) => ipcRenderer.invoke('video:seo:apply', payload),
+  videoPoolMarkUsed: (filePaths: string[]) => ipcRenderer.invoke('video:pool-mark-used', filePaths),
+  videoPoolPickLRU: (folderPath: string, count: number) => ipcRenderer.invoke('video:pool-pick-lru', folderPath, count),
   autopilot: {
     getStatus: () => ipcRenderer.invoke('autopilot:getStatus'),
     start: (config: any) => ipcRenderer.invoke('autopilot:start', config),

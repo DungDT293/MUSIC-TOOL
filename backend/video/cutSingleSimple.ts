@@ -10,6 +10,7 @@ import { getFfmpegPaths } from '../ffmpeg/config'
 import { probeFile } from '../ffmpeg/probe'
 import { buildSingleCutProgress, type SingleCutProgress } from './videoProgress'
 import { videoJobManager } from './videoJobManager'
+import { buildNormalizeVfFilter } from './utils/normalizeVf'
 import { buildVideoEncoderArgsWithChoice } from '../utils/gpuDetection'
 
 export interface CutSingleSimpleRequest {
@@ -20,6 +21,8 @@ export interface CutSingleSimpleRequest {
   requestId?: string
   normalizeOutput?: boolean
   useGpuEncoding?: boolean // true = prefer GPU, false = force CPU, undefined = auto (default: CPU for backward compatibility)
+  targetResolution?: string // '1920x1080' | '1440x1080' | etc. (chỉ áp dụng khi normalizeOutput = true)
+  targetFps?: string        // '24' | '25' | '30000/1001' | '30' | etc.
 }
 
 export interface CutSingleSimpleResult {
@@ -102,6 +105,8 @@ export async function cutVideoIntoSegmentsSimple(
     requestId = 'unknown',
     normalizeOutput = false,
     useGpuEncoding,
+    targetResolution,
+    targetFps,
   } = params
 
   // Medium: Validate segment length > 0
@@ -238,11 +243,32 @@ export async function cutVideoIntoSegmentsSimple(
     : null
 
   // Build FFmpeg args - hardware acceleration flags MUST come BEFORE -i input file
+  // Thêm -vf filter khi normalizeOutput + targetResolution + targetFps được chỉ định
+  const vfFilter = normalizeOutput && targetResolution && targetFps
+    ? buildNormalizeVfFilter(targetResolution, targetFps)
+    : null
+
+  // Strip hwaccel when vfFilter is active: software filters require CPU frames,
+  // mixing GPU hwaccel + CPU filter causes ACCESS_VIOLATION (0xC0000005) crash
+  const effectiveHwaccelArgs = vfFilter ? [] : hwaccelArgs
+
+  // Replace -vsync 2 (VFR passthrough) with cfr when re-encoding to fix timestamp
+  // discontinuity / black frames at scene transitions
+  const effectiveCodecArgs = normalizeOutput
+    ? codecArgs.map((arg, idx, arr) => {
+        if (arg === '-vsync' && arr[idx + 1] === '2') return '-vsync'
+        if (idx > 0 && arr[idx - 1] === '-vsync' && arg === '2') return 'cfr'
+        return arg
+      })
+    : codecArgs
+
   const ffmpegArgs = [
-    ...hwaccelArgs, // Hardware acceleration flags (if GPU) - must be before -i
+    '-fflags', '+genpts', // Regenerate PTS to fix corrupt/discontinuous timestamps
+    ...effectiveHwaccelArgs, // Hardware acceleration flags (if GPU, only when no vfFilter)
     '-i',
     inputPath,
-    ...codecArgs,
+    ...(vfFilter ? ['-vf', vfFilter] : []),
+    ...effectiveCodecArgs,
     '-f',
     'segment',
     '-segment_time',

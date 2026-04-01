@@ -59,6 +59,9 @@ export interface MergeVideosSimpleRequest {
   /** Danh sách path video ưu tiên (thường nằm ở đầu inputFiles). Dùng để không bị loop lại khi targetDuration > tổng input. */
   priorityPaths?: string[]
   useGpuEncoding?: boolean // true = prefer GPU, false = force CPU, undefined = auto (default: CPU for backward compatibility)
+  unifyFormat?: boolean      // Chuẩn hóa tỉ lệ khung hình + FPS (tự động bật re-encode)
+  targetResolution?: string  // '1920x1080' | '1440x1080' | '2560x1080' | ... | '1080x1080'
+  targetFps?: string         // '24' | '25' | '30000/1001' | '30' | '50' | '60000/1001' | '60'
 }
 
 export interface MergeVideosSimpleResult {
@@ -72,6 +75,8 @@ export interface MergeVideosSimpleResult {
   elapsedMs?: number
 }
 
+
+import { buildNormalizeVfFilter } from './utils/normalizeVf'
 
 /**
  * Build concat list content for FFmpeg
@@ -470,10 +475,12 @@ async function runConcatWithCut(
     let stderr = ''
     let lastProgressTime = 0
     let lastSpeedX: number | null = null
-    
+    let cancelledByInterval = false // Guard để tránh double-reject từ stderr handler
+
     // Interval check cancellation (mỗi 500ms) để đảm bảo phản hồi nhanh
     const cancelCheckInterval = setInterval(() => {
       if (requestId && videoJobManager.isCancelled(requestId)) {
+        cancelledByInterval = true
         clearInterval(cancelCheckInterval)
         clearTimeout(timeoutId) // Also clear timeout when cancelling
         console.log(`[runConcatWithCut] Job ${requestId} cancelled (interval check), killing FFmpeg process`)
@@ -495,7 +502,10 @@ async function runConcatWithCut(
     
     ffmpeg.stderr?.on('data', (data: Buffer) => {
       // Check nếu job đã bị cancel - kill process ngay lập tức
+      // Guard: skip nếu interval đã xử lý để tránh double-reject
+      if (cancelledByInterval) return
       if (requestId && videoJobManager.isCancelled(requestId)) {
+        cancelledByInterval = true
         clearInterval(cancelCheckInterval)
         clearTimeout(timeoutId) // Also clear timeout when cancelling
         console.log(`[runConcatWithCut] Job ${requestId} cancelled, killing FFmpeg process`)
@@ -651,7 +661,8 @@ async function runCut(
   const TIMEOUT_MS = 60 * 60 * 1000 // 1 hour
   
   return new Promise<void>((resolve, reject) => {
-    // C3: Simple args for retry
+    let stderr = ''
+    let lastSpeedX: number | null = null
     const args = retryCount > 0
       ? [
           '-y',
@@ -827,9 +838,10 @@ async function fallbackTranscodeAndConcat(
   outputPath: string,
   mute: boolean,
   targetDurationSec?: number | null,
-  onProgress?: (progress: { percent: number }) => void,
+  onProgress?: (progress: { percent: number; speedX?: number | null; timeSec?: number; etaSec?: number | null }) => void,
   requestId?: string,
-  useGpuEncoding?: boolean
+  useGpuEncoding?: boolean,
+  normalizeVfFilter?: string | null
 ): Promise<void> {
   // Fix High #2.3: Check disk space before creating temp dir
   const { getDiskSpace, checkMinimumSpace, formatBytes } = await import('../utils/diskSpace')
@@ -852,6 +864,7 @@ async function fallbackTranscodeAndConcat(
   const { ffmpeg } = getFfmpegPaths()
   const safeOutputs: string[] = []
   let cleanupOnCancel = false
+  let lastKnownSpeedX: number | null = null // Track across files to avoid flicker
   try {
     // Transcode từng file
     for (let i = 0; i < inputs.length; i++) {
@@ -881,23 +894,39 @@ async function fallbackTranscodeAndConcat(
           }
         }
         
-        // Extract hardware acceleration flags (-hwaccel) from encoderArgs - they must come BEFORE -i
+        // When a software -vf filter is used, frames MUST be in CPU memory.
+        // h264_nvenc + -hwaccel nvdec keeps frames on GPU → software scale/pad/fps crashes
+        // with 0xC0000005 (ACCESS_VIOLATION). Fix: strip -hwaccel entirely when vf filter active.
+        // Without vf filter, keep -hwaccel before -i for GPU decode acceleration.
         const hwaccelIndex = encoderArgs.indexOf('-hwaccel')
         let hwaccelArgs: string[] = []
         let encoderArgsWithoutHwaccel = encoderArgs
         if (hwaccelIndex >= 0 && hwaccelIndex < encoderArgs.length - 1) {
-          hwaccelArgs = encoderArgs.slice(hwaccelIndex, hwaccelIndex + 2) // Extract '-hwaccel' and its value
-          encoderArgsWithoutHwaccel = [...encoderArgs.slice(0, hwaccelIndex), ...encoderArgs.slice(hwaccelIndex + 2)] // Remove from encoderArgs
+          if (!normalizeVfFilter) {
+            // Only use hwaccel when NO software vf filter (pure copy/encode without filter)
+            hwaccelArgs = encoderArgs.slice(hwaccelIndex, hwaccelIndex + 2)
+          }
+          // Always remove -hwaccel from encoderArgs (it goes before -i separately, or stripped)
+          encoderArgsWithoutHwaccel = [...encoderArgs.slice(0, hwaccelIndex), ...encoderArgs.slice(hwaccelIndex + 2)]
         }
-        
-        // Hardware acceleration flags MUST come BEFORE -i input file
+
+        // Replace -vsync 2 (VFR) with -vsync cfr when re-encoding to prevent timestamp discontinuity
+        encoderArgsWithoutHwaccel = encoderArgsWithoutHwaccel.map((arg, idx, arr) => {
+          if (arg === '-vsync' && arr[idx + 1] === '2') return '-vsync'
+          if (idx > 0 && arr[idx - 1] === '-vsync' && arg === '2') return 'cfr'
+          return arg
+        })
+
+        // When normalizeVfFilter is provided, use it; otherwise default normalize (fix SAR + fps)
+        const vfFilter = normalizeVfFilter || 'scale=iw:ih,setsar=1,fps=30,format=yuv420p'
         const args = [
           '-hide_banner',
           '-y',
-          ...hwaccelArgs, // Hardware acceleration flags (if GPU) - must be before -i
+          '-fflags', '+genpts', // Regenerate PTS to fix discontinuous timestamps from source clips
+          ...hwaccelArgs, // Hardware acceleration flags (only if no software vf filter)
           '-i', input,
-          '-vf', 'scale=iw:ih,setsar=1,fps=30',
-          ...encoderArgsWithoutHwaccel, // Use encoder args from GPU detection (without hwaccel, already extracted)
+          '-vf', vfFilter,
+          ...encoderArgsWithoutHwaccel,
           '-c:a', 'aac',
           '-b:a', '160k',
           '-ac', '2',
@@ -912,7 +941,8 @@ async function fallbackTranscodeAndConcat(
           videoJobManager.registerJob(childRequestId, proc)
         }
         
-        // Check cancel trong stderr handler
+        // Check cancel trong stderr handler + parse speed for real-time progress
+        let fileSpeedX: number | null = null
         proc.stderr?.on('data', (data: Buffer) => {
           if (requestId && videoJobManager.isCancelled(requestId)) {
             cleanupOnCancel = true // Fix Critical #1.1: Mark for cleanup on cancel
@@ -926,9 +956,24 @@ async function fallbackTranscodeAndConcat(
               }, 1000)
             }
             reject(new Error('Đã dừng bởi người dùng'))
+            return
+          }
+          // Parse speed= from FFmpeg stderr so UI can show ETA during transcode phase
+          const chunk = data.toString('utf-8')
+          const speedMatch = chunk.match(/speed=\s*([0-9.]+)x/i)
+          if (speedMatch) {
+            const speed = parseFloat(speedMatch[1])
+            if (!isNaN(speed) && speed > 0) {
+              fileSpeedX = speed
+              lastKnownSpeedX = speed // persist across files to avoid speed flicker
+              if (onProgress) {
+                const fileBasePercent = (i / inputs.length) * 40
+                onProgress({ percent: Math.min(39, fileBasePercent), speedX: fileSpeedX })
+              }
+            }
           }
         })
-        
+
         proc.on('error', (err) => reject(err))
         proc.on('close', (code) => {
           // Check cancel trước khi resolve/reject
@@ -937,14 +982,15 @@ async function fallbackTranscodeAndConcat(
             reject(new Error('Đã dừng bởi người dùng'))
             return
           }
-          
+
           if (code === 0 && fs.existsSync(safeOut)) resolve()
           else reject(new Error(`Transcode failed for ${input} (code ${code})`))
         })
       })
       safeOutputs.push(safeOut)
       if (onProgress) {
-        onProgress({ percent: Math.min(99, ((i + 1) / inputs.length) * 40) }) // rough progress
+        // Emit per-file completion, carry lastKnownSpeedX to avoid speed flicker between files
+        onProgress({ percent: Math.min(39, ((i + 1) / inputs.length) * 40), speedX: lastKnownSpeedX })
       }
     }
 
@@ -952,11 +998,15 @@ async function fallbackTranscodeAndConcat(
     const concatListPath = path.join(tmpDir, `concat_safe_${Date.now()}.txt`)
     fs.writeFileSync(concatListPath, buildConcatListContent(safeOutputs), { encoding: 'utf8' })
 
-    // Concat (copy) với safe outputs
+    // Concat (copy) với safe outputs — forward onProgress so UI gets ETA during concat phase
     if (targetDurationSec && targetDurationSec > 0) {
-      await runConcatWithCut(concatListPath, outputPath, targetDurationSec, mute, undefined, 0, requestId)
+      await runConcatWithCut(concatListPath, outputPath, targetDurationSec, mute, onProgress ? (p) => {
+        onProgress({ percent: 40 + (p.percent / 100) * 60, speedX: p.speedX ?? lastKnownSpeedX, timeSec: p.timeSec, etaSec: p.etaSec })
+      } : undefined, 0, requestId)
     } else {
-      await runConcat(concatListPath, outputPath, mute, undefined, undefined, 0, requestId)
+      await runConcat(concatListPath, outputPath, mute, onProgress ? (p) => {
+        onProgress({ percent: 40 + (p.percent / 100) * 60, speedX: p.speedX ?? lastKnownSpeedX, timeSec: p.timeSec, etaSec: p.etaSec })
+      } : undefined, undefined, 0, requestId)
     }
   } finally {
     // Cleanup temp
@@ -999,8 +1049,11 @@ export async function mergeVideosSimple(
     }
     
     const mergeCount = req.mergeCount && req.mergeCount > 1 ? req.mergeCount : 1
-    const forceSafeMode = !!req.forceReencode
-    console.log(`[mergeVideosSimple] forceSafeMode=${forceSafeMode ? 'ON' : 'OFF'} (forceReencode=${req.forceReencode})`)
+    const forceSafeMode = !!(req.forceReencode || req.unifyFormat)
+    const normalizeVfFilter = req.unifyFormat && req.targetResolution && req.targetFps
+      ? buildNormalizeVfFilter(req.targetResolution, req.targetFps)
+      : null
+    console.log(`[mergeVideosSimple] forceSafeMode=${forceSafeMode ? 'ON' : 'OFF'} (forceReencode=${req.forceReencode}, unifyFormat=${req.unifyFormat}, resolution=${req.targetResolution}, fps=${req.targetFps})`)
     
     // Create output directory
     if (!fs.existsSync(req.outputDir)) {
@@ -1385,6 +1438,7 @@ export async function mergeVideosSimple(
         console.error(`[mergeVideosSimple] ERROR: Concat list line count mismatch! Expected: ${filesForMerge.length}, Got: ${concatLines.length}`)
       }
       
+      // Output path: unifyFormat không đổi extension (vẫn .mp4), chỉ đổi resolution/fps
       const finalOutputPath = path.join(req.outputDir, generateOutputFileName(req.outputFileName, currentMergeIndex, mergeCount))
       const runSafeMerge = async (message: string, safeTarget: number | null) => {
         await fallbackTranscodeAndConcat(filesForMerge, finalOutputPath, req.mute || false, safeTarget ?? null, (progress) => {
@@ -1397,13 +1451,15 @@ export async function mergeVideosSimple(
               requestId,
               stage: 'merge',
               percent: Math.min(99, overallPercent),
+              speedX: progress.speedX ?? null,
+              etaSec: progress.etaSec ?? null,
               currentJob: mergeCount > 1 ? currentMergeIndex : undefined,
               totalJobs: mergeCount > 1 ? mergeCount : undefined,
               currentFile: mergeCount > 1 ? outputFileName : undefined,
               message,
             }))
           }
-        }, requestId, req.useGpuEncoding)
+        }, requestId, req.useGpuEncoding, normalizeVfFilter)
       }
       
       // UltraFast: Tách rõ nhánh "no target" vs "has target"

@@ -22,6 +22,9 @@ interface MergeVideosSimpleRequest {
   forceReencode?: boolean
   useGpuEncoding?: boolean // true = prefer GPU, false = force CPU, undefined = auto
   priorityPaths?: string[] // Danh sách path video ưu tiên
+  unifyFormat?: boolean      // Chuẩn hóa tỉ lệ khung hình + FPS
+  targetResolution?: string  // '1920x1080' | '1440x1080' | ... etc.
+  targetFps?: string         // '24' | '25' | '30000/1001' | '30' | '50' | '60000/1001' | '60'
 }
 
 interface MergeVideosSimpleResult {
@@ -73,6 +76,9 @@ function MergeTab() {
   const [muteAudio, setMuteAudio] = useState<boolean>(false)
   const [forceReencode, setForceReencode] = useState<boolean>(false)
   const [useGpuEncoding, setUseGpuEncoding] = useState<boolean>(false) // false = CPU, true = GPU
+  const [unifyFormat, setUnifyFormat] = useState<boolean>(false)
+  const [targetResolution, setTargetResolution] = useState<string>('1920x1080')
+  const [targetFps, setTargetFps] = useState<string>('30')
   const [mergeCount, setMergeCount] = useState<string>('1')
   const [limitDurationEnabled, setLimitDurationEnabled] = useState<boolean>(false)
   const [limitValue, setLimitValue] = useState<string>('')
@@ -405,6 +411,35 @@ function MergeTab() {
     setErrorMessage(null)
   }
 
+  const handlePickFromPool = async () => {
+    try {
+      const folder = await (window as any).api.selectFolder()
+      if (!folder) return
+      const result = await (window as any).api.videoPoolPickLRU?.(folder, 200)
+      if (!result?.ok) {
+        setErrorMessage('Không thể truy vấn pool video.')
+        return
+      }
+      if (!result.filePaths?.length) {
+        setErrorMessage('Không tìm thấy clip nào trong pool từ thư mục này.')
+        return
+      }
+      const existingPaths = new Set(videoItems.map((v) => v.path))
+      const newItems: VideoItem[] = result.filePaths
+        .filter((p: string) => !existingPaths.has(p))
+        .map((p: string) => ({ path: p, fileName: getFileName(p) }))
+      if (newItems.length) {
+        setVideoItems((prev) => [...prev, ...newItems])
+      }
+      const reused = result.reusedCount ?? 0
+      const total = result.totalAvailable ?? result.filePaths.length
+      console.log(`[MergeTab] Pool pick: ${newItems.length} new clips added (${reused}/${total} reused in pool)`)
+    } catch (err) {
+      console.error('[MergeTab] handlePickFromPool error', err)
+      setErrorMessage('Lỗi khi lấy clip từ pool.')
+    }
+  }
+
   const handleSelectOutputDir = async () => {
     const dir = await (window as any).api.selectFolder()
     if (dir) setOutputDir(dir)
@@ -495,6 +530,9 @@ function MergeTab() {
         repeatCount: mergeCount ? parseInt(mergeCount, 10) : 1, // Dùng mergeCount như repeatCount khi không có target
         targetDurationSec, // null nếu không tick, number nếu tick
         priorityPaths: priorityList.length > 0 ? priorityList : undefined,
+        unifyFormat: unifyFormat || undefined,
+        targetResolution: unifyFormat ? targetResolution : undefined,
+        targetFps: unifyFormat ? targetFps : undefined,
       }
 
       // Debug log trước khi gửi IPC
@@ -514,6 +552,8 @@ function MergeTab() {
       }
 
       if (result.success) {
+        // Mark all input clips as used in pool so Autopilot avoids repeating them
+        ;(window as any).api.videoPoolMarkUsed?.(orderedInputFiles).catch(() => {})
         setSuccessData(result)
         setStatusText('Hoàn tất')
         // Delay để user thấy 100% trước khi reset progress
@@ -524,7 +564,7 @@ function MergeTab() {
         }, 1000)
       } else {
         const msg = result.error || 'Ghép video thất bại'
-        if (msg.startsWith('❌ CẢNH BÁO: Dung lượng ổ đĩa không đủ')) {
+        if (msg.startsWith('CẢNH BÁO: Dung lượng ổ đĩa không đủ')) {
           setDiskSpaceError(msg)
         } else {
           setErrorMessage(msg)
@@ -535,7 +575,7 @@ function MergeTab() {
       }
     } catch (err: any) {
       const msg = err?.message || 'Lỗi không xác định khi ghép video'
-      if (msg.startsWith('❌ CẢNH BÁO: Dung lượng ổ đĩa không đủ')) {
+      if (msg.startsWith('CẢNH BÁO: Dung lượng ổ đĩa không đủ')) {
         setDiskSpaceError(msg)
       } else {
         setErrorMessage(msg)
@@ -597,6 +637,22 @@ function MergeTab() {
             Thêm từ thư mục...
           </button>
           <button
+            onClick={handlePickFromPool}
+            disabled={isProcessing}
+            style={{
+              padding: '8px 16px',
+              backgroundColor: '#5c6bc0',
+              color: '#fff',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: isProcessing ? 'not-allowed' : 'pointer',
+              fontSize: '14px',
+            }}
+            title="Tự động chọn clip ít được dùng nhất từ thư mục (tránh lặp lại)"
+          >
+            🎲 Chọn từ Pool
+          </button>
+          <button
             onClick={handleClearList}
             disabled={isProcessing}
             style={{
@@ -631,7 +687,7 @@ function MergeTab() {
             <>
               {videoItems.length > 200 && (
                 <div style={{ padding: '8px', fontSize: '12px', color: '#ffa726', fontStyle: 'italic', backgroundColor: '#2d2d2d', borderRadius: '4px', marginBottom: '8px' }}>
-                  ⚠️ Đang hiển thị thời lượng cho ~200 video đầu, các video sau vẫn được cắt/ghép bình thường.
+                  Đang hiển thị thời lượng cho ~200 video đầu, các video sau vẫn được cắt/ghép bình thường.
                 </div>
               )}
               {(() => {
@@ -654,7 +710,7 @@ function MergeTab() {
                           color: '#ffa726',
                           marginTop: idx > 0 ? '4px' : '0',
                         }}>
-                          ⭐ Video ưu tiên
+                          Video ưu tiên
                         </div>
                       )}
                       <div
@@ -665,7 +721,7 @@ function MergeTab() {
                         }}
                       >
                         <div style={{ fontWeight: 600, fontSize: '13px', color: isPriority ? '#ffa726' : '#e0e0e0', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                          {isPriority && <span style={{ fontSize: '10px' }}>⭐</span>}
+                          {isPriority && <span style={{ fontSize: '10px' }}></span>}
                           {item.fileName}
                         </div>
                         {typeof item.durationSec === 'number' && item.durationSec > 0 && (
@@ -843,11 +899,85 @@ function MergeTab() {
                 <div>
                   <div style={{ fontSize: '14px', fontWeight: 500 }}>Sử dụng GPU để mã hóa (nhanh hơn)</div>
                   <div style={{ fontSize: '12px', color: '#b0b0b0', lineHeight: 1.4 }}>
-                    Sử dụng GPU (NVIDIA/AMD/Apple) để mã hóa video, nhanh hơn nhiều so với CPU. 
+                    Sử dụng GPU (NVIDIA/AMD/Apple) để mã hóa video, nhanh hơn nhiều so với CPU.
                     Nếu GPU không khả dụng, hệ thống sẽ tự động chuyển sang CPU.
                   </div>
                 </div>
               </label>
+            </div>
+          )}
+          {/* Chỉnh về cùng tỉ lệ khung hình + FPS */}
+          <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <input
+              type="checkbox"
+              checked={unifyFormat}
+              onChange={(e) => setUnifyFormat(e.target.checked)}
+              disabled={isProcessing}
+            />
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              <span style={{ fontSize: '14px' }}>Chỉnh lại tất cả video về cùng tỉ lệ khung hình / FPS</span>
+              <span style={{ fontSize: '12px', color: '#b0b0b0' }}>Scale + letterbox/pillarbox về cùng resolution và FPS trước khi ghép (tự động bật re-encode).</span>
+            </div>
+          </label>
+          {/* Resolution + FPS dropdowns — hiển thị khi unifyFormat bật */}
+          {unifyFormat && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginLeft: '24px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <span style={{ fontSize: '13px', color: '#ccc', width: '110px' }}>Tỉ lệ khung hình:</span>
+                <select
+                  value={targetResolution}
+                  onChange={(e) => setTargetResolution(e.target.value)}
+                  disabled={isProcessing}
+                  style={{
+                    padding: '5px 10px',
+                    backgroundColor: '#2d2d2d',
+                    color: '#e0e0e0',
+                    border: '1px solid #555',
+                    borderRadius: '4px',
+                    fontSize: '13px',
+                    cursor: 'pointer',
+                    minWidth: '260px',
+                  }}
+                >
+                  <option value="1920x1080">16:9 — 1920×1080 (Full HD Ngang)</option>
+                  <option value="1440x1080">4:3 — 1440×1080 (Cổ điển)</option>
+                  <option value="2560x1080">2.35:1 — 2560×1080 (Cinemascope)</option>
+                  <option value="2160x1080">2:1 — 2160×1080 (Univisium)</option>
+                  <option value="1998x1080">1.85:1 — 1998×1080 (Widescreen)</option>
+                  <option value="1080x1920">9:16 — 1080×1920 (Dọc / Reels / Shorts)</option>
+                  <option value="1080x1440">3:4 — 1080×1440 (Dọc cổ điển)</option>
+                  <option value="1080x1868">5.8-inch — 1080×1868 (Mobile tall)</option>
+                  <option value="1080x1080">1:1 — 1080×1080 (Vuông / Instagram)</option>
+                  <option value="3840x2160">16:9 — 3840×2160 (4K UHD)</option>
+                  <option value="1280x720">16:9 — 1280×720 (HD 720p)</option>
+                </select>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <span style={{ fontSize: '13px', color: '#ccc', width: '110px' }}>FPS:</span>
+                <select
+                  value={targetFps}
+                  onChange={(e) => setTargetFps(e.target.value)}
+                  disabled={isProcessing}
+                  style={{
+                    padding: '5px 10px',
+                    backgroundColor: '#2d2d2d',
+                    color: '#e0e0e0',
+                    border: '1px solid #555',
+                    borderRadius: '4px',
+                    fontSize: '13px',
+                    cursor: 'pointer',
+                    minWidth: '260px',
+                  }}
+                >
+                  <option value="24">24.00 fps (Cinema)</option>
+                  <option value="25">25.00 fps (PAL / Europe)</option>
+                  <option value="30000/1001">29.97 fps (NTSC)</option>
+                  <option value="30">30.00 fps (YouTube phổ biến)</option>
+                  <option value="50">50.00 fps (PAL HFR)</option>
+                  <option value="60000/1001">59.94 fps (NTSC HFR)</option>
+                  <option value="60">60.00 fps (Gaming / HFR)</option>
+                </select>
+              </div>
             </div>
           )}
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -936,7 +1066,7 @@ function MergeTab() {
                 color: '#856404',
               }}
             >
-              ⚠ {performanceWarning}
+              {performanceWarning}
             </div>
           )}
         </div>
@@ -1055,7 +1185,7 @@ function MergeTab() {
             </>
           ) : (
             <div style={{ fontSize: '13px', color: '#b0b0b0' }}>
-              ⏳ Đang khởi tạo ghép video...
+              Đang khởi tạo ghép video...
             </div>
           )}
         </div>
@@ -1094,7 +1224,7 @@ function MergeTab() {
               fontWeight: 'bold',
             }}
           >
-            ⏹️ Dừng ghép video
+            Dừng ghép video
           </button>
         )}
         {successData && (

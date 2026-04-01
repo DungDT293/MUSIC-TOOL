@@ -16,9 +16,12 @@ import {
   buildPlaylists,
   savePlaylists,
   getPlaylists,
+  getPlaylistById,
   clearPlaylists,
   type BuildPlaylistsOptions,
+  type BuildPlaylistsResult,
 } from '../backend/music/playlistEngine'
+import { markTracksUsed, registerTracks, getMusicPoolStats, clearMusicPool } from '../backend/music/musicPool'
 import {
   exportPlaylistToFile,
   validatePlaylistsForCrossfade,
@@ -35,6 +38,7 @@ import { cutVideoIntoSegmentsSimple, type CutSingleSimpleRequest } from '../back
 import { splitManyVideosSimple, type SplitManySimpleRequest } from '../backend/video/splitManySimple'
 import { mergeVideosSimple, type MergeVideosSimpleRequest } from '../backend/video/mergeVideosSimple'
 import { muteVideoAudio, type MuteVideoAudioRequest } from '../backend/video/muteVideoAudio'
+import { normalizeVideo, type NormalizeVideoRequest } from '../backend/video/normalizeVideo'
 import { exportFinalVideo, scanAudioSource, scanVideoSource, type FinalExportJobRequest } from '../backend/video/finalExport'
 import { videoJobManager } from '../backend/video/videoJobManager'
 import {
@@ -57,9 +61,10 @@ import {
   type AutopilotProgress,
 } from '../backend/autopilot/autopilotRunner'
 import { setupYouTubeHandlers, cleanupYouTubeHandlers } from './youtube/youtubeHandlers'
-import { getRecentHistory } from '../backend/music/exportHistory'
+import { getRecentHistory, deleteHistoryEntries, downloadPlaylistHistory as downloadHistoryByDates } from '../backend/music/exportHistory'
 import { applySeoMetadata, type SeoMetadataRequest } from '../backend/video/seoMetadata'
 import { normalizeAudio, cancelNormalizeAudio, type NormalizeAudioRequest, type NormalizeAudioProgress } from '../backend/music/normalizeAudio'
+import { enhanceAudio, cancelEnhanceAudio, renderPreviewClip, type EnhanceAudioRequest } from '../backend/music/enhanceAudio/index'
 import { getSpotifyMeta } from '../backend/music/spotifyMeta'
 import { listPresets, savePreset, updatePreset, deletePreset } from '../backend/exportPresets'
 import {
@@ -89,6 +94,7 @@ let cachedDiskInfo: DiskInfoSummary | null = null
 let diskInfoRefreshInterval: NodeJS.Timeout | null = null
 let licenseCheckInterval: NodeJS.Timeout | null = null
 let activeMergeRequestId: string | null = null
+let activeNormalizeRequestId: string | null = null
 let licenseState: LicenseState = {
   status: 'checking',
   machineHash: '',
@@ -574,7 +580,7 @@ function createWindow() {
           "style-src 'self' 'unsafe-inline' http://localhost:* https://fonts.googleapis.com",
           "font-src 'self' data: http://localhost:* https://fonts.gstatic.com",
           "img-src 'self' data: blob: http://localhost:* https: app:",
-          "media-src 'self' app: blob: data: http://localhost:*",
+          "media-src 'self' app: blob: data: file: http://localhost:*",
           "connect-src 'self' http://localhost:* ws://localhost:* https:",
           "worker-src 'self' blob:",
         ].join('; ')
@@ -584,7 +590,7 @@ function createWindow() {
           "style-src 'self' 'unsafe-inline' app: https://fonts.googleapis.com",
           "font-src 'self' data: app: https://fonts.gstatic.com",
           "img-src 'self' data: blob: https: app:",
-          "media-src 'self' app: blob: data:",
+          "media-src 'self' app: blob: data: file:",
           "connect-src 'self' https: app:",
           "worker-src 'self' blob:",
         ].join('; ')
@@ -1468,21 +1474,37 @@ function registerIpcHandlers() {
   })
 
   // Create playlists IPC
-  ipcMain.handle('music:createPlaylists', async (_event, payload: BuildPlaylistsOptions) => {
+  ipcMain.handle('music:createPlaylists', async (_event, payload: BuildPlaylistsOptions): Promise<BuildPlaylistsResult> => {
     console.log('[IPC] music:createPlaylists', {
       tracks: payload.tracks?.length,
       pinned: payload.pinnedTrackIds?.length,
       playlistCount: payload.playlistCount,
       targetMinutes: payload.targetDurationMinutes,
     })
-    const playlists = buildPlaylists(payload)
-    savePlaylists(playlists)
-    return playlists
+    // Đăng ký tất cả tracks vào pool (safe to call nhiều lần)
+    registerTracks(payload.tracks ?? [])
+
+    const result = buildPlaylists(payload)
+    savePlaylists(result.playlists)
+    // KHÔNG markTracksUsed ở đây — user có thể tạo lại nhiều lần trước khi xuất.
+    // Pool chỉ được cập nhật sau khi user thực sự xuất nhạc thành công.
+
+    return result
   })
 
   // List playlists IPC
   ipcMain.handle('music:listPlaylists', async () => {
     return getPlaylists()
+  })
+
+  // Music Pool stats IPC
+  ipcMain.handle('music:getPoolStats', async (_event, trackIds: string[]) => {
+    return getMusicPoolStats(trackIds ?? [])
+  })
+
+  ipcMain.handle('music:clearPool', async () => {
+    clearMusicPool()
+    return { success: true }
   })
 
   ipcMain.handle('music:getLastScan', async () => {
@@ -1496,6 +1518,82 @@ function registerIpcHandlers() {
     } catch (err) {
       console.error('[IPC] music:getExportHistory error', err)
       return []
+    }
+  })
+
+  ipcMain.handle('music:deleteExportHistory', async (_event, ids: string[]) => {
+    try {
+      const result = deleteHistoryEntries(ids ?? [])
+      return { success: true, deletedCount: result.deleted }
+    } catch (err) {
+      console.error('[IPC] music:deleteExportHistory error', err)
+      return { success: false, deletedCount: 0, error: String(err) }
+    }
+  })
+
+  ipcMain.handle('music:downloadPlaylistHistory', async (_event, dates: string[], outputDir?: string) => {
+    try {
+      const result = downloadHistoryByDates(dates ?? [], outputDir)
+      return {
+        success: result.success,
+        downloadedCount: result.savedFiles.length,
+        outputDir: outputDir || '',
+        savedFiles: result.savedFiles,
+      }
+    } catch (err) {
+      console.error('[IPC] music:downloadPlaylistHistory error', err)
+      return { success: false, downloadedCount: 0, outputDir: '', error: String(err) }
+    }
+  })
+
+  // ── Audio Enhancement IPC ──────────────────────────────────────────────────
+
+  const ENHANCE_PROGRESS_CH = 'music:enhance:progress'
+
+  ipcMain.handle('music:enhance:run', async (event, req: EnhanceAudioRequest) => {
+    try {
+      return await enhanceAudio(req, (p) => {
+        if (!event.sender.isDestroyed()) {
+          event.sender.send(ENHANCE_PROGRESS_CH, p)
+        }
+      })
+    } catch (err) {
+      console.error('[IPC] music:enhance:run error', err)
+      return { success: false, processed: 0, failed: 1, errors: [{ file: '', error: String(err) }], outputFiles: [] }
+    }
+  })
+
+  ipcMain.handle('music:enhance:cancel', async () => {
+    try {
+      cancelEnhanceAudio()
+      return { ok: true }
+    } catch (err) {
+      console.error('[IPC] music:enhance:cancel error', err)
+      return { ok: false }
+    }
+  })
+
+  ipcMain.handle('music:enhance:renderPreview', async (_event, opts) => {
+    try {
+      // Frontend sends flat params (integratedLufs, truePeakDbtp, lra, durationSec, startSec)
+      // Reshape into PreviewRenderOptions { inputFile, loudnorm: {...}, durationSec, startSec }
+      const reshaped = opts?.loudnorm
+        ? opts  // already nested
+        : {
+            inputFile: opts.inputFile,
+            loudnorm: {
+              enabled: true,
+              integratedLufs: opts.integratedLufs ?? -14,
+              truePeakDbtp: opts.truePeakDbtp ?? -1,
+              lra: opts.lra ?? 11,
+            },
+            durationSec: opts.durationSec,
+            startSec: opts.startSec,
+          }
+      return await renderPreviewClip(reshaped)
+    } catch (err) {
+      console.error('[IPC] music:enhance:renderPreview error', err)
+      return { success: false, error: String(err) }
     }
   })
 
@@ -1575,6 +1673,18 @@ function registerIpcHandlers() {
 
     try {
       const result = await jobHandle.result
+      // Đánh dấu tracks đã xuất vào pool — chỉ khi xuất THÀNH CÔNG
+      if (result.success) {
+        try {
+          const pl = getPlaylistById(req.playlistId)
+          if (pl) {
+            const usedIds = pl.tracks.map(t => t.id)
+            markTracksUsed(usedIds)
+          }
+        } catch (poolErr) {
+          console.warn('[IPC] music:exportPlaylist - markTracksUsed failed (non-fatal):', poolErr)
+        }
+      }
       return {
         ...result,
         requestId: jobHandle.jobId,
@@ -1710,6 +1820,24 @@ function registerIpcHandlers() {
   // })
 
   // Open path (folder/file) in system file manager
+  // Read audio/media file as base64 for blob URL (avoids CSP file:// restriction in dev)
+  ipcMain.handle('system:readFileAsBase64', async (_event, filePath: string) => {
+    try {
+      if (!fs.existsSync(filePath)) return { ok: false, error: 'File not found' }
+      const buffer = fs.readFileSync(filePath)
+      const ext = path.extname(filePath).toLowerCase().slice(1)
+      const mimeMap: Record<string, string> = {
+        mp3: 'audio/mpeg', wav: 'audio/wav', m4a: 'audio/mp4',
+        aac: 'audio/aac', ogg: 'audio/ogg', flac: 'audio/flac',
+        opus: 'audio/opus', wma: 'audio/x-ms-wma',
+      }
+      const mime = mimeMap[ext] ?? 'audio/mpeg'
+      return { ok: true, base64: buffer.toString('base64'), mime }
+    } catch (err: any) {
+      return { ok: false, error: String(err) }
+    }
+  })
+
   ipcMain.handle('system:openPath', async (_event, pathToOpen: string) => {
     try {
       await shell.openPath(pathToOpen)
@@ -1982,6 +2110,74 @@ function registerIpcHandlers() {
 
   ipcMain.handle('video:getActiveMuteJobId', async () => {
     return activeMuteRequestId
+  })
+
+  // ===== Normalize Video IPC =====
+  ipcMain.handle('video:normalize', async (event, req: NormalizeVideoRequest) => {
+    const sender = event.sender
+    try {
+      const proceed = await confirmResourcesForVideoJob('normalize', req.outputDir)
+      if (!proceed) {
+        return {
+          requestId: '',
+          outputPaths: [],
+          success: false,
+          error: 'Job đã bị hủy sau cảnh báo tài nguyên.',
+          processed: 0,
+          failed: 0,
+          usedGpu: false,
+        }
+      }
+
+      const requestId = req.requestId || randomUUID()
+      activeNormalizeRequestId = requestId
+      try {
+        const result = await normalizeVideo(
+          { ...req, requestId },
+          (progress) => {
+            if (!sender.isDestroyed()) {
+              sender.send(VIDEO_PROGRESS_CHANNEL, {
+                ...progress,
+                requestId,
+                mode: 'normalize',
+              })
+            }
+          }
+        )
+        return result
+      } finally {
+        if (!videoJobManager.hasJob(requestId)) {
+          activeNormalizeRequestId = null
+        } else {
+          let ticks = 0
+          const checkInterval = setInterval(() => {
+            ticks++
+            if (!videoJobManager.hasJob(requestId) || ticks > 600) {
+              clearInterval(checkInterval)
+              activeNormalizeRequestId = null
+            }
+          }, 500)
+        }
+      }
+    } catch (err: any) {
+      console.error('[IPC] video:normalize error', err)
+      return {
+        requestId: req.requestId || randomUUID(),
+        outputPaths: [],
+        success: false,
+        error: err?.message || 'Lỗi không xác định khi chuẩn hóa video',
+        processed: 0,
+        failed: 0,
+        usedGpu: false,
+      }
+    }
+  })
+
+  ipcMain.handle('video:getActiveNormalizeJobId', async () => {
+    if (activeNormalizeRequestId && videoJobManager.hasJob(activeNormalizeRequestId)) {
+      return activeNormalizeRequestId
+    }
+    return null
   })
 
   ipcMain.handle('video:final-export:scan-audio', async (_event, payload) => {
@@ -2381,6 +2577,50 @@ function registerIpcHandlers() {
     const { clearPool } = await import('../backend/autopilot/videoPool')
     clearPool()
     return { ok: true }
+  })
+
+  // Video Pool integration for manual Merge tab
+  // Mark clips used so Autopilot LRU avoids repeating them
+  ipcMain.handle('video:pool-mark-used', async (_event, filePaths: string[]) => {
+    try {
+      const { generateClipId, markClipsUsed } = await import('../backend/autopilot/videoPool')
+      const fs = await import('fs')
+      const path = await import('path')
+      const clipIds: string[] = []
+      for (const fp of filePaths) {
+        try {
+          const size = fs.statSync(fp).size
+          const id = generateClipId(path.basename(fp), size)
+          clipIds.push(id)
+        } catch { /* skip unreadable files */ }
+      }
+      const dateCode = new Date().toISOString().slice(0, 10).replace(/-/g, '')
+      const crypto = await import('crypto')
+      const fingerprint = crypto.createHash('sha256').update(clipIds.join(',')).digest('hex').slice(0, 16)
+      markClipsUsed(clipIds, dateCode, fingerprint)
+      return { ok: true, marked: clipIds.length }
+    } catch (err: any) {
+      console.error('[IPC] video:pool-mark-used error', err)
+      return { ok: false, error: err?.message }
+    }
+  })
+
+  // Pick LRU clips from a folder for manual Merge tab
+  ipcMain.handle('video:pool-pick-lru', async (_event, folderPath: string, count: number) => {
+    try {
+      const { pickClipsLRU } = await import('../backend/autopilot/videoPool')
+      const fs = await import('fs')
+      const path = await import('path')
+      const VIDEO_EXTS = new Set(['.mp4', '.mkv', '.mov', '.avi', '.webm', '.m4v'])
+      const files = fs.readdirSync(folderPath)
+        .filter(f => VIDEO_EXTS.has(path.extname(f).toLowerCase()))
+        .map(f => path.join(folderPath, f))
+      const result = pickClipsLRU(files, count)
+      return { ok: true, filePaths: result.filePaths, reusedCount: result.reusedCount, totalAvailable: result.totalAvailable }
+    } catch (err: any) {
+      console.error('[IPC] video:pool-pick-lru error', err)
+      return { ok: false, error: err?.message, filePaths: [] }
+    }
   })
 
   // Security monitoring IPC

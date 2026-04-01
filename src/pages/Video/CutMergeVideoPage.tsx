@@ -126,14 +126,14 @@ function CutMergeVideoPage() {
         </button>
       </div>
 
-      {/* Tab content */}
+      {/* Tab content — keep-alive: tất cả tabs luôn mounted, chỉ ẩn/hiện bằng CSS để giữ state */}
       <div style={{ flex: 1 }}>
-        {activeTab === 'single' && <SingleCutTabSimple />}
-        {activeTab === 'multi' && <MultiCutTab />}
-        {activeTab === 'merge' && <MergeTab />}
-        {activeTab === 'mute' && <MuteAudioTab />}
-        {activeTab === 'normalize' && <NormalizeVideoTab />}
-        {activeTab === 'audit' && <AuditFilesTab />}
+        <div style={{ display: activeTab === 'single' ? 'block' : 'none', height: '100%' }}><SingleCutTabSimple /></div>
+        <div style={{ display: activeTab === 'multi' ? 'block' : 'none', height: '100%' }}><MultiCutTab /></div>
+        <div style={{ display: activeTab === 'merge' ? 'block' : 'none', height: '100%' }}><MergeTab /></div>
+        <div style={{ display: activeTab === 'mute' ? 'block' : 'none', height: '100%' }}><MuteAudioTab /></div>
+        <div style={{ display: activeTab === 'normalize' ? 'block' : 'none', height: '100%' }}><NormalizeVideoTab /></div>
+        <div style={{ display: activeTab === 'audit' ? 'block' : 'none', height: '100%' }}><AuditFilesTab /></div>
       </div>
     </div>
   )
