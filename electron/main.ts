@@ -2513,7 +2513,15 @@ function registerIpcHandlers() {
 
   ipcMain.handle('autopilot:start', async (_event, config: AutopilotBackendConfig) => {
     try {
-      await startAutopilot(config)
+      // Guard check synchronously
+      if (getAutopilotProgress().status === 'running') {
+        return { ok: false, error: 'Autopilot đang chạy. Hãy dừng job hiện tại trước khi chạy job mới.' }
+      }
+      // Fire-and-forget: trả về ngay, autopilot chạy trong background
+      // (giống pattern của mergeVideosSimple/cutSingleSimple)
+      startAutopilot(config).catch((error: any) => {
+        console.error('[Autopilot] Pipeline error (background):', error)
+      })
       return { ok: true }
     } catch (error: any) {
       console.error('[Autopilot] Failed to start:', error)

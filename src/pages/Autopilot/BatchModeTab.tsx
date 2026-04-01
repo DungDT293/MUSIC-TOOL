@@ -31,7 +31,7 @@ interface BatchGenre {
   error?: string
 }
 
-const BATCH_STORAGE_KEY = 'autopilotBatchConfigV1'
+export const BATCH_STORAGE_KEY = 'autopilotBatchConfigV1'
 
 let batchIdCounter = 1
 
@@ -79,6 +79,8 @@ export default function BatchModeTab() {
   const [scanningBatchId, setScanningBatchId] = useState<string | null>(null)
   // Ref để tránh stale closure trong runBatch (luôn trỏ tới batches mới nhất)
   const batchesRef = useRef(batches)
+  // Ref để tránh stale closure trong onStatus listener
+  const currentRunIndexRef = useRef(currentRunIndex)
   // Ref để cancel toàn bộ batch loop (không phụ thuộc vào state re-render)
   const batchCancelledRef = useRef(false)
   const [scanResults, setScanResults] = useState<Record<string, { totalFiles: number; folders: Array<{ folder: string; count: number }> } | null>>({})
@@ -87,6 +89,7 @@ export default function BatchModeTab() {
   // Save to localStorage
   useEffect(() => {
     batchesRef.current = batches  // Luôn sync ref với state mới nhất
+    currentRunIndexRef.current = currentRunIndex  // Sync để tránh stale closure trong onStatus
     try {
       window.localStorage.setItem(BATCH_STORAGE_KEY, JSON.stringify(batches))
       if (batches.length > 0) {
@@ -113,8 +116,10 @@ export default function BatchModeTab() {
       statusUnsub = w.api.autopilot.onStatus((progress: any) => {
         if (progress.status === 'completed' || progress.status === 'error') {
           // Batch runner sẽ xử lý chuyển genre tiếp theo
+          // Dùng ref thay vì closure để tránh stale currentRunIndex
+          const idx = currentRunIndexRef.current
           setBatches(prev => prev.map((b, i) => {
-            if (i !== currentRunIndex) return b
+            if (i !== idx) return b
             return {
               ...b,
               status: progress.status === 'completed' ? 'completed' : 'error',
@@ -251,7 +256,7 @@ export default function BatchModeTab() {
     for (let i = 0; i < currentBatches.length; i++) {
       // Kiểm tra cancel trước mỗi batch
       if (batchCancelledRef.current) {
-        addLog('warn', `⛔ Đã hủy — dừng tại batch ${i + 1}.`)
+        addLog('warn', `Đã hủy — dừng tại batch ${i + 1}.`)
         break
       }
 
@@ -265,7 +270,7 @@ export default function BatchModeTab() {
       setBatches(prev => prev.map((b, idx) => idx === i ? { ...b, status: 'running' } : b))
 
       addLog('info', `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`)
-      addLog('info', `🎵 Bắt đầu batch ${i + 1}/${currentBatches.length}: "${batch.name}"`)
+      addLog('info', `Bắt đầu batch ${i + 1}/${currentBatches.length}: "${batch.name}"`)
 
       // Tạo config cho Autopilot
       const config = {
@@ -305,7 +310,7 @@ export default function BatchModeTab() {
         // Nếu đã cancel thì dừng, không chạy batch tiếp theo
         if (batchCancelledRef.current) {
           setBatches(prev => prev.map((b, idx) => idx === i ? { ...b, status: 'error', error: 'Đã hủy' } : b))
-          addLog('warn', `⛔ Batch "${batch.name}" đã bị hủy.`)
+          addLog('warn', `Batch "${batch.name}" đã bị hủy.`)
           break
         }
 
@@ -316,12 +321,12 @@ export default function BatchModeTab() {
           addLog('error', `Batch "${batch.name}" kết thúc với lỗi.`)
         } else {
           setBatches(prev => prev.map((b, idx) => idx === i ? { ...b, status: 'completed' } : b))
-          addLog('info', `✅ Batch "${batch.name}" hoàn thành!`)
+          addLog('info', `Batch "${batch.name}" hoàn thành!`)
         }
       } catch (err: any) {
         if (batchCancelledRef.current) {
           setBatches(prev => prev.map((b, idx) => idx === i ? { ...b, status: 'error', error: 'Đã hủy' } : b))
-          addLog('warn', `⛔ Batch "${batch.name}" đã bị hủy.`)
+          addLog('warn', `Batch "${batch.name}" đã bị hủy.`)
           break
         }
         addLog('error', `Batch "${batch.name}" exception: ${err?.message}`)
@@ -330,14 +335,14 @@ export default function BatchModeTab() {
 
       // Nghỉ 2s giữa các batch để cleanup (chỉ khi chưa cancel)
       if (!batchCancelledRef.current && i < currentBatches.length - 1) {
-        addLog('info', `⏳ Nghỉ 2s trước batch tiếp theo...`)
+        addLog('info', `Nghỉ 2s trước batch tiếp theo...`)
         await new Promise(resolve => setTimeout(resolve, 2000))
       }
     }
 
     if (!batchCancelledRef.current) {
       addLog('info', `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`)
-      addLog('info', `🏁 Batch Mode hoàn thành! Đã xử lý ${currentBatches.length} thể loại.`)
+      addLog('info', `Batch Mode hoàn thành! Đã xử lý ${currentBatches.length} thể loại.`)
     }
     setIsRunning(false)
     setCurrentRunIndex(-1)
@@ -347,7 +352,7 @@ export default function BatchModeTab() {
     const w = window as any
     // Đánh dấu cancel ngay lập tức — loop sẽ dừng ở iteration tiếp theo
     batchCancelledRef.current = true
-    addLog('warn', '⛔ Đang dừng Batch Mode...')
+    addLog('warn', 'Đang dừng Batch Mode...')
     try {
       // Gửi lệnh cancel xuống backend để dừng autopilot đang chạy
       await w.api?.autopilot?.cancel()
@@ -355,7 +360,7 @@ export default function BatchModeTab() {
       setIsRunning(false)
       setCurrentRunIndex(-1)
       setBatches(prev => prev.map(b => b.status === 'running' ? { ...b, status: 'error', error: 'Đã hủy' } : b))
-      addLog('warn', '✅ Đã hủy Batch Mode.')
+      addLog('warn', 'Đã hủy Batch Mode.')
     }
   }
 
@@ -409,9 +414,9 @@ export default function BatchModeTab() {
             : batch.status === 'error' ? '#f87171'
             : batch.status === 'running' ? '#60a5fa'
             : '#6b7280'
-          const statusIcon = batch.status === 'completed' ? '✅'
-            : batch.status === 'error' ? '❌'
-            : batch.status === 'running' ? '🔄'
+          const statusIcon = batch.status === 'completed' ? 'Xong'
+            : batch.status === 'error' ? 'Lỗi'
+            : batch.status === 'running' ? 'Đang chạy'
             : `${idx + 1}.`
 
           return (
@@ -447,7 +452,7 @@ export default function BatchModeTab() {
                 </span>
                 {!isRunning && (
                   <div style={{ display: 'flex', gap: '4px' }} onClick={e => e.stopPropagation()}>
-                    <button type="button" onClick={() => handleDuplicateBatch(batch)} style={btnSmall} title="Nhân bản">📋</button>
+                    <button type="button" onClick={() => handleDuplicateBatch(batch)} style={btnSmall} title="Nhân bản">Nhân bản</button>
                     <button
                       type="button"
                       onClick={() => handleDeleteBatch(batch.id)}
@@ -458,7 +463,7 @@ export default function BatchModeTab() {
                     </button>
                   </div>
                 )}
-                <span style={{ fontSize: '14px', color: '#6b7280' }}>{isEditing ? '▲' : '▼'}</span>
+                <span style={{ fontSize: '14px', color: '#6b7280' }}>{isEditing ? '^' : 'v'}</span>
               </div>
 
               {/* Expanded form */}
@@ -523,12 +528,23 @@ export default function BatchModeTab() {
                     ['randomMusicFolder', 'Nhạc random'],
                     ['priorityVideoFolder', 'Video ưu tiên (tùy chọn)'],
                   ] as const).map(([field, label]) => (
-                    <div key={field} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <label style={{ minWidth: '120px', fontSize: '11px', color: '#6b7280' }}>{label}</label>
-                      <input
+                    <div key={field} style={{ display: 'flex', alignItems: 'flex-start', gap: '6px' }}>
+                      <label style={{ minWidth: '120px', fontSize: '11px', color: '#6b7280', paddingTop: '6px' }}>{label}</label>
+                      <textarea
                         readOnly
                         value={(batch as any)[field] || ''}
-                        style={{ ...inputStyle, flex: 1 }}
+                        rows={Math.max(1, ((batch as any)[field] || '').split('\n').length)}
+                        style={{
+                          ...inputStyle,
+                          flex: 1,
+                          resize: 'vertical',
+                          minHeight: '30px',
+                          wordBreak: 'break-all',
+                          whiteSpace: 'pre-wrap',
+                          fontFamily: 'monospace',
+                          fontSize: '11px',
+                          lineHeight: '1.4',
+                        }}
                         title={(batch as any)[field] || ''}
                       />
                       <button type="button" onClick={() => handleSelectFolder(batch.id, field)} style={btnSmall} disabled={isRunning}>Chọn</button>
@@ -764,9 +780,9 @@ export default function BatchModeTab() {
 
         {(completedCount > 0 || errorCount > 0) && (
           <span style={{ fontSize: '12px', color: '#9ca3af' }}>
-            {completedCount > 0 && <span style={{ color: '#4ade80' }}>✅ {completedCount} xong</span>}
+            {completedCount > 0 && <span style={{ color: '#4ade80' }}>{completedCount} xong</span>}
             {completedCount > 0 && errorCount > 0 && ' · '}
-            {errorCount > 0 && <span style={{ color: '#f87171' }}>❌ {errorCount} lỗi</span>}
+            {errorCount > 0 && <span style={{ color: '#f87171' }}>{errorCount} lỗi</span>}
           </span>
         )}
       </div>
@@ -827,7 +843,7 @@ async function waitForAutopilotComplete(w: any, timeoutMs = 4 * 60 * 60 * 1000, 
       }
       try {
         const status = await w.api.autopilot.getStatus()
-        if (status?.status === 'idle' || status?.status === 'completed' || status?.status === 'error' || status?.status === 'cancelling') {
+        if (status?.status === 'idle' || status?.status === 'completed' || status?.status === 'completed_with_errors' || status?.status === 'error' || status?.status === 'cancelling') {
           resolve()
           return
         }
