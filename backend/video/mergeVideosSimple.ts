@@ -774,8 +774,18 @@ async function runCut(
       
       // Simple progress: emit 90% when we see progress
       if (chunk.includes('time=') && onProgress) {
+        // Parse time=HH:MM:SS.xx từ FFmpeg stderr để tính percent thực tế
+        const timeMatch = chunk.match(/time=(\d+):(\d+):(\d+(?:\.\d+)?)/)
+        let percent = 90 // fallback nếu parse fail
+        if (timeMatch && targetDurationSec > 0) {
+          const h = Number(timeMatch[1])
+          const m = Number(timeMatch[2])
+          const s = Number(timeMatch[3])
+          const currentSec = h * 3600 + m * 60 + s
+          percent = Math.min(99, Math.round((currentSec / targetDurationSec) * 100))
+        }
         onProgress({
-          percent: 90,
+          percent,
           timeSec: undefined,
           speedX: lastSpeedX,
           etaSec: undefined,

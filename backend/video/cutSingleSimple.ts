@@ -267,6 +267,8 @@ export async function cutVideoIntoSegmentsSimple(
     ...effectiveHwaccelArgs, // Hardware acceleration flags (if GPU, only when no vfFilter)
     '-i',
     inputPath,
+    // Map streams explicitly: video bắt buộc, audio optional (tránh fail khi input không có audio)
+    ...(normalizeOutput ? ['-map', '0:v:0', '-map', '0:a?'] : []),
     ...(vfFilter ? ['-vf', vfFilter] : []),
     ...effectiveCodecArgs,
     '-f',
@@ -454,6 +456,17 @@ export async function cutVideoIntoSegmentsSimple(
       
       // Parse time từ stderr: "time=00:01:23.45" (giống backup version)
       // Cũng thử parse từ các format khác: "frame=1234 time=00:01:23.45" hoặc "out_time_ms=123456"
+      // NOTE: Khi normalizeOutput=true, progress file watcher đã emit progress → skip stderr parsing
+      //       để tránh dual-source gây UI flicker (progress nhảy ngược)
+      if (progressFileWatcher) {
+        // Chỉ parse speed từ stderr (không emit progress) — progress file watcher handle
+        const speedMatch = chunk.match(/speed=\s*([0-9.]+)x/i)
+        if (speedMatch) {
+          // Speed sẽ được dùng bởi file watcher nếu cần
+        }
+        return // skip progress emit — file watcher handles it
+      }
+
       let timeMatch = chunk.match(/time=([0-9:.]+)/)
       if (!timeMatch) {
         // Thử parse từ out_time_ms (khi dùng -progress)

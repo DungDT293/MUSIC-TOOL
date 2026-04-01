@@ -1308,41 +1308,54 @@ async function runFinalCommand(opts: RunFinalCommandOptions): Promise<void> {
         })
         resolve()
       } else {
-        // Kiểm tra xem file output có tồn tại và hợp lệ không
-        // Nếu có, coi như thành công (FFmpeg có thể exit code != 0 nhưng vẫn tạo file đúng)
+        // FFmpeg exit code != 0 — kiểm tra xem có phải warning vô hại không
         try {
           const stats = await fsp.stat(outputPath)
           if (stats.size > 0) {
-            // File tồn tại và có size > 0, kiểm tra xem có phải warning không
             const stderrText = stderrLines.join('\n')
             const isBufferQueueWarning = /buffers queued|Error marking filters as finished/i.test(stderrText)
-            
+
             if (isBufferQueueWarning) {
-              // Đây là warning thường gặp, không phải lỗi thực sự
+              // Warning thường gặp — nhưng phải verify output trước khi accept
               console.warn(
-                `[FinalExport] FFmpeg exited with code ${code} nhưng file output tồn tại và hợp lệ (${formatBytes(stats.size)}). ` +
-                `Đây là warning về buffer queue (không ảnh hưởng chất lượng video).`
+                `[FinalExport] FFmpeg exited with code ${code}, file tồn tại (${formatBytes(stats.size)}). ` +
+                `Đang probe verify output trước khi accept...`
               )
-              // Coi như thành công
-              const finalTimeSec = lastTimeSec !== null && lastTimeSec >= totalDurationSec ? totalDurationSec : totalDurationSec
-              emitProgress({
-                requestId,
-                stage: 'finishing',
-                percent: 100,
-                timeSec: finalTimeSec,
-                totalDurationSec,
-                speedX: undefined,
-                etaSec: 0,
-              })
-              resolve()
-              return
+              try {
+                const probeResult = await probeFile(outputPath)
+                const probeDuration = probeResult?.format?.duration ?? 0
+                // Probe OK + duration hợp lý (>= 50% expected) → accept
+                if (probeDuration > 0 && probeDuration >= totalDurationSec * 0.5) {
+                  console.warn(
+                    `[FinalExport] Probe OK: duration=${probeDuration.toFixed(1)}s (expected ~${totalDurationSec.toFixed(1)}s). Accepting output.`
+                  )
+                  const finalTimeSec = lastTimeSec !== null && lastTimeSec >= totalDurationSec ? totalDurationSec : totalDurationSec
+                  emitProgress({
+                    requestId,
+                    stage: 'finishing',
+                    percent: 100,
+                    timeSec: finalTimeSec,
+                    totalDurationSec,
+                    speedX: undefined,
+                    etaSec: 0,
+                  })
+                  resolve()
+                  return
+                } else {
+                  console.error(
+                    `[FinalExport] Probe FAILED: duration=${probeDuration.toFixed(1)}s (expected ~${totalDurationSec.toFixed(1)}s). Rejecting corrupt output.`
+                  )
+                }
+              } catch (probeError) {
+                console.error(`[FinalExport] Probe failed for output, rejecting:`, probeError)
+              }
             }
           }
         } catch (checkError) {
           // File không tồn tại hoặc không thể đọc được, tiếp tục reject
         }
-        
-        // Nếu file không tồn tại hoặc rỗng, mới reject
+
+        // Reject: file không tồn tại, rỗng, probe fail, hoặc không phải buffer warning
         const tail = stderrLines.slice(-10).join('\n')
         reject(new Error(`FFmpeg final export failed với mã ${code}. stderr:\n${tail}`))
       }
