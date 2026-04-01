@@ -174,7 +174,7 @@ async function runConcat(
     const args = retryCount > 0
       ? [
           '-v', 'error',
-          '-fflags', '+genpts',
+          '-fflags', '+genpts+igndts',
           '-f', 'concat',
           '-safe', '0',
           '-i', concatListPath,
@@ -187,7 +187,7 @@ async function runConcat(
       : [
           '-v', 'error',
           '-stats',
-          '-fflags', '+genpts',
+          '-fflags', '+genpts+igndts',
           '-f', 'concat',
           '-safe', '0',
           '-i', concatListPath,
@@ -435,7 +435,7 @@ async function runConcatWithCut(
     const args = retryCount > 0
       ? [
           '-v', 'error',
-          '-fflags', '+genpts',
+          '-fflags', '+genpts+igndts',
           '-f', 'concat',
           '-safe', '0',
           '-i', concatListPath,
@@ -449,7 +449,7 @@ async function runConcatWithCut(
       : [
           '-v', 'error',
           '-stats',
-          '-fflags', '+genpts',
+          '-fflags', '+genpts+igndts',
           '-f', 'concat',
           '-safe', '0',
           '-i', concatListPath,
@@ -931,13 +931,14 @@ async function fallbackTranscodeAndConcat(
         const args = [
           '-hide_banner',
           '-y',
-          '-fflags', '+genpts', // Regenerate PTS to fix discontinuous timestamps from source clips
+          '-fflags', '+genpts+igndts', // Regenerate PTS to fix discontinuous timestamps from source clips
           ...hwaccelArgs, // Hardware acceleration flags (only if no software vf filter)
           '-i', input,
           '-vf', vfFilter,
           ...encoderArgsWithoutHwaccel,
           '-c:a', 'aac',
-          '-b:a', '160k',
+          '-b:a', '192k',
+          '-ar', '48000',
           '-ac', '2',
           ...(mute ? ['-an'] : []),
           safeOut,
