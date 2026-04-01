@@ -666,16 +666,6 @@ export interface AutopilotDayPlan {
   }
 }
 
-export interface SaveBytesAsFileRequest {
-  suggestedName: string
-  bytes: number[] | Uint8Array
-}
-
-export interface ConvertWebmToMp4Request {
-  webmPath: string
-  outputPath?: string
-}
-
 export interface AutopilotFoldersConfig {
   rootAudio: string
   rootVideo: string
@@ -888,6 +878,8 @@ export interface IPCAPI {
   videoGetActiveNormalizeJobId: () => Promise<string | null>
   // Turbo Engine APIs đã bị xóa — handlers không còn tồn tại
   videoCancelJob: (requestId: string) => Promise<{ success: boolean; error?: string }>
+  videoPoolMarkUsed?: (filePaths: string[]) => Promise<{ ok: boolean; marked?: number; error?: string }>
+  videoPoolPickLRU?: (folderPath: string, count: number) => Promise<{ ok: boolean; filePaths: string[]; reusedCount?: number; totalAvailable?: number; error?: string }>
   onVideoProgress: (
     handler: (payload: VideoProgressPayload) => void
   ) => () => void
@@ -1040,26 +1032,9 @@ export interface IPCAPI {
     getAudioDuration?: (filePath: string) => Promise<number>
   }
   videoSeoApply: (payload: any) => Promise<any>
-  saveBytesAsFile?: (req: SaveBytesAsFileRequest) => Promise<string>
-  convertWebmToMp4?: (req: ConvertWebmToMp4Request) => Promise<string>
-  logToTerminal?: (...args: any[]) => Promise<boolean>
-  // PHASE 2: Canvas Export
-  canvasExportToVideo?: (req: {
-    scene: any
-    outputPath: string
-  }) => Promise<{ success: boolean; outputPath: string }>
-  onCanvasExportProgress?: (callback: (progress: any) => void) => () => void
-  muxAudioWithVideo?: (req: {
-    videoBytes: Uint8Array
-    audioPath: string
-    outputPath: string
-  }) => Promise<{ success: boolean; filePath: string; error?: string }>
-  readFile?: (filePath: string) => Promise<Uint8Array>
   readFileAsBase64?: (filePath: string) => Promise<{ ok: boolean; base64?: string; mime?: string; error?: string }>
-  // General IPC helpers for offscreen renderer
-  send?: (channel: string, ...args: any[]) => void
+  // General IPC helpers (preload exposes api.on() only)
   on?: (channel: string, callback: (...args: any[]) => void) => () => void
-  invoke?: (channel: string, ...args: any[]) => Promise<any>
   // Validate playlists for crossfade (top-level convenience)
   validatePlaylistsForCrossfade?: (playlistIds: string[]) => Promise<ValidatePlaylistsForCrossfadeResult>
 }

@@ -51,8 +51,6 @@ export default function FileList({
       let hist: ExportHistoryEntry[] = []
       if (api?.music?.getExportHistory) {
         hist = await api.music.getExportHistory()
-      } else if (api?.getExportHistory) {
-        hist = await api.getExportHistory()
       }
       setHistory((hist || []).sort((a: ExportHistoryEntry, b: ExportHistoryEntry) => b.exportedAt - a.exportedAt))
     } catch (err) {
