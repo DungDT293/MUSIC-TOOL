@@ -936,11 +936,16 @@ async function fallbackTranscodeAndConcat(
           '-i', input,
           '-vf', vfFilter,
           ...encoderArgsWithoutHwaccel,
+          // -map 0:a? → optional: nếu clip không có audio track thì FFmpeg không crash
+          // thay vì để FFmpeg tự tìm audio (gây lỗi "no audio stream found")
+          '-map', '0:v:0',
+          '-map', '0:a?',
           '-c:a', 'aac',
           '-b:a', '192k',
           '-ar', '48000',
           '-ac', '2',
           ...(mute ? ['-an'] : []),
+          '-movflags', '+faststart',
           safeOut,
         ]
         const proc = spawn(ffmpeg, args, { stdio: ['ignore', 'ignore', 'pipe'] })

@@ -1211,6 +1211,7 @@ async function runFinalCommand(opts: RunFinalCommandOptions): Promise<void> {
       ...audioCodecArgs,
       '-avoid_negative_ts',
       'make_zero',
+      '-movflags', '+faststart',
       '-t',
       totalDurationSec.toFixed(3),
       '-y',
