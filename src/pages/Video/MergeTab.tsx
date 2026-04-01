@@ -1177,11 +1177,18 @@ function MergeTab() {
                   style={{
                     width: `${Math.min(100, Math.max(0, currentProgress.percent))}%`,
                     height: '100%',
-                    backgroundColor: '#007acc',
+                    backgroundColor: statusText.includes('kiểm tra') ? '#f59e0b' : '#007acc',
                     transition: 'width 0.3s',
+                    // Pulsing animation khi đang ở phase verify (không có progress)
+                    animation: statusText.includes('kiểm tra') ? 'pulse-bar 1.2s ease-in-out infinite' : 'none',
                   }}
                 />
               </div>
+              {statusText.includes('kiểm tra') && (
+                <div style={{ fontSize: '11px', color: '#f59e0b', marginTop: '2px' }}>
+                  ⏳ Đang kiểm tra tính toàn vẹn của file xuất ra...
+                </div>
+              )}
             </>
           ) : (
             <div style={{ fontSize: '13px', color: '#b0b0b0' }}>

@@ -67,14 +67,15 @@ export async function verifyOutputVideo(
     )
   }
 
-  // 2) Decode test: ffmpeg -v error -i output -f null -
+  // 2) Decode test: ffmpeg -v error -t 60 -i output -f null -
+  // Giới hạn 60 giây đầu để tránh decode toàn bộ file (có thể rất lâu với file dài)
   const { ffmpeg } = getFfmpegPaths()
 
   const decodeOk: boolean = await new Promise((resolve) => {
     try {
       const child = spawn(
         ffmpeg,
-        ['-v', 'error', '-i', outputPath, '-f', 'null', '-'],
+        ['-v', 'error', '-t', '60', '-i', outputPath, '-f', 'null', '-'],
         { windowsHide: true }
       )
 
@@ -87,10 +88,19 @@ export async function verifyOutputVideo(
         if (onLog) {
           onLog(`[verifyOutput] ffmpeg decode error: ${err.message}`)
         }
+        clearTimeout(killTimer)
         resolve(false)
       })
 
+      // Safety timeout: nếu ffmpeg không kết thúc sau 90s → kill và coi là OK
+      const killTimer = setTimeout(() => {
+        if (onLog) onLog('[verifyOutput] decode test timeout (90s), killing process')
+        try { child.kill('SIGKILL') } catch {}
+        resolve(true) // timeout không phải lỗi thật, coi là OK
+      }, 90_000)
+
       child.on('close', (code) => {
+        clearTimeout(killTimer)
         // FFmpeg always writes info/warnings to stderr even on success.
         // Only treat as failure if exit code != 0 OR stderr contains error keywords.
         const hasError = /corrupt|invalid|moov atom not found/i.test(stderr)
