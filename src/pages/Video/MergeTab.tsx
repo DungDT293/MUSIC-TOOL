@@ -413,7 +413,16 @@ function MergeTab() {
 
   const handlePickFromPool = async () => {
     try {
-      const folder = await (window as any).api.selectFolder()
+      // Tự suy thư mục từ video đang có trong danh sách (không hỏi nếu đã có video)
+      let folder: string | null = null
+      if (videoItems.length > 0) {
+        // Dùng thư mục của video đầu tiên trong danh sách
+        const firstPath = videoItems[0].path
+        folder = firstPath.replace(/[/\\][^/\\]+$/, '') // dirname
+      } else {
+        // Chưa có video → mới hỏi thư mục
+        folder = await (window as any).api.selectFolder()
+      }
       if (!folder) return
       const result = await (window as any).api.videoPoolPickLRU?.(folder, 200)
       if (!result?.ok) {
