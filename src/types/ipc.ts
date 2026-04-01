@@ -732,9 +732,6 @@ export interface IPCAPI {
       refresh_token?: string
       expires_at?: number
       error?: string
-      // V2: Tamper detection
-      action?: 'SUSPICIOUS' | 'BLOCKED'
-      tamperCount?: number
     }>
   }
   music: {
@@ -786,14 +783,6 @@ export interface IPCAPI {
     cancelEnhanceAudio?: () => Promise<any>
     renderLoudnormPreview?: (opts: any) => Promise<any>
     onEnhanceProgress?: (handler: (p: any) => void) => () => void
-  }
-  video: {
-    cutSingle?: (payload: any) => Promise<any>
-    cutBatch?: (payload: any) => Promise<any>
-    /** @deprecated Use videoMergeSimple instead */
-    merge?: (payload: any) => Promise<any>
-    /** @deprecated Use videoFinalExport.start instead */
-    finalExport?: (payload: any) => Promise<any>
   }
   probeFile: (path: string) => Promise<ProbeResult>
   preset?: {
@@ -912,7 +901,7 @@ export interface IPCAPI {
     cancel: () => Promise<{ ok: boolean }>
     onStatus: (handler: (progress: AutopilotProgress) => void) => () => void
     onLog: (handler: (log: AutopilotLogEntry) => void) => () => void
-    scanVideoFolders?: (folders: string[]) => Promise<any>
+    scanVideoFolders?: (rootVideo: string) => Promise<any>
     getVideoPoolStats?: () => Promise<any>
     clearVideoPool?: () => Promise<any>
   }
@@ -922,9 +911,6 @@ export interface IPCAPI {
   app: {
     getVersion: () => Promise<string>
     checkUpdate?: () => Promise<{ updateAvailable: boolean; version?: string }>
-    installUpdate?: () => Promise<{ ok: boolean; error?: string }>
-    getUpdateChannel?: () => Promise<{ ok: boolean; channel: 'stable' | 'beta' }>
-    setUpdateChannel?: (channel: string) => Promise<{ ok: boolean; error?: string }>
   }
   policy: {
     get: () => Promise<VersionPolicy>
@@ -1014,22 +1000,22 @@ export interface IPCAPI {
     onUpdate: (handler: (job: JobInfo) => void) => () => void
   }
   songNhac: {
-    readAudioFile: (filePath: string) => Promise<Uint8Array>
-    decodeAudioForTimeline: (filePath: string) => Promise<{ buffer: Uint8Array; sampleRate: number; duration: number; realFileDurationSec?: number }>
-    listAudioInFolder: (folderPath: string) => Promise<{ path: string; fileName: string }[]>
-    exportVideo: (config: { width: number; height: number; fps: number; durationSec: number; audioFileUrl?: string; outputPath?: string; forceCpuEncoder?: boolean }) => Promise<{ ok: boolean; outPath?: string; error?: string; suggestedRetryWithCpu?: boolean; retryConfig?: Record<string, unknown> }>
-    cancelExport: (jobId: string) => Promise<{ ok: boolean }>
-    onExportStarted: (callback: (payload: { jobId: string }) => void) => () => void
-    onExportProgress: (callback: (frameIndex: number, totalFrames: number) => void) => () => void
+    readAudioFile: (filePath: string) => Promise<{ ok: boolean; buffer?: Buffer; error?: string }>
+    decodeAudioForTimeline: (filePath: string) => Promise<{ ok: boolean; info?: any; error?: string }>
+    listAudioInFolder: (folderPath: string) => Promise<{ name: string; path: string }[]>
+    exportVideo: (config: { width: number; height: number; fps: number; durationSec: number; audioFileUrl?: string; outputPath?: string; forceCpuEncoder?: boolean }) => Promise<{ ok: boolean; outputPath?: string; code?: number; error?: string }>
+    cancelExport: (jobId?: string) => Promise<{ ok: boolean }>
+    onExportStarted: (callback: (payload: any) => void) => () => void
+    onExportProgress: (callback: (data: any) => void) => () => void
     onExportCancel: (callback: () => void) => () => void
-    onExportConfig: (callback: (config: unknown) => void) => () => void
+    onExportConfig: (callback: (config: any) => void) => () => void
     sendExportReady: () => void
-    sendExportConfigAck: (jobId: string) => void
-    sendExportFrame: (payload: { jobId: string; frameIndex: number; width: number; height: number; buffer: ArrayBuffer }) => void
-    sendExportProgress: (payload: { jobId: string; frameIndex: number; totalFrames: number }) => void
-    sendExportDone: (payload?: { ok?: boolean; error?: string; framesWritten?: number }) => void
-    sendExportEnd?: () => void
-    getAudioDuration?: (filePath: string) => Promise<number>
+    sendExportConfigAck: (config: any) => void
+    sendExportFrame: (frameData: { jobId: string; buffer: ArrayBuffer }) => void
+    sendExportProgress: (progress: any) => void
+    sendExportDone: (result?: any) => void
+    sendExportEnd?: (jobId: string) => void
+    getAudioDuration?: (filePath: string) => Promise<{ ok: boolean; duration?: number; error?: string }>
   }
   videoSeoApply: (payload: any) => Promise<any>
   readFileAsBase64?: (filePath: string) => Promise<{ ok: boolean; base64?: string; mime?: string; error?: string }>

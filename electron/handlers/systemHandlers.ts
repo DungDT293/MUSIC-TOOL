@@ -153,10 +153,14 @@ export function registerSystemHandlers(mainWindow: Electron.BrowserWindow | null
 
   // Dialog handlers
   ipcMain.handle('dialog:openFile', async (_event, options: any) => {
+    const validProps = ['openFile', 'multiSelections', 'openDirectory'] as const
+    const properties = Array.isArray(options?.properties)
+      ? options.properties.filter((p: string) => validProps.includes(p as any))
+      : ['openFile']
     const result = await dialog.showOpenDialog({
       title: options?.title,
       filters: options?.filters,
-      properties: ['openFile'],
+      properties: properties.length > 0 ? properties : ['openFile'],
     })
     return { canceled: result.canceled, filePaths: result.filePaths }
   })

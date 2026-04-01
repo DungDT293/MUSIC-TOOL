@@ -83,6 +83,16 @@ function PreviewPlaylistPage() {
   // Helper: convert file path → blob URL (avoids CSP file:// restriction)
   const blobUrlCache = useRef<Map<string, string>>(new Map())
 
+  // Cleanup blob URLs on unmount to prevent memory leak
+  useEffect(() => {
+    return () => {
+      for (const url of blobUrlCache.current.values()) {
+        URL.revokeObjectURL(url)
+      }
+      blobUrlCache.current.clear()
+    }
+  }, [])
+
   async function getFileUrl(filePath: string): Promise<string> {
     try {
       if (!filePath) return ''

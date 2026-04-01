@@ -1,6 +1,7 @@
 node_modules
 dist
 dist-electron
+dist-electron-output
 out
 release
 *.pak
@@ -20,7 +21,32 @@ resources/*.asar.unpacked
 bin/*.exe
 bin/*.dll
 
+# Compiled artifacts — tsc output không nên track
+vite.config.js
+vite.config.d.ts
+vite-plugin-obfuscate.js
+vite-plugin-obfuscate.d.ts
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+
+# Wrangler local state
+server/.wrangler/
+
 # Env files với secrets — KHÔNG commit
 .env
 .env.*
 !.env.*.example
+
+# Vite cache
+.vite/
+
+# Test output
+test-results/
+playwright-report/
+coverage/
+
+# Electron build output
+icudtl.dat
+LICENSE.electron.txt
+LICENSES.chromium.html
