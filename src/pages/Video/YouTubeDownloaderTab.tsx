@@ -505,7 +505,7 @@ export function YouTubeDownloaderTab() {
 
   // Check yt-dlp version on mount
   useEffect(() => {
-    const w = window as any;
+    const w = window;
     if (w.api?.youtube?.verify) {
       w.api.youtube.verify().then((res: any) => {
         if (res?.success && res.available) {
@@ -516,7 +516,7 @@ export function YouTubeDownloaderTab() {
   }, []);
 
   const handleUpdateYtDlp = async () => {
-    const w = window as any;
+    const w = window;
     if (!w.api?.youtube?.updateYtDlp) {
       setYtDlpUpdateMsg('API không khả dụng.');
       return;

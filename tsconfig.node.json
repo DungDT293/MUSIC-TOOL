@@ -1,6 +1,5 @@
 {
   "compilerOptions": {
-    "composite": true,
     "skipLibCheck": true,
     "module": "ESNext",
     "moduleResolution": "bundler",
@@ -30,15 +29,7 @@
     "dist",
     "dist-electron",
     "backend/video_backup",
-    "backend/video_backup/**",
-    "**/*Turbo*.ts",
-    "**/turboIO.ts",
-    "**/videoFFmpegRunner.ts",
-    "**/ramAcceleration.ts",
-    "**/detectDiskType.ts",
-    "**/cutSingleTurbo.ts",
-    "**/mergeVideosTurbo.ts",
-    "**/splitManyTurbo.ts"
+    "backend/video_backup/**"
   ]
 }
 

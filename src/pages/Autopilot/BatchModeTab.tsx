@@ -106,7 +106,7 @@ export default function BatchModeTab() {
 
   // Subscribe autopilot progress + logs
   useEffect(() => {
-    const w = window as any
+    const w = window
     if (!w.api?.autopilot) return
 
     let statusUnsub: (() => void) | undefined
@@ -216,7 +216,7 @@ export default function BatchModeTab() {
   }
 
   const handleSelectFolder = async (batchId: string, field: keyof BatchGenre) => {
-    const w = window as any
+    const w = window
     if (!w.api?.selectFolder) return
     try {
       const selected: string | null = await w.api.selectFolder()
@@ -237,7 +237,7 @@ export default function BatchModeTab() {
 
   // Chạy batch lần lượt
   const runBatch = async () => {
-    const w = window as any
+    const w = window
     if (!w.api?.autopilot?.start) {
       addLog('error', 'Autopilot backend chưa sẵn sàng.')
       return
@@ -349,7 +349,7 @@ export default function BatchModeTab() {
   }
 
   const handleCancel = async () => {
-    const w = window as any
+    const w = window
     // Đánh dấu cancel ngay lập tức — loop sẽ dừng ở iteration tiếp theo
     batchCancelledRef.current = true
     addLog('warn', 'Đang dừng Batch Mode...')
@@ -602,7 +602,7 @@ export default function BatchModeTab() {
                         setScanningBatchId(batch.id)
                         setScanResults(prev => ({ ...prev, [batch.id]: null }))
                         try {
-                          const w = window as any
+                          const w = window
                           const result = await w.api?.autopilot?.scanVideoFolders?.(batch.rootVideo)
                           setScanResults(prev => ({ ...prev, [batch.id]: result }))
                         } catch {

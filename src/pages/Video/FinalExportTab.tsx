@@ -136,14 +136,14 @@ function FinalExportTab() {
   const [showPresets, setShowPresets] = useState(false)
 
   const loadPresets = async () => {
-    const w = window as any
+    const w = window
     if (!w.api?.preset?.list) return
     const res = await w.api.preset.list()
     if (res?.success) setPresets(res.presets ?? [])
   }
 
   const handleSavePreset = async () => {
-    const w = window as any
+    const w = window
     if (!w.api?.preset?.save) return
     const name = presetName.trim() || `Preset ${new Date().toLocaleString('vi-VN')}`
     const settings = {
@@ -168,7 +168,7 @@ function FinalExportTab() {
   }
 
   const handleDeletePreset = async (id: string) => {
-    const w = window as any
+    const w = window
     if (!w.api?.preset?.delete) return
     await w.api.preset.delete(id)
     loadPresets()

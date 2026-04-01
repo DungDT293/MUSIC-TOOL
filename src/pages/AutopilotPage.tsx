@@ -404,7 +404,7 @@ export function DayPlanDetailDialog({
   }
 
   const handleLoadPriorityTracks = async () => {
-    const w = window as any
+    const w = window
     if (!w.api?.scanMusicFolders) {
       setPriorityError('Không gọi được backend scanMusicFolders. Vui lòng thử lại sau.')
       return
@@ -1051,7 +1051,7 @@ function FoldersAndSourcesSection({ foldersConfig, onChange, videoSelectionInfo 
   }, [foldersConfig.rootVideo])
 
   const handleScanVideos = async () => {
-    const w = window as any
+    const w = window
     if (!w.api?.autopilot?.scanVideoFolders) return
     if (!foldersConfig.rootVideo || foldersConfig.rootVideo.trim().length === 0) return
     setIsScanning(true)
@@ -1083,7 +1083,7 @@ function FoldersAndSourcesSection({ foldersConfig, onChange, videoSelectionInfo 
     : ''
 
   const handleChooseFolder = async (key: 'rootAudio' | 'rootVideo' | 'rootFinal') => {
-    const w = window as any
+    const w = window
 
     // Ưu tiên dùng dialog chọn thư mục của hệ điều hành nếu có
     if (w.api?.selectFolder) {
@@ -1115,7 +1115,7 @@ function FoldersAndSourcesSection({ foldersConfig, onChange, videoSelectionInfo 
   }
 
   const handleChooseMusicFolder = async (key: 'priorityMusicFolder' | 'randomMusicFolder') => {
-    const w = window as any
+    const w = window
 
     if (w.api?.selectFolder) {
       try {
@@ -1217,7 +1217,7 @@ function FoldersAndSourcesSection({ foldersConfig, onChange, videoSelectionInfo 
               label="Thư mục video ưu tiên (tùy chọn)"
               value={foldersConfig.priorityVideoFolder || ''}
               onChoose={async () => {
-                const w = window as any
+                const w = window
                 if (w.api?.selectFolder) {
                   try {
                     const selected: string | null = await w.api.selectFolder()
@@ -1665,7 +1665,7 @@ function AutopilotControlSection({
           type="button"
           disabled={!config.folders.rootFinal}
           onClick={async () => {
-            const w = window as any
+            const w = window
             const root = config.folders.rootFinal
             if (!root) {
               // eslint-disable-next-line no-alert
@@ -1918,7 +1918,7 @@ function AutopilotPageLegacy() {
 
   // Đồng bộ tiến trình với backend Autopilot
   useEffect(() => {
-    const w = window as any
+    const w = window
     if (!w.api?.autopilot) return
 
     let unsub: (() => void) | undefined
@@ -2054,7 +2054,7 @@ function AutopilotPageLegacy() {
   }, [dayPlans, foldersConfig])
 
   const simulateStartAutopilot = () => {
-    const w = window as any
+    const w = window
     if (!w.api?.autopilot?.start) {
       // eslint-disable-next-line no-alert
       alert('Autopilot backend chưa sẵn sàng (window.api.autopilot.start không tồn tại).')
@@ -2135,7 +2135,7 @@ function AutopilotPageLegacy() {
   }, [isResizingPanels])
 
   const handleCancel = () => {
-    const w = window as any
+    const w = window
     if (w.api?.autopilot?.cancel) {
       w.api.autopilot
         .cancel()

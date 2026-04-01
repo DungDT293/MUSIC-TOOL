@@ -248,7 +248,8 @@ export function registerSystemHandlers(mainWindow: Electron.BrowserWindow | null
   // Video file listing helpers
   const VIDEO_EXTS = new Set(['.mp4', '.mkv', '.mov', '.m4v', '.avi', '.wmv', '.webm'])
 
-  ipcMain.handle('video:listVideosInFolder', async (_event, folderPath: string) => {
+  // listVideosInFolder: redirect tới cùng handler với listVideosInFolderSimple (logic giống hệt)
+  const listVideoHandler = async (_event: Electron.IpcMainInvokeEvent, folderPath: string) => {
     try {
       if (!isValidAbsolutePath(folderPath)) return []
       const entries = fs.readdirSync(folderPath, { withFileTypes: true })
@@ -267,28 +268,9 @@ export function registerSystemHandlers(mainWindow: Electron.BrowserWindow | null
       console.error('[IPC] video:listVideosInFolder error', err)
       return []
     }
-  })
-
-  ipcMain.handle('video:listVideosInFolderSimple', async (_event, folderPath: string) => {
-    try {
-      if (!isValidAbsolutePath(folderPath)) return []
-      const entries = fs.readdirSync(folderPath, { withFileTypes: true })
-      const files: Array<{ path: string; fileName: string; sizeBytes: number }> = []
-      for (const entry of entries) {
-        if (!entry.isFile()) continue
-        const ext = path.extname(entry.name).toLowerCase()
-        if (!VIDEO_EXTS.has(ext)) continue
-        const full = path.join(folderPath, entry.name)
-        let sizeBytes = 0
-        try { sizeBytes = fs.statSync(full).size } catch {}
-        files.push({ path: full, fileName: entry.name, sizeBytes })
-      }
-      return files
-    } catch (err) {
-      console.error('[IPC] video:listVideosInFolderSimple error', err)
-      return []
-    }
-  })
+  }
+  ipcMain.handle('video:listVideosInFolder', listVideoHandler)
+  ipcMain.handle('video:listVideosInFolderSimple', listVideoHandler)
 
   ipcMain.handle('video:ultraFastScanFolder', async (_event, folderPath: string) => {
     try {

@@ -736,7 +736,7 @@ export interface IPCAPI {
       action?: 'SUSPICIOUS' | 'BLOCKED'
       tamperCount?: number
     }>
-    refreshToken: () => Promise<{
+    refreshToken?: () => Promise<{
       ok: boolean
       device_token?: string
       refresh_token?: string
@@ -748,10 +748,10 @@ export interface IPCAPI {
     }>
   }
   music: {
-    scan: (payload: any) => Promise<any>
-    createPlaylist: (payload: any) => Promise<any>
-    preview: (payload: any) => Promise<any>
-    export: (payload: any) => Promise<any>
+    scan?: (payload: any) => Promise<any>
+    createPlaylist?: (payload: any) => Promise<any>
+    preview?: (payload: any) => Promise<any>
+    export?: (payload: any) => Promise<any>
     validatePlaylistsForCrossfade: (
       payload: ValidatePlaylistsForCrossfadeRequest
     ) => Promise<ValidatePlaylistsForCrossfadeResult>
@@ -792,10 +792,14 @@ export interface IPCAPI {
       deletedCount: number
       error?: string
     }>
+    enhanceAudio?: (req: any) => Promise<any>
+    cancelEnhanceAudio?: () => Promise<any>
+    renderLoudnormPreview?: (opts: any) => Promise<any>
+    onEnhanceProgress?: (handler: (p: any) => void) => () => void
   }
   video: {
-    cutSingle: (payload: any) => Promise<any>
-    cutBatch: (payload: any) => Promise<any>
+    cutSingle?: (payload: any) => Promise<any>
+    cutBatch?: (payload: any) => Promise<any>
     /** @deprecated Use videoMergeSimple instead */
     merge?: (payload: any) => Promise<any>
     /** @deprecated Use videoFinalExport.start instead */
@@ -916,12 +920,19 @@ export interface IPCAPI {
     cancel: () => Promise<{ ok: boolean }>
     onStatus: (handler: (progress: AutopilotProgress) => void) => () => void
     onLog: (handler: (log: AutopilotLogEntry) => void) => () => void
+    scanVideoFolders?: (folders: string[]) => Promise<any>
+    getVideoPoolStats?: () => Promise<any>
+    clearVideoPool?: () => Promise<any>
   }
   security?: {
     reportAntiDebug: (details: { method: string; detected: boolean }) => Promise<{ ok: boolean }>
   }
   app: {
     getVersion: () => Promise<string>
+    checkUpdate?: () => Promise<{ updateAvailable: boolean; version?: string }>
+    installUpdate?: () => Promise<{ ok: boolean; error?: string }>
+    getUpdateChannel?: () => Promise<{ ok: boolean; channel: 'stable' | 'beta' }>
+    setUpdateChannel?: (channel: string) => Promise<{ ok: boolean; error?: string }>
   }
   policy: {
     get: () => Promise<VersionPolicy>
@@ -1000,6 +1011,9 @@ export interface IPCAPI {
     onBatchProgress: (callback: (progress: YouTubeBatchDownloadProgress) => void) => () => void
     removeProgressListener: () => void
     removeBatchProgressListener: () => void
+    updateYtDlp?: () => Promise<any>
+    onAutoUpdated?: (handler: (info: any) => void) => () => void
+    onAgeWarning?: (handler: (info: any) => void) => () => void
   }
   jobQueue: {
     list: () => Promise<JobInfo[]>
@@ -1022,27 +1036,32 @@ export interface IPCAPI {
     sendExportFrame: (payload: { jobId: string; frameIndex: number; width: number; height: number; buffer: ArrayBuffer }) => void
     sendExportProgress: (payload: { jobId: string; frameIndex: number; totalFrames: number }) => void
     sendExportDone: (payload?: { ok?: boolean; error?: string; framesWritten?: number }) => void
+    sendExportEnd?: () => void
+    getAudioDuration?: (filePath: string) => Promise<number>
   }
   videoSeoApply: (payload: any) => Promise<any>
-  saveBytesAsFile: (req: SaveBytesAsFileRequest) => Promise<string>
-  convertWebmToMp4: (req: ConvertWebmToMp4Request) => Promise<string>
-  logToTerminal: (...args: any[]) => Promise<boolean>
+  saveBytesAsFile?: (req: SaveBytesAsFileRequest) => Promise<string>
+  convertWebmToMp4?: (req: ConvertWebmToMp4Request) => Promise<string>
+  logToTerminal?: (...args: any[]) => Promise<boolean>
   // PHASE 2: Canvas Export
-  canvasExportToVideo: (req: {
-    scene: any // Using any to avoid complex import for now, or use actual type
+  canvasExportToVideo?: (req: {
+    scene: any
     outputPath: string
   }) => Promise<{ success: boolean; outputPath: string }>
-  onCanvasExportProgress: (callback: (progress: any) => void) => () => void
-  muxAudioWithVideo: (req: {
+  onCanvasExportProgress?: (callback: (progress: any) => void) => () => void
+  muxAudioWithVideo?: (req: {
     videoBytes: Uint8Array
     audioPath: string
     outputPath: string
   }) => Promise<{ success: boolean; filePath: string; error?: string }>
-  readFile: (filePath: string) => Promise<Uint8Array>
+  readFile?: (filePath: string) => Promise<Uint8Array>
+  readFileAsBase64?: (filePath: string) => Promise<{ ok: boolean; base64?: string; mime?: string; error?: string }>
   // General IPC helpers for offscreen renderer
-  send: (channel: string, ...args: any[]) => void
-  on: (channel: string, callback: (...args: any[]) => void) => () => void
-  invoke: (channel: string, ...args: any[]) => Promise<any>
+  send?: (channel: string, ...args: any[]) => void
+  on?: (channel: string, callback: (...args: any[]) => void) => () => void
+  invoke?: (channel: string, ...args: any[]) => Promise<any>
+  // Validate playlists for crossfade (top-level convenience)
+  validatePlaylistsForCrossfade?: (playlistIds: string[]) => Promise<ValidatePlaylistsForCrossfadeResult>
 }
 
 declare global {
