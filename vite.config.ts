@@ -10,10 +10,10 @@ export default defineConfig({
       rollupOptions: {
         input: path.resolve(__dirname, 'electron/main.ts'),
       },
-      minify: 'terser', // Minify code
+      minify: 'terser',
       terserOptions: {
         compress: {
-          drop_console: false, // Giữ console để debug
+          drop_console: true, // Xóa console.* trong production
           drop_debugger: true,
         },
       },
@@ -27,7 +27,7 @@ export default defineConfig({
       minify: 'terser',
       terserOptions: {
         compress: {
-          drop_console: false,
+          drop_console: true,
           drop_debugger: true,
         },
       },
@@ -44,7 +44,7 @@ export default defineConfig({
       minify: 'terser',
       terserOptions: {
         compress: {
-          drop_console: false,
+          drop_console: true,
           drop_debugger: true,
         },
       },
