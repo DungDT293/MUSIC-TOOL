@@ -21,6 +21,6 @@ bin/*.exe
 bin/*.dll
 
 # Env files với secrets — KHÔNG commit
-.env.local
-.env.production
-.env.production.local
+.env
+.env.*
+!.env.*.example

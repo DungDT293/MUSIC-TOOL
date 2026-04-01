@@ -140,7 +140,7 @@ export default function BatchModeTab() {
       if (statusUnsub) statusUnsub()
       if (logUnsub) logUnsub()
     }
-  }, [currentRunIndex])
+  }, [])  // Dùng currentRunIndexRef.current trong closure để tránh stale — không cần re-subscribe khi đổi batch
 
   const handleAddBatch = () => {
     const b = createDefaultBatch()

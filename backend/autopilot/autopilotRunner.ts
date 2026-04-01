@@ -178,9 +178,9 @@ function ensureLogDir() {
   }
 }
 
-function rotateLogsIfNeeded(basePath: string) {
+async function rotateLogsIfNeeded(basePath: string) {
   try {
-    const stat = fs.statSync(basePath)
+    const stat = await fsp.stat(basePath)
     if (stat.size < MAX_LOG_SIZE_BYTES) return
   } catch {
     return
@@ -191,8 +191,8 @@ function rotateLogsIfNeeded(basePath: string) {
     const src = i === 1 ? basePath : `${basePath}.${i - 1}`
     const dst = `${basePath}.${i}`
     try {
-      if (fs.existsSync(dst)) fs.unlinkSync(dst)
-      if (fs.existsSync(src)) fs.renameSync(src, dst)
+      await fsp.unlink(dst).catch(() => {})
+      await fsp.rename(src, dst).catch(() => {})
     } catch (err) {
       console.warn('[Autopilot] rotateLogsIfNeeded rename error:', err)
     }
@@ -202,13 +202,11 @@ function rotateLogsIfNeeded(basePath: string) {
 function appendLogToFile(entry: { timestamp: string; level: 'info' | 'warn' | 'error'; message: string }) {
   ensureLogDir()
   const basePath = path.join(LOG_DIR, `${LOG_FILE_PREFIX}.log`)
-  rotateLogsIfNeeded(basePath)
   const line = `${entry.timestamp} [${entry.level.toUpperCase()}] ${entry.message}\n`
-  try {
-    fs.appendFileSync(basePath, line, 'utf-8')
-  } catch (err) {
-    console.warn('[Autopilot] Ghi log file thất bại:', err)
-  }
+  // Dùng async I/O để không block main process / IPC event loop
+  rotateLogsIfNeeded(basePath)
+    .then(() => fsp.appendFile(basePath, line, 'utf-8'))
+    .catch(err => console.warn('[Autopilot] Ghi log file thất bại:', err))
 }
 
 function emitLog(level: 'info' | 'warn' | 'error', message: string) {
@@ -1762,10 +1760,8 @@ export async function startAutopilot(config: AutopilotConfig): Promise<void> {
     if (finalStatus === 'running' || finalStatus === 'cancelling') {
       currentProgress.status = 'idle'
     }
-    if (finalStatus === 'error' || finalStatus === 'cancelling') {
-      progressListener = null
-      logListener = null
-    }
+    // Không null hoá listener khi error/cancel — listener được register 1 lần từ main.ts
+    // Nếu null hoá, batch tiếp theo sẽ không gửi được event nào về UI → freeze hoàn toàn
   }
 }
 

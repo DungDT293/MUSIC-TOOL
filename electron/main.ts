@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, shell, dialog } from 'electron'
 import path from 'node:path'
 import fs from 'node:fs'
+import fsp from 'node:fs/promises'
 import { getFfmpegPaths } from '../backend/ffmpeg/config'
 import { runFfprobe } from '../backend/ffmpeg/wrapper'
 // Lazy import probeFile để tránh lỗi khi load module
@@ -2546,29 +2547,34 @@ function registerIpcHandlers() {
       totalFiles: 0,
       folders: [],
     }
+    // Dùng async walk để không block main process / IPC event loop
+    const walkAsync = async (dir: string): Promise<number> => {
+      let count = 0
+      try {
+        const entries = await fsp.readdir(dir, { withFileTypes: true })
+        await Promise.all(entries.map(async (entry) => {
+          const fullPath = path.join(dir, entry.name)
+          try {
+            if (entry.isDirectory()) {
+              count += await walkAsync(fullPath)
+            } else if (entry.isFile()) {
+              const ext = path.extname(entry.name).toLowerCase()
+              if (VIDEO_EXTENSIONS.has(ext)) count++
+            }
+          } catch { /* skip unreadable entries */ }
+        }))
+      } catch { /* skip unreadable dirs */ }
+      return count
+    }
+
     for (const folder of folders) {
-      if (!fs.existsSync(folder)) {
+      try {
+        await fsp.access(folder)
+      } catch {
         result.folders.push({ folder, count: 0 })
         continue
       }
-      let count = 0
-      const walk = (dir: string) => {
-        try {
-          const entries = fs.readdirSync(dir, { withFileTypes: true })
-          for (const entry of entries) {
-            const fullPath = path.join(dir, entry.name)
-            try {
-              if (entry.isDirectory()) {
-                walk(fullPath)
-              } else if (entry.isFile()) {
-                const ext = path.extname(entry.name).toLowerCase()
-                if (VIDEO_EXTENSIONS.has(ext)) count++
-              }
-            } catch { /* skip unreadable entries */ }
-          }
-        } catch { /* skip unreadable dirs */ }
-      }
-      walk(folder)
+      const count = await walkAsync(folder)
       result.folders.push({ folder, count })
       result.totalFiles += count
     }

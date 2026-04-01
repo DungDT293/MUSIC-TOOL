@@ -4,17 +4,24 @@ import { readStoredTicket, writeStoredTicket, clearStoredTicket } from './ticket
 import { getDecryptedString } from '../security/stringEncryption'
 import { createSignedHeaders } from '../security/apiSigning'
 
-// Fallback về plaintext nếu encryption fail
-// ⚠️ SECURITY: Ưu tiên process.env.LICENSE_INSTALLER_KEY (set tại build/deploy time).
-// Chỉ dùng getDecryptedString() làm fallback cuối cùng khi không có env var.
+// Ưu tiên process.env (inject tại CI/build time).
+// Nếu không có env var → throw để phát hiện sớm khi thiếu cấu hình.
+// Xem .env.production.example để biết các biến cần set.
 let DEFAULT_BASE: string
 let DEFAULT_INSTALLER_KEY: string
 try {
   DEFAULT_BASE = process.env.LICENSE_SERVER_BASE || getDecryptedString('LICENSE_BASE')
-  DEFAULT_INSTALLER_KEY = process.env.LICENSE_INSTALLER_KEY || getDecryptedString('INSTALLER_KEY')
-} catch {
+  if (!process.env.LICENSE_INSTALLER_KEY) {
+    throw new Error('LICENSE_INSTALLER_KEY env var is required. Xem .env.production.example')
+  }
+  DEFAULT_INSTALLER_KEY = process.env.LICENSE_INSTALLER_KEY
+} catch (err) {
+  // Chỉ fallback URL public (không nhạy cảm), KHÔNG fallback secret key
   DEFAULT_BASE = 'https://license-server.dungdong333.workers.dev'
-  DEFAULT_INSTALLER_KEY = 'Ins$2025!LEONYG'
+  DEFAULT_INSTALLER_KEY = process.env.LICENSE_INSTALLER_KEY ?? ''
+  if (!DEFAULT_INSTALLER_KEY) {
+    console.error('[License] FATAL: LICENSE_INSTALLER_KEY chưa được set. App sẽ không thể xác thực license.')
+  }
 }
 
 const API_BASE = process.env.LICENSE_SERVER_BASE ?? DEFAULT_BASE

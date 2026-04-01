@@ -43,18 +43,19 @@ export function decryptString(encrypted: string): string {
  * Format: { key: encrypted_value }
  *
  * ⚠️ SECURITY NOTE: Đây là obfuscation, KHÔNG phải encryption thực sự.
- * KEY derivation và ciphertext đều nằm trong cùng bundle → attacker
- * có thể decrypt. Dùng process.env (inject tại CI/build) cho production secrets.
- * File này chỉ là fallback khi env var không có.
+ * Secrets thực (INSTALLER_KEY, INSTALLER_SECRET) PHẢI được inject qua
+ * process.env tại CI/build time. Các giá trị dưới đây CHỈ là URL public
+ * và fallback không nhạy cảm.
+ *
+ * Set trong CI/CD:
+ *   LICENSE_INSTALLER_KEY=<secret>
+ *   LICENSE_INSTALLER_SECRET=<secret>
+ *   LICENSE_SERVER_BASE=<url>  (tuỳ chọn)
  */
 const ENCRYPTED_STRINGS: Record<string, string> = {
-  // API URLs
+  // API URLs (public, không nhạy cảm)
   AUTH_BASE: encryptString('https://license-server.dungdong333.workers.dev'),
   LICENSE_BASE: encryptString('https://license-server.dungdong333.workers.dev'),
-  
-  // Secrets (sẽ được encrypt trong production)
-  INSTALLER_SECRET: encryptString('2025LEONYG280722'),
-  INSTALLER_KEY: encryptString('Ins$2025!LEONYG'),
 }
 
 /**
@@ -87,5 +88,3 @@ export class StringEncryptor {
     return decryptString(encrypted)
   }
 }
-
-
