@@ -3,7 +3,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { runFfmpeg } from '../ffmpeg/wrapper'
 import { getPlaylistById, type PlaylistDefinition, type PlaylistTrack } from './playlistEngine'
-import { loadScanResult, type ScannedTrack } from './scanStore'
+import { loadScanResult } from './scanStore'
 import {
   checkMinimumSpace,
   createDiskSpaceErrorMessage,
@@ -465,11 +465,21 @@ export async function exportPlaylistToFile(
       const inputLabels: string[] = []
       
       // Đảm bảo tất cả các bài được decode đầy đủ (không trim)
+      // FIX: Bài cuối cùng cần split=2 vì stream [N-1:a] đã bị asetpts tiêu thụ,
+      // không thể dùng lại [N-1:a] trong atrim ở bước sau — gây lỗi FFmpeg silent/short output.
       for (let i = 0; i < playlist.tracks.length; i++) {
         const label = `a${i}`
         inputLabels.push(`[${label}]`)
-        // Không trim, để nguyên toàn bộ bài để đảm bảo bài cuối được phát hết
-        filterLines.push(`[${i}:a]asetpts=PTS-STARTPTS[${label}]`)
+        const isLastAndNeedsAtrim =
+          i === playlist.tracks.length - 1 &&
+          totalTracks > 1 &&
+          (playlist.tracks[i]?.duration ?? 0) > crossfadeDurationSec
+        if (isLastAndNeedsAtrim) {
+          // asplit tạo 2 bản: [label] cho acrossfade, [last_track_raw] cho atrim tail
+          filterLines.push(`[${i}:a]asetpts=PTS-STARTPTS,asplit=2[${label}][last_track_raw]`)
+        } else {
+          filterLines.push(`[${i}:a]asetpts=PTS-STARTPTS[${label}]`)
+        }
       }
 
       // Crossfade các bài với nhau
@@ -531,11 +541,11 @@ export async function exportPlaylistToFile(
       if (totalTracks > 1 && lastTrackDuration > crossfadeDurationSec) {
         const lastTrackRemainingLabel = 'last_track_remaining'
         const remainingStartSec = crossfadeDurationSec
-        
-        // Lấy phần còn lại của bài cuối (từ crossfadeDurationSec đến hết)
-        // Đảm bảo reset PTS để tránh gap khi concat
+
+        // FIX: dùng [last_track_raw] (từ asplit=2 ở trên) thay vì [N-1:a] đã bị tiêu thụ rồi.
+        // Dùng [last_track_raw]atrim... thay vì [${totalTracks-1}:a]atrim...
         filterLines.push(
-          `[${totalTracks - 1}:a]atrim=start=${remainingStartSec.toFixed(3)},asetpts=PTS-STARTPTS[${lastTrackRemainingLabel}]`
+          `[last_track_raw]atrim=start=${remainingStartSec.toFixed(3)},asetpts=PTS-STARTPTS[${lastTrackRemainingLabel}]`
         )
         
         // Concat phần crossfade với phần còn lại của bài cuối
@@ -763,10 +773,20 @@ export async function exportPlaylistToFile(
           })
           
           // Tạo labels cho batch
+          // FIX: Bài cuối của batch cuối cùng cần asplit=2 vì [N-1:a] bị asetpts tiêu thụ,
+          // không thể dùng lại [N-1:a] trong atrim (gây lỗi FFmpeg silent/wrong output).
+          const isLastBatch = batchIdx === batches.length - 1
+          const lastBatchTrackDuration = batch[batch.length - 1]?.duration ?? 0
+          const lastBatchNeedsAtrim = isLastBatch && batch.length > 1 && lastBatchTrackDuration > crossfadeDurationSec
           for (let i = 0; i < batch.length; i++) {
             const label = `a${i}`
             batchInputLabels.push(`[${label}]`)
-            batchFilterLines.push(`[${i}:a]asetpts=PTS-STARTPTS[${label}]`)
+            if (lastBatchNeedsAtrim && i === batch.length - 1) {
+              // asplit=2: [label] → acrossfade, [batch_last_raw] → atrim tail
+              batchFilterLines.push(`[${i}:a]asetpts=PTS-STARTPTS,asplit=2[${label}][batch_last_raw]`)
+            } else {
+              batchFilterLines.push(`[${i}:a]asetpts=PTS-STARTPTS[${label}]`)
+            }
           }
           
           // Crossfade trong batch
@@ -796,20 +816,17 @@ export async function exportPlaylistToFile(
           
           // Xử lý bài cuối của batch (nếu không phải batch cuối cùng, không cần xử lý đặc biệt)
           // Nếu là batch cuối cùng, cần đảm bảo bài cuối phát hết
-          if (batchIdx === batches.length - 1) {
-            const lastTrackInBatch = batch[batch.length - 1]
-            const lastTrackDuration = lastTrackInBatch?.duration || 0
-            
-            if (lastTrackDuration > crossfadeDurationSec) {
-              const lastTrackRemainingLabel = 'batch_last_remaining'
-              batchFilterLines.push(
-                `[${batchTrackCount - 1}:a]atrim=start=${crossfadeDurationSec.toFixed(3)},asetpts=PTS-STARTPTS[${lastTrackRemainingLabel}]`
-              )
-              batchFilterLines.push(
-                `[batchout][${lastTrackRemainingLabel}]concat=n=2:v=0:a=1[batchfinal]`
-              )
-              batchLastLabel = '[batchfinal]'
-            }
+          // FIX: dùng [batch_last_raw] (từ asplit=2 ở trên) thay vì [N-1:a] đã bị tiêu thụ.
+          // lastBatchNeedsAtrim đã được tính sẵn khi tạo label ở trên.
+          if (lastBatchNeedsAtrim) {
+            const lastTrackRemainingLabel = 'batch_last_remaining'
+            batchFilterLines.push(
+              `[batch_last_raw]atrim=start=${crossfadeDurationSec.toFixed(3)},asetpts=PTS-STARTPTS[${lastTrackRemainingLabel}]`
+            )
+            batchFilterLines.push(
+              `[batchout][${lastTrackRemainingLabel}]concat=n=2:v=0:a=1[batchfinal]`
+            )
+            batchLastLabel = '[batchfinal]'
           }
           
           const batchFilterComplex = batchFilterLines.join(';')
