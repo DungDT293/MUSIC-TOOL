@@ -174,10 +174,12 @@ async function runConcat(
     const args = retryCount > 0
       ? [
           '-v', 'error',
+          '-fflags', '+genpts',
           '-f', 'concat',
           '-safe', '0',
           '-i', concatListPath,
           '-c', 'copy',
+          '-avoid_negative_ts', 'make_zero',
           ...(mute ? ['-an'] : []),
           '-y',
           outputPath,
@@ -185,10 +187,12 @@ async function runConcat(
       : [
           '-v', 'error',
           '-stats',
+          '-fflags', '+genpts',
           '-f', 'concat',
           '-safe', '0',
           '-i', concatListPath,
           '-c', 'copy',
+          '-avoid_negative_ts', 'make_zero',
           ...(mute ? ['-an'] : []),
           '-y',
           outputPath,
@@ -431,11 +435,13 @@ async function runConcatWithCut(
     const args = retryCount > 0
       ? [
           '-v', 'error',
+          '-fflags', '+genpts',
           '-f', 'concat',
           '-safe', '0',
           '-i', concatListPath,
           '-t', String(targetDurationSec),
           '-c', 'copy',
+          '-avoid_negative_ts', 'make_zero',
           ...(mute ? ['-an'] : []),
           '-y',
           outputPath,
@@ -443,11 +449,13 @@ async function runConcatWithCut(
       : [
           '-v', 'error',
           '-stats',
+          '-fflags', '+genpts',
           '-f', 'concat',
           '-safe', '0',
           '-i', concatListPath,
           '-t', String(targetDurationSec),
           '-c', 'copy',
+          '-avoid_negative_ts', 'make_zero',
           ...(mute ? ['-an'] : []),
           '-y',
           outputPath,
@@ -917,8 +925,9 @@ async function fallbackTranscodeAndConcat(
           return arg
         })
 
-        // When normalizeVfFilter is provided, use it; otherwise default normalize (fix SAR + fps)
-        const vfFilter = normalizeVfFilter || 'scale=iw:ih,setsar=1,fps=30,format=yuv420p'
+        // When normalizeVfFilter is provided, use it; otherwise default normalize (fix SAR + format only)
+        // Không hardcode fps=30 — giữ nguyên fps gốc của clip để tránh timestamp mismatch khi concat
+        const vfFilter = normalizeVfFilter || 'scale=iw:ih,setsar=1,format=yuv420p'
         const args = [
           '-hide_banner',
           '-y',

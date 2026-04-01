@@ -91,7 +91,9 @@ export interface ExportPlan {
 }
 
 function escapePathForFfmpegList(filePath: string): string {
-  return filePath.replace(/'/g, `'\\''`)
+  // Normalize backslash Windows → forward slash trước (FFmpeg concat demuxer yêu cầu)
+  const normalized = filePath.replace(/\\/g, '/')
+  return normalized.replace(/'/g, "\\'")
 }
 
 function sanitizeFilename(name: string): string {
@@ -1187,8 +1189,8 @@ async function runFinalCommand(opts: RunFinalCommandOptions): Promise<void> {
       'error',
       '-stats',
       // Regenerate PTS from DTS when concat clips have discontinuous/invalid timestamps.
-      // This prevents black frames, tearing, and frozen frames at scene transitions.
-      '-fflags', '+genpts',
+      // +igndts: bỏ qua DTS không hợp lệ (clip reset PTS về 0) để tránh freeze frame tại điểm chuyển clip.
+      '-fflags', '+genpts+igndts',
       '-f',
       'concat',
       '-safe',
