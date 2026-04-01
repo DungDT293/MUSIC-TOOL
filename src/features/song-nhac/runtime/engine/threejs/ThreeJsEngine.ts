@@ -12,13 +12,41 @@
  * so it can be swapped in via EngineHost.
  */
 
-import * as THREE from 'three'
-import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js'
-import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
-import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
-import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
+// Three.js và postprocessing được lazy-load khi engine thực sự được khởi tạo
+// để tránh bundle ~800KB cho tất cả user dù không chọn ThreeJS engine
+import type * as THREEType from 'three'
+import type { EffectComposer as EffectComposerType } from 'three/examples/jsm/postprocessing/EffectComposer.js'
+import type { UnrealBloomPass as UnrealBloomPassType } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
 import { AudioSmoother } from './audioSmoothing'
 import type { Size, EngineRenderFrame } from '../types'
+
+// Cache để tránh re-import nhiều lần
+let _THREE: typeof THREEType | null = null
+let _EffectComposer: typeof EffectComposerType | null = null
+
+async function getThree() {
+  if (!_THREE) {
+    _THREE = await import('three')
+  }
+  return _THREE
+}
+
+async function getPostprocessing() {
+  const [THREE, ecMod, rpMod, ubpMod, opMod] = await Promise.all([
+    getThree(),
+    import('three/examples/jsm/postprocessing/EffectComposer.js'),
+    import('three/examples/jsm/postprocessing/RenderPass.js'),
+    import('three/examples/jsm/postprocessing/UnrealBloomPass.js'),
+    import('three/examples/jsm/postprocessing/OutputPass.js'),
+  ])
+  return {
+    THREE,
+    EffectComposer: ecMod.EffectComposer,
+    RenderPass: rpMod.RenderPass,
+    UnrealBloomPass: ubpMod.UnrealBloomPass,
+    OutputPass: opMod.OutputPass,
+  }
+}
 
 // Inline GLSL shaders (avoids vite-plugin-glsl compatibility issues with electron-vite)
 const barVertShader = /* glsl */ `
@@ -78,16 +106,16 @@ export interface ThreeJsEngineConfig {
 }
 
 export class ThreeJsEngine {
-  private renderer: THREE.WebGLRenderer | null = null
-  private scene: THREE.Scene | null = null
-  private camera: THREE.OrthographicCamera | null = null
-  private composer: EffectComposer | null = null
-  private bloomPass: UnrealBloomPass | null = null
+  private renderer: THREEType.WebGLRenderer | null = null
+  private scene: THREEType.Scene | null = null
+  private camera: THREEType.OrthographicCamera | null = null
+  private composer: EffectComposerType | null = null
+  private bloomPass: UnrealBloomPassType | null = null
 
   // Bars
-  private barMesh: THREE.InstancedMesh | null = null
+  private barMesh: THREEType.InstancedMesh | null = null
   private barCount: number
-  private dummy = new THREE.Object3D()
+  private dummy: THREEType.Object3D | null = null  // lazy-init khi THREE được load
   private barHeights: Float32Array
 
   // Audio processing
@@ -114,9 +142,15 @@ export class ThreeJsEngine {
    * Initialize with the "webgl" canvas from CanvasHost.
    * Called once; canvas must NOT be used by any other WebGL context.
    */
-  initWithCanvas(canvas: HTMLCanvasElement, size: Size): void {
+  async initWithCanvas(canvas: HTMLCanvasElement, size: Size): Promise<void> {
     if (this.inited) return
     this.size = size
+
+    // Lazy-load Three.js và postprocessing (tránh bundle 800KB khi không dùng engine này)
+    const { THREE, EffectComposer, RenderPass, UnrealBloomPass, OutputPass } = await getPostprocessing()
+
+    // Khởi tạo dummy Object3D sau khi THREE đã load
+    this.dummy = new THREE.Object3D()
 
     // === Renderer ===
     this.renderer = new THREE.WebGLRenderer({
@@ -272,7 +306,7 @@ export class ThreeJsEngine {
     const bands = this.smoother.getBandEnergies()
 
     // 4. Update shader uniforms
-    const mat = this.barMesh.material as THREE.ShaderMaterial
+    const mat = this.barMesh.material as THREEType.ShaderMaterial
     mat.uniforms.uTime!.value = frame.timeSec
     mat.uniforms.uBass!.value = bands.bass
     mat.uniforms.uMid!.value = bands.mid
@@ -401,7 +435,7 @@ export class ThreeJsEngine {
   destroy(): void {
     if (this.barMesh) {
       this.barMesh.geometry.dispose()
-      ;(this.barMesh.material as THREE.ShaderMaterial).dispose()
+      ;(this.barMesh.material as THREEType.ShaderMaterial).dispose()
       this.barMesh = null
     }
     if (this.freqTexture) {

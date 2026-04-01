@@ -5,12 +5,13 @@
 
 import { ipcMain, dialog, shell, BrowserWindow } from 'electron'
 import path from 'node:path'
+import fs from 'node:fs'
 import { getSystemInfo } from '../../backend/system/sysinfo'
 import { getRealtimeStats } from '../../backend/system/realtime'
 import { getDiskInfo, type DiskInfoSummary } from '../../backend/system/diskInfo'
 import { getDiskSpace, checkMinimumSpace, formatBytes } from '../../backend/utils/diskSpace'
 import { jobQueue } from '../../backend/jobQueue/jobQueue'
-import { getVideoFileInfo } from '../../backend/video/videoInfo'
+import { getVideoFileInfo, type VideoFileInfo } from '../../backend/video/videoInfo'
 import { isValidAbsolutePath } from '../authState'
 
 // Lazy import probeFile
@@ -115,7 +116,6 @@ export function registerSystemHandlers(mainWindow: Electron.BrowserWindow | null
   // Create directory
   ipcMain.handle('system:createDirectory', async (_event, dirPath: string) => {
     try {
-      const fs = await import('node:fs')
       await fs.promises.mkdir(dirPath, { recursive: true })
       return { success: true }
     } catch (error: any) {
@@ -126,7 +126,6 @@ export function registerSystemHandlers(mainWindow: Electron.BrowserWindow | null
   // Read file as base64
   ipcMain.handle('system:readFileAsBase64', async (_event, filePath: string) => {
     try {
-      const fs = await import('node:fs')
       if (!fs.existsSync(filePath)) return { ok: false, error: 'File not found' }
       const buffer = fs.readFileSync(filePath)
       const ext = path.extname(filePath).toLowerCase().slice(1)
@@ -252,15 +251,13 @@ export function registerSystemHandlers(mainWindow: Electron.BrowserWindow | null
   ipcMain.handle('video:listVideosInFolder', async (_event, folderPath: string) => {
     try {
       if (!isValidAbsolutePath(folderPath)) return []
-      const fs = await import('node:fs')
-      const pathMod = await import('node:path')
       const entries = fs.readdirSync(folderPath, { withFileTypes: true })
       const files: Array<{ path: string; fileName: string; sizeBytes: number }> = []
       for (const entry of entries) {
         if (!entry.isFile()) continue
-        const ext = pathMod.extname(entry.name).toLowerCase()
+        const ext = path.extname(entry.name).toLowerCase()
         if (!VIDEO_EXTS.has(ext)) continue
-        const full = pathMod.join(folderPath, entry.name)
+        const full = path.join(folderPath, entry.name)
         let sizeBytes = 0
         try { sizeBytes = fs.statSync(full).size } catch {}
         files.push({ path: full, fileName: entry.name, sizeBytes })
@@ -275,15 +272,13 @@ export function registerSystemHandlers(mainWindow: Electron.BrowserWindow | null
   ipcMain.handle('video:listVideosInFolderSimple', async (_event, folderPath: string) => {
     try {
       if (!isValidAbsolutePath(folderPath)) return []
-      const fs = await import('node:fs')
-      const pathMod = await import('node:path')
       const entries = fs.readdirSync(folderPath, { withFileTypes: true })
       const files: Array<{ path: string; fileName: string; sizeBytes: number }> = []
       for (const entry of entries) {
         if (!entry.isFile()) continue
-        const ext = pathMod.extname(entry.name).toLowerCase()
+        const ext = path.extname(entry.name).toLowerCase()
         if (!VIDEO_EXTS.has(ext)) continue
-        const full = pathMod.join(folderPath, entry.name)
+        const full = path.join(folderPath, entry.name)
         let sizeBytes = 0
         try { sizeBytes = fs.statSync(full).size } catch {}
         files.push({ path: full, fileName: entry.name, sizeBytes })
@@ -298,19 +293,17 @@ export function registerSystemHandlers(mainWindow: Electron.BrowserWindow | null
   ipcMain.handle('video:ultraFastScanFolder', async (_event, folderPath: string) => {
     try {
       if (!isValidAbsolutePath(folderPath)) return []
-      const fs = await import('node:fs')
-      const pathMod = await import('node:path')
       const files: Array<{ path: string; fileName: string; sizeBytes: number; mtimeMs: number }> = []
 
       const scanDir = (dir: string) => {
         try {
           const entries = fs.readdirSync(dir, { withFileTypes: true })
           for (const entry of entries) {
-            const fullPath = pathMod.join(dir, entry.name)
+            const fullPath = path.join(dir, entry.name)
             if (entry.isDirectory()) {
               scanDir(fullPath)
             } else if (entry.isFile()) {
-              const ext = pathMod.extname(entry.name).toLowerCase()
+              const ext = path.extname(entry.name).toLowerCase()
               if (VIDEO_EXTS.has(ext)) {
                 try {
                   const stats = fs.statSync(fullPath)
@@ -333,27 +326,93 @@ export function registerSystemHandlers(mainWindow: Electron.BrowserWindow | null
   ipcMain.handle('video:batchLazyProbe', async (_event, paths: string[], concurrency: number = 5) => {
     try {
       const validPaths = Array.isArray(paths) ? paths.filter(isValidAbsolutePath) : []
-      const limit = Math.min(concurrency, validPaths.length)
-      const results: Record<string, any> = {}
-      const chunks: string[][] = []
-      for (let i = 0; i < validPaths.length; i += limit) {
-        chunks.push(validPaths.slice(i, i + limit))
-      }
-      for (const chunk of chunks) {
-        await Promise.all(
-          chunk.map(async (p) => {
-            try {
-              results[p] = await getVideoFileInfo(p)
-            } catch (err) {
-              console.warn('[batchLazyProbe] Failed to probe', p, err)
-            }
-          })
-        )
-      }
+      const results: Record<string, VideoFileInfo | null> = {}
+      const queue = [...validPaths]
+      const workers = Array.from({ length: Math.min(concurrency, queue.length || 1) }, async () => {
+        while (queue.length > 0) {
+          const p = queue.shift()
+          if (!p) break
+          try {
+            results[p] = await getVideoFileInfo(p)
+          } catch (err) {
+            console.warn('[batchLazyProbe] Failed to probe', p, err)
+            results[p] = null
+          }
+        }
+      })
+      await Promise.all(workers)
       return results
     } catch (err) {
       console.error('[IPC] video:batchLazyProbe error', err)
       return {}
     }
+  })
+
+  // ─── Video Audit & Delete ─────────────────────────────────────────────────
+  ipcMain.handle('video:auditFolder', async (_event, filePaths: string[]) => {
+    try {
+      const paths = Array.isArray(filePaths) ? filePaths.filter(isValidAbsolutePath) : []
+      const valid: Array<VideoFileInfo & { path: string }> = []
+      const invalid: string[] = []
+
+      // Concurrent probe với limit = 8
+      const queue = [...paths]
+      const workers = Array.from({ length: Math.min(8, queue.length || 1) }, async () => {
+        while (queue.length > 0) {
+          const p = queue.shift()
+          if (!p) break
+          try {
+            const info = await getVideoFileInfo(p)
+            if (info.durationSec && info.durationSec > 0) {
+              valid.push({ ...info, path: p })
+            } else {
+              invalid.push(p)
+            }
+          } catch {
+            invalid.push(p)
+          }
+        }
+      })
+      await Promise.all(workers)
+
+      return { valid, invalid }
+    } catch (err) {
+      console.error('[IPC] video:auditFolder error', err)
+      return { valid: [], invalid: [] }
+    }
+  })
+
+  ipcMain.handle('video:deleteFiles', async (_event, filePaths: string[], rootDir: string) => {
+    let deleted = 0
+    const errors: Array<{ path: string; message: string }> = []
+
+    const safeRoot = rootDir && isValidAbsolutePath(rootDir) ? path.resolve(rootDir) : null
+    const pathsToDelete = Array.isArray(filePaths) ? filePaths : []
+
+    for (const fp of pathsToDelete) {
+      // Validate mỗi path riêng biệt (không dùng optional chaining để bỏ qua)
+      if (!isValidAbsolutePath(fp)) {
+        errors.push({ path: fp, message: 'Đường dẫn không hợp lệ' })
+        continue
+      }
+
+      // Nếu rootDir được cung cấp, đảm bảo file nằm trong rootDir
+      if (safeRoot) {
+        const resolved = path.resolve(fp)
+        if (!resolved.startsWith(safeRoot + path.sep) && resolved !== safeRoot) {
+          errors.push({ path: fp, message: 'File nằm ngoài thư mục cho phép' })
+          continue
+        }
+      }
+
+      try {
+        await fs.promises.unlink(fp)
+        deleted++
+      } catch (err: any) {
+        errors.push({ path: fp, message: err?.message || String(err) })
+      }
+    }
+
+    return { deleted, errors }
   })
 }

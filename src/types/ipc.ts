@@ -91,45 +91,8 @@ export interface AuthLoginPayload {
   remember: boolean
 }
 
-export interface MusicScanPayload {
-  // TODO: define payload structure
-  [key: string]: any
-}
-
-export interface MusicCreatePlaylistPayload {
-  // TODO: define payload structure
-  [key: string]: any
-}
-
-export interface MusicPreviewPayload {
-  // TODO: define payload structure
-  [key: string]: any
-}
-
-export interface MusicExportPayload {
-  // TODO: define payload structure
-  [key: string]: any
-}
-
-export interface VideoCutSinglePayload {
-  // TODO: define payload structure
-  [key: string]: any
-}
-
-export interface VideoCutBatchPayload {
-  // TODO: define payload structure
-  [key: string]: any
-}
-
-export interface VideoMergePayload {
-  // TODO: define payload structure
-  [key: string]: any
-}
-
-export interface VideoFinalExportPayload {
-  // TODO: define payload structure
-  [key: string]: any
-}
+// Stub payload interfaces (MusicScanPayload, MusicCreatePlaylistPayload, etc.) đã xóa
+// vì chưa bao giờ được dùng trong codebase (chỉ có TODO: define payload structure)
 
 export interface ProbeResult {
   path: string
@@ -547,70 +510,7 @@ export interface SplitManySimpleResult {
   }>
 }
 
-// Turbo Engine interfaces
-export interface CutSingleTurboRequest {
-  inputPath: string
-  outputDir: string
-  segmentLengthSec: number
-  format?: 'mp4' | 'mkv'
-  keepCodec?: boolean
-}
-
-export interface CutSingleTurboResult {
-  requestId: string
-  outputFiles: string[]
-  totalDurationSec: number
-  segmentCount: number
-  success: boolean
-  error?: string
-  accelerationMode: 'NONE' | 'SSD' | 'TEMP_SSD' | 'RAM'
-  diskType: 'SSD' | 'HDD' | 'UNKNOWN'
-}
-
-export interface SplitManyTurboRequest {
-  inputPaths: string[]
-  outputBaseDir: string
-  segmentLengthSec: number
-  format?: 'mp4' | 'mkv'
-  maxConcurrency?: number
-}
-
-export interface SplitManyTurboResult {
-  requestId: string
-  totalVideos: number
-  successCount: number
-  failCount: number
-  results: Array<{
-    inputPath: string
-    outputDir: string
-    outputFiles: string[]
-    success: boolean
-    error?: string
-    accelerationMode: 'NONE' | 'SSD' | 'TEMP_SSD' | 'RAM'
-    diskType: 'SSD' | 'HDD' | 'UNKNOWN'
-  }>
-  overallAccelerationMode: 'NONE' | 'SSD' | 'TEMP_SSD' | 'RAM'
-  overallDiskType: 'SSD' | 'HDD' | 'UNKNOWN'
-}
-
-export interface MergeVideosTurboRequest {
-  inputFiles: string[]
-  outputDir: string
-  outputFileName: string
-  shuffle?: boolean
-  mute?: boolean
-  targetDurationSec?: number | null
-}
-
-export interface MergeVideosTurboResult {
-  requestId: string
-  outputPath: string
-  totalDurationSec: number
-  success: boolean
-  error?: string
-  accelerationMode: 'NONE' | 'SSD' | 'TEMP_SSD'
-  diskType: 'SSD' | 'HDD' | 'UNKNOWN'
-}
+// Turbo Engine interfaces — ĐÃ XÓA (handlers không còn tồn tại, backend/video_backup/ đã bị xóa)
 
 export interface MergeVideosSimpleRequest {
   inputFiles: string[]
@@ -984,29 +884,9 @@ export interface IPCAPI {
     failed: number
     usedGpu: boolean
   }>
-  videoNormalizeVideo: (req: {
-    inputFiles: string[]
-    outputDir: string
-    useGpu?: boolean
-    requestId?: string
-    targetResolution?: string
-    targetFps?: string
-  }) => Promise<{
-    requestId: string
-    outputPaths: string[]
-    success: boolean
-    error?: string
-    processed: number
-    failed: number
-    usedGpu: boolean
-  }>
+  // videoNormalizeVideo: alias đã xóa — dùng videoNormalize thay thế
   videoGetActiveNormalizeJobId: () => Promise<string | null>
-  // Turbo Engine APIs
-  detectDiskType: (filePath: string) => Promise<'SSD' | 'HDD' | 'UNKNOWN'>
-  videoGetDiskInfo: (filePath: string) => Promise<DiskInfo>
-  videoCutSingleTurbo: (req: CutSingleTurboRequest) => Promise<CutSingleTurboResult>
-  videoSplitManyTurbo: (req: SplitManyTurboRequest) => Promise<SplitManyTurboResult>
-  videoMergeTurbo: (req: MergeVideosTurboRequest) => Promise<MergeVideosTurboResult>
+  // Turbo Engine APIs đã bị xóa — handlers không còn tồn tại
   videoCancelJob: (requestId: string) => Promise<{ success: boolean; error?: string }>
   onVideoProgress: (
     handler: (payload: VideoProgressPayload) => void

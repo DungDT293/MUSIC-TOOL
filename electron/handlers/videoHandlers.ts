@@ -6,6 +6,9 @@
 
 import { ipcMain } from 'electron'
 import { randomUUID } from 'crypto'
+import fs from 'node:fs'
+import path from 'node:path'
+import { createHash } from 'node:crypto'
 import { getVideoFileInfo } from '../../backend/video/videoInfo'
 import { cutVideoIntoSegmentsSimple, type CutSingleSimpleRequest } from '../../backend/video/cutSingleSimple'
 import { splitManyVideosSimple, type SplitManySimpleRequest } from '../../backend/video/splitManySimple'
@@ -289,8 +292,6 @@ export function registerVideoHandlers() {
   ipcMain.handle('video:pool-mark-used', async (_event, filePaths: string[]) => {
     try {
       const { generateClipId, markClipsUsed } = await import('../../backend/autopilot/videoPool')
-      const fs = await import('fs')
-      const path = await import('path')
       const clipIds: string[] = []
       for (const fp of filePaths) {
         try {
@@ -300,8 +301,7 @@ export function registerVideoHandlers() {
         } catch {}
       }
       const dateCode = new Date().toISOString().slice(0, 10).replace(/-/g, '')
-      const crypto = await import('crypto')
-      const fingerprint = crypto.createHash('sha256').update(clipIds.join(',')).digest('hex').slice(0, 16)
+      const fingerprint = createHash('sha256').update(clipIds.join(',')).digest('hex').slice(0, 16)
       markClipsUsed(clipIds, dateCode, fingerprint)
       return { ok: true, marked: clipIds.length }
     } catch (err: any) {
@@ -313,8 +313,6 @@ export function registerVideoHandlers() {
   ipcMain.handle('video:pool-pick-lru', async (_event, folderPath: string, count: number) => {
     try {
       const { pickClipsLRU } = await import('../../backend/autopilot/videoPool')
-      const fs = await import('fs')
-      const path = await import('path')
       const VIDEO_EXTS = new Set(['.mp4', '.mkv', '.mov', '.avi', '.webm', '.m4v'])
       const files = fs.readdirSync(folderPath)
         .filter(f => VIDEO_EXTS.has(path.extname(f).toLowerCase()))

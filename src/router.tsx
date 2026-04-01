@@ -7,7 +7,7 @@ import ExportAudioPage from './pages/Music/ExportAudioPage'
 import SongNhacPage from './pages/Music/SongNhacPage'
 import VideoToolsPage from './pages/Video/VideoToolsPage'
 import CutMergeVideoPage from './pages/Video/CutMergeVideoPage'
-import FinalExportPage from './pages/Video/FinalExportPage'
+import FinalExportTab from './pages/Video/FinalExportTab'
 import YouTubeDownloaderTab from './pages/Video/YouTubeDownloaderTab'
 import EnhanceAudioPage from './pages/Music/EnhanceAudioPage'
 import { HIDE_FEATURE_AUTOPILOT } from './config/featureFlags'
@@ -40,7 +40,7 @@ const KEEP_ALIVE_PAGES: KeepAlivePage[] = [
   { path: '/music/song-nhac', component: SongNhacPage },
   { path: '/video/tools', component: VideoToolsPage },
   { path: '/video/cut-merge', component: CutMergeVideoPage },
-  { path: '/video/final-export', component: FinalExportPage },
+  { path: '/video/final-export', component: FinalExportTab },
   { path: '/video/youtube-downloader', component: YouTubeDownloaderTab },
   { path: '/music/enhance', component: EnhanceAudioPage },
   ...(!HIDE_FEATURE_AUTOPILOT ? [{ path: '/autopilot', component: AutopilotPage }] : []),

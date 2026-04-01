@@ -6,7 +6,14 @@
  * Audio-reactive: điều khiển speed/scale/color theo FFT data.
  */
 
-import * as THREE from 'three'
+// THREE lazy-loaded khi effect được khởi tạo
+// Vanta cần THREE object nhưng chỉ khi user thực sự chọn Vanta engine
+let _THREE: any = null
+async function getThree() {
+  if (!_THREE) _THREE = await import('three')
+  return _THREE
+}
+
 import type { Size, EngineRenderFrame, WebGLVisualizerEngine } from '../types'
 
 export type VantaEffect =
@@ -122,7 +129,8 @@ export class VantaEngine implements WebGLVisualizerEngine {
         return
       }
 
-      const vantaMod = await importFn()
+      // Lazy-load THREE và vanta effect song song
+      const [THREE, vantaMod] = await Promise.all([getThree(), importFn()])
       if (this.destroyed) return
 
       const VantaFn = vantaMod.default || vantaMod

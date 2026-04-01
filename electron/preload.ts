@@ -100,7 +100,7 @@ const api: IPCAPI = {
   listPlaylists: () => ipcRenderer.invoke('music:listPlaylists'),
   getMusicPoolStats: (trackIds: string[]) => ipcRenderer.invoke('music:getPoolStats', trackIds),
   clearMusicPool: () => ipcRenderer.invoke('music:clearPool'),
-  getExportHistory: () => ipcRenderer.invoke('music:getExportHistory'),
+  // getExportHistory: xóa top-level duplicate — dùng api.music.getExportHistory() thay thế
   exportPlaylist: (req: any) => ipcRenderer.invoke('music:exportPlaylist', req),
   // Fix P1-03: top-level validatePlaylistsForCrossfade đồng bộ với music.validatePlaylistsForCrossfade
   // Wrap playlistIds array thành object { playlistIds } mà handler mong đợi
@@ -124,12 +124,14 @@ const api: IPCAPI = {
   videoMuteAudio: (req: any) => ipcRenderer.invoke('video:muteAudio', req),
   videoGetActiveMuteJobId: () => ipcRenderer.invoke('video:getActiveMuteJobId') as Promise<string | null>,
   videoNormalize: (req: any) => ipcRenderer.invoke('video:normalize', req),
-  videoNormalizeVideo: (req: any) => ipcRenderer.invoke('video:normalize', req),
+  // videoNormalizeVideo: alias xóa (trùng với videoNormalize)
   videoGetActiveNormalizeJobId: () => ipcRenderer.invoke('video:getActiveNormalizeJobId') as Promise<string | null>,
   listVideosInFolder: (dir: string) => ipcRenderer.invoke('video:listVideosInFolder', dir),
   listVideosInFolderSimple: (dir: string) => ipcRenderer.invoke('video:listVideosInFolderSimple', dir),
   ultraFastScanFolder: (folderPath: string) => ipcRenderer.invoke('video:ultraFastScanFolder', folderPath),
   batchLazyProbe: (paths: string[], concurrency?: number) => ipcRenderer.invoke('video:batchLazyProbe', paths, concurrency),
+  videoAuditFolder: (paths: string[]) => ipcRenderer.invoke('video:auditFolder', paths),
+  videoDeleteFiles: (paths: string[], rootDir: string) => ipcRenderer.invoke('video:deleteFiles', paths, rootDir),
   createDirectory: (dirPath: string) => ipcRenderer.invoke('system:createDirectory', dirPath),
   openPath: (pathToOpen: string) => ipcRenderer.invoke('system:openPath', pathToOpen),
   videoFinalExport: {
