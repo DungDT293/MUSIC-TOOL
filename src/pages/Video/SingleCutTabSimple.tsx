@@ -90,7 +90,7 @@ function SingleCutTabSimple() {
 
     let cancelled = false
     setLoadingVideoInfo(true)
-    ;(window as any).api
+    ;window.api
       .videoGetFileInfo(inputVideoPath)
       .then((info: VideoFileInfo) => {
         if (!cancelled) {
@@ -113,7 +113,7 @@ function SingleCutTabSimple() {
 
     const restoreRunningJob = async () => {
       try {
-        const jobs = await (window as any).api.jobQueue.list()
+        const jobs = await window.api.jobQueue.list()
         const runningJob = jobs.find(
           (job: any) =>
             job.type === 'video:cut-single' &&
@@ -155,7 +155,7 @@ function SingleCutTabSimple() {
       return
     }
 
-    const unsubscribe = (window as any).api.onVideoProgress((payload: any) => {
+    const unsubscribe = window.api.onVideoProgress((payload: any) => {
       // Nếu có currentRequestId thì match, nếu chưa có thì accept tất cả single-cut events
       if (payload.mode === 'single-cut') {
         // Nếu có requestId và match, hoặc chưa có currentRequestId thì accept
@@ -205,14 +205,14 @@ function SingleCutTabSimple() {
   }, [inputVideoPath, outputDir])
 
   const handleSelectVideo = async () => {
-    const path = await (window as any).api.selectVideoFile()
+    const path = await window.api.selectVideoFile()
     if (path) {
       setInputVideoPath(path)
     }
   }
 
   const handleSelectFolder = async () => {
-    const path = await (window as any).api.selectFolder()
+    const path = await window.api.selectFolder()
     if (path) {
       setOutputDir(path)
     }
@@ -257,7 +257,7 @@ function SingleCutTabSimple() {
       }
 
       console.log('[SingleCut] Starting cut with request:', req)
-      const result: CutSingleSimpleResult = await (window as any).api.videoCutSingleSimple(req)
+      const result: CutSingleSimpleResult = await window.api.videoCutSingleSimple(req)
       console.log('[SingleCut] Cut completed with result:', result)
       // Set requestId từ result (fallback nếu progress event không có)
       if (!currentRequestId) {
@@ -274,9 +274,9 @@ function SingleCutTabSimple() {
       setErrorMessage(err?.message || 'Lỗi không xác định')
     } finally {
       setIsProcessing(false)
-      if ((window as any).api?.refreshDiskInfo) {
+      if (window.api?.refreshDiskInfo) {
         try {
-          await (window as any).api.refreshDiskInfo()
+          await window.api.refreshDiskInfo()
         } catch (err) {
           console.error('[SingleCut] refreshDiskInfo error:', err)
         }
@@ -289,7 +289,7 @@ function SingleCutTabSimple() {
   const handleCancel = async () => {
     if (!currentRequestId) return
     try {
-      await (window as any).api.videoCancelJob(currentRequestId)
+      await window.api.videoCancelJob(currentRequestId)
       setIsProcessing(false)
       setCurrentRequestId(null)
       setCurrentProgress(null)
@@ -555,7 +555,7 @@ function SingleCutTabSimple() {
         )}
         {successData && (
           <button
-            onClick={() => (window as any).api.openPath(outputDir)}
+            onClick={() => window.api.openPath(outputDir)}
             style={{
               padding: '12px 24px',
               backgroundColor: '#2d2d2d',

@@ -32,7 +32,7 @@ function AuditFilesTab() {
   const [deleteDone, setDeleteDone] = useState<{ deleted: number; errors: Array<{ path: string; message: string }> } | null>(null)
 
   const handleSelectFolder = async () => {
-    const api = (window as any).api  // MED-13 fix: access api inside callback, not at render scope
+    const api = window.api  // MED-13 fix: access api inside callback, not at render scope
     setErrorMessage(null)
     setResult(null)
     setShowDeleteDialog(false)
@@ -48,7 +48,7 @@ function AuditFilesTab() {
   }
 
   const handleScan = async () => {
-    const api = (window as any).api  // MED-13 fix: access api inside callback
+    const api = window.api  // MED-13 fix: access api inside callback
     if (!folderPath) {
       setErrorMessage('Vui lòng chọn thư mục video đã chuẩn hóa.')
       return
@@ -99,7 +99,7 @@ function AuditFilesTab() {
   }
 
   const handleConfirmDelete = async () => {
-    const api = (window as any).api  // MED-13 fix: access api inside callback
+    const api = window.api  // MED-13 fix: access api inside callback
     if (!result?.invalid?.length || deleteInProgress) return
     setDeleteInProgress(true)
     try {

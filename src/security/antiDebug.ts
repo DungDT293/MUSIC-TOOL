@@ -101,8 +101,8 @@ export function antiDebugLoop(): () => void {
       console.warn('[Security] Debugger detected')
       try {
         // Report qua IPC (renderer không thể gọi trực tiếp)
-        if ((window as any).api?.security?.reportAntiDebug) {
-          await (window as any).api.security.reportAntiDebug({
+        if (window.api?.security?.reportAntiDebug) {
+          await window.api.security.reportAntiDebug({
             method: 'timing_anomaly',
             detected: true,
           })

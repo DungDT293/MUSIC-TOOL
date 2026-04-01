@@ -116,7 +116,7 @@ function MergeTab() {
 
     const restoreRunningJob = async () => {
       try {
-        const activeMergeId = await (window as any).api.videoGetActiveMergeJobId?.()
+        const activeMergeId = await window.api.videoGetActiveMergeJobId?.()
         if (mounted && activeMergeId) {
           console.log('[MergeTab] Found running merge job, restoring state:', activeMergeId)
           setCurrentRequestId(activeMergeId)
@@ -140,7 +140,7 @@ function MergeTab() {
 
   // Subscribe to progress events
   useEffect(() => {
-    const unsubscribe = (window as any).api.onVideoProgress((payload: any) => {
+    const unsubscribe = window.api.onVideoProgress((payload: any) => {
       if (payload?.mode !== 'merge') return
       
       // Set requestId từ progress event nếu chưa có
@@ -197,7 +197,7 @@ function MergeTab() {
     setErrorMessage(null)
     setSuccessData(null)
     try {
-      const paths: string[] | null = await (window as any).api.selectManyVideos?.()
+      const paths: string[] | null = await window.api.selectManyVideos?.()
       if (!paths || !paths.length) return
 
       const existingPaths = new Set(videoItems.map((v) => v.path))
@@ -217,7 +217,7 @@ function MergeTab() {
         
         runLimited(itemsForInfo, 8, async (item) => {
           try {
-            const info = await (window as any).api.videoGetFileInfo(item.path)
+            const info = await window.api.videoGetFileInfo(item.path)
             const durationSec = info?.durationSec
             
             if (typeof durationSec === 'number' && durationSec > 0) {
@@ -244,14 +244,14 @@ function MergeTab() {
     setErrorMessage(null)
     setSuccessData(null)
     try {
-      const folder = await (window as any).api.selectFolder()
+      const folder = await window.api.selectFolder()
       if (!folder) {
         console.log('[MergeTab] No folder selected')
         return
       }
 
       console.log('[MergeTab] Selected folder:', folder)
-      const files = (await (window as any).api.listVideosInFolderSimple?.(folder)) || []
+      const files = (await window.api.listVideosInFolderSimple?.(folder)) || []
       console.log('[MergeTab] Found files:', files.length, files)
       
       if (files.length === 0) {
@@ -279,7 +279,7 @@ function MergeTab() {
         
         runLimited(itemsForInfo, 8, async (item) => {
           try {
-            const info = await (window as any).api.videoGetFileInfo(item.path)
+            const info = await window.api.videoGetFileInfo(item.path)
             const durationSec = info?.durationSec
             
             if (typeof durationSec === 'number' && durationSec > 0) {
@@ -309,12 +309,12 @@ function MergeTab() {
     setSuccessData(null)
 
     try {
-      const folder = await (window as any).api.selectFolder()
+      const folder = await window.api.selectFolder()
       if (!folder) return
 
       setPriorityFolder(folder)
 
-      const files = (await (window as any).api.listVideosInFolderSimple?.(folder)) || []
+      const files = (await window.api.listVideosInFolderSimple?.(folder)) || []
       if (!files.length) {
         setErrorMessage('Không tìm thấy video nào trong thư mục ưu tiên.')
         setPriorityVideoPaths([])
@@ -364,7 +364,7 @@ function MergeTab() {
     setSuccessData(null)
 
     try {
-      const paths: string[] | null = await (window as any).api.selectManyVideos?.()
+      const paths: string[] | null = await window.api.selectManyVideos?.()
       if (!paths || !paths.length) return
 
       // Set priority video paths directly
@@ -421,10 +421,10 @@ function MergeTab() {
         folder = firstPath.replace(/[/\\][^/\\]+$/, '') // dirname
       } else {
         // Chưa có video → mới hỏi thư mục
-        folder = await (window as any).api.selectFolder()
+        folder = await window.api.selectFolder()
       }
       if (!folder) return
-      const result = await (window as any).api.videoPoolPickLRU?.(folder, 200)
+      const result = await window.api.videoPoolPickLRU?.(folder, 200)
       if (!result?.ok) {
         setErrorMessage('Không thể truy vấn pool video.')
         return
@@ -450,14 +450,14 @@ function MergeTab() {
   }
 
   const handleSelectOutputDir = async () => {
-    const dir = await (window as any).api.selectFolder()
+    const dir = await window.api.selectFolder()
     if (dir) setOutputDir(dir)
   }
 
   const handleCancel = async () => {
     if (!currentRequestId) return
     try {
-      await (window as any).api.videoCancelJob(currentRequestId)
+      await window.api.videoCancelJob(currentRequestId)
       setIsProcessing(false)
       setCurrentRequestId(null)
       setCurrentProgress(null)
@@ -553,7 +553,7 @@ function MergeTab() {
         targetDurationSec: req.targetDurationSec,
       })
 
-      const result: MergeVideosSimpleResult = await (window as any).api.videoMergeSimple(req)
+      const result: MergeVideosSimpleResult = await window.api.videoMergeSimple(req)
       
       // Set requestId ngay khi nhận được từ result
       if (result.requestId) {
@@ -562,7 +562,7 @@ function MergeTab() {
 
       if (result.success) {
         // Mark all input clips as used in pool so Autopilot avoids repeating them
-        ;(window as any).api.videoPoolMarkUsed?.(orderedInputFiles).catch(() => {})
+        ;window.api.videoPoolMarkUsed?.(orderedInputFiles).catch(() => {})
         setSuccessData(result)
         setStatusText('Hoàn tất')
         // Delay để user thấy 100% trước khi reset progress
@@ -593,9 +593,9 @@ function MergeTab() {
       setCurrentProgress(null) // Reset progress bar khi có exception
       setCurrentRequestId(null) // Clear requestId
     } finally {
-      if ((window as any).api?.refreshDiskInfo) {
+      if (window.api?.refreshDiskInfo) {
         try {
-          await (window as any).api.refreshDiskInfo()
+          await window.api.refreshDiskInfo()
         } catch (err) {
           console.error('[MergeTab] refreshDiskInfo error:', err)
         }
@@ -1245,7 +1245,7 @@ function MergeTab() {
         )}
         {successData && (
           <button
-            onClick={() => (window as any).api.openPath(outputDir)}
+            onClick={() => window.api.openPath(outputDir)}
             style={{
               padding: '12px 24px',
               backgroundColor: '#2d2d2d',

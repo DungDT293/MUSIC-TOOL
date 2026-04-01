@@ -48,7 +48,7 @@ function App() {
 
   // Version policy gating (Rule A/B/C) - FIX: Only listen to main process event, no manual check
   useEffect(() => {
-    const api = (window as any).api
+    const api = window.api
     if (!api) {
       setCurrentVersion('unknown')
       // Nếu không có api, cho phép app chạy thay vì kẹt mãi
@@ -100,7 +100,7 @@ function App() {
 
   // Listen for load errors from main process via IPC
   useEffect(() => {
-    const api = (window as any).api
+    const api = window.api
     if (!api?.on) return
     const unsub = api.on('app:load-error', (payload: { code: string; description: string; url?: string }) => {
       setLoadError(payload)
@@ -112,15 +112,15 @@ function App() {
     let cancelled = false
     const checkAuth = async () => {
       try {
-        if (typeof window === 'undefined' || !(window as any).api?.auth?.getState) {
+        if (typeof window === 'undefined' || !window.api?.auth?.getState) {
           setIsAuthenticated(false)
           return
         }
 
         // V2: Try auto-login with token first
-        if ((window as any).api?.auth?.validateToken) {
+        if (window.api?.auth?.validateToken) {
           try {
-            const tokenResult = await (window as any).api.auth.validateToken()
+            const tokenResult = await window.api.auth.validateToken()
             if (tokenResult.valid && tokenResult.username) {
               if (!cancelled) {
                 setIsAuthenticated(true)
@@ -152,7 +152,7 @@ function App() {
         })
 
         const authState: AuthState = await Promise.race([
-          (window as any).api.auth.getState(),
+          window.api.auth.getState(),
           timeoutPromise,
         ])
 
@@ -181,8 +181,8 @@ function App() {
 
     const checkAuth = async () => {
       try {
-        if (typeof window === 'undefined' || !(window as any).api?.auth?.refresh) return
-        const next: AuthState = await (window as any).api.auth.refresh()
+        if (typeof window === 'undefined' || !window.api?.auth?.refresh) return
+        const next: AuthState = await window.api.auth.refresh()
         if (cancelled) return
         if (next.status === 'blocked') {
           // Nếu tài khoản / máy bị chặn từ xa → tự logout về màn hình đăng ký / đăng nhập
@@ -218,10 +218,10 @@ function App() {
     let mounted = true
     const init = async () => {
       if (typeof window === 'undefined') return
-      if (!(window as any).api?.license?.getState) return
+      if (!window.api?.license?.getState) return
       try {
         setLicenseError(null)
-        const state = await (window as any).api.license.getState()
+        const state = await window.api.license.getState()
         if (mounted) {
           setLicenseState(state)
         }
@@ -278,7 +278,7 @@ function App() {
   }
   
   // Kiểm tra window.api
-  if (typeof window !== 'undefined' && !(window as any).api) {
+  if (typeof window !== 'undefined' && !window.api) {
     return (
       <div style={{ 
         padding: '40px', 

@@ -90,7 +90,7 @@ function TopBarStats() {
 
     const fetchStats = async () => {
       try {
-        const data = await (window as any).api.getRealtimeStats?.()
+        const data = await window.api.getRealtimeStats?.()
         if (!isMounted) return
         if (data) {
           setStats({
@@ -126,7 +126,7 @@ function TopBarStats() {
 
     const fetchAuthInfo = async () => {
       try {
-        const api: any = (window as any).api
+        const api = window.api
         if (!api?.auth?.getState) return
         const state = await api.auth.getState()
         if (!mounted || !state) return
@@ -159,7 +159,7 @@ function TopBarStats() {
 
     const fetchDiskInfo = async () => {
       try {
-        const data = await (window as any).api?.getDiskInfo?.()
+        const data = await window.api?.getDiskInfo?.()
         if (data && isMounted) {
           setDiskInfo(data)
         }
@@ -172,8 +172,8 @@ function TopBarStats() {
     fetchDiskInfo()
 
     // Subscribe để nhận updates từ main process
-    if ((window as any).api?.onDiskInfo) {
-      unsubscribe = (window as any).api.onDiskInfo((payload: DiskInfoSummary) => {
+    if (window.api?.onDiskInfo) {
+      unsubscribe = window.api.onDiskInfo((payload: DiskInfoSummary) => {
         if (isMounted) {
           setDiskInfo(payload)
         }
@@ -198,7 +198,7 @@ function TopBarStats() {
     let mounted = true
     const fetchSystemInfo = async () => {
       try {
-        const info = await (window as any).api?.getSystemInfo?.()
+        const info = await window.api?.getSystemInfo?.()
         if (mounted) {
           setSystemInfo(info || null)
         }

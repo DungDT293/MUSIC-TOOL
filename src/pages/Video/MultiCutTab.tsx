@@ -125,7 +125,7 @@ function MultiCutTab() {
 
     const restoreRunningJob = async () => {
       try {
-        const jobs = await (window as any).api.jobQueue.list()
+        const jobs = await window.api.jobQueue.list()
         const runningJob = jobs.find(
           (job: any) =>
             job.type === 'video:split-many' &&
@@ -167,7 +167,7 @@ function MultiCutTab() {
 
   // Subscribe to progress events
   useEffect(() => {
-    const unsubscribe = (window as any).api.onVideoProgress((payload: any) => {
+    const unsubscribe = window.api.onVideoProgress((payload: any) => {
       console.log('[MultiCut] Received progress event:', payload, 'isProcessing:', isProcessing, 'currentRequestId:', currentRequestId)
       // Guard against undefined to prevent "Cannot read properties of undefined (reading 'length')"
       if (payload?.mode !== 'multi-cut') return
@@ -214,7 +214,7 @@ function MultiCutTab() {
     setErrorMessage(null)
     setSuccessData(null)
     try {
-      const paths: string[] | null = await (window as any).api.selectManyVideos?.()
+      const paths: string[] | null = await window.api.selectManyVideos?.()
       if (!paths || !paths.length) return
 
       const existingPaths = new Set(videoListItems.map((v) => v.path))
@@ -234,7 +234,7 @@ function MultiCutTab() {
         
         itemsForInfo.forEach(async (item) => {
           try {
-            const info = await (window as any).api.videoGetFileInfo(item.path)
+            const info = await window.api.videoGetFileInfo(item.path)
             const durationSec = info?.durationSec
             
             if (typeof durationSec === 'number' && durationSec > 0) {
@@ -261,10 +261,10 @@ function MultiCutTab() {
     setErrorMessage(null)
     setSuccessData(null)
     try {
-      const folder = await (window as any).api.selectFolder()
+      const folder = await window.api.selectFolder()
       if (!folder) return
 
-      const files = (await (window as any).api.listVideosInFolderSimple?.(folder)) || []
+      const files = (await window.api.listVideosInFolderSimple?.(folder)) || []
       const existingPaths = new Set(videoListItems.map((v) => v.path))
       const newItems: VideoListItem[] = files
         .filter((f: any) => !existingPaths.has(f.path))
@@ -283,7 +283,7 @@ function MultiCutTab() {
         
         runLimited(itemsForInfo, 8, async (item) => {
           try {
-            const info = await (window as any).api.videoGetFileInfo(item.path)
+            const info = await window.api.videoGetFileInfo(item.path)
             const durationSec = info?.durationSec
             
             if (typeof durationSec === 'number' && durationSec > 0) {
@@ -313,7 +313,7 @@ function MultiCutTab() {
   }
 
   const handleSelectOutputDir = async () => {
-    const dir = await (window as any).api.selectFolder()
+    const dir = await window.api.selectFolder()
     if (dir) setOutputDir(dir)
   }
 
@@ -353,7 +353,7 @@ function MultiCutTab() {
       }
 
       console.log('[MultiCut] Starting batch cut with', req.inputFiles.length, 'videos')
-      const result: SplitManySimpleResult = await (window as any).api.videoSplitManySimple(req)
+      const result: SplitManySimpleResult = await window.api.videoSplitManySimple(req)
       console.log('[MultiCut] Got result with requestId:', result.requestId)
       setCurrentRequestId(result.requestId)
 
@@ -375,9 +375,9 @@ function MultiCutTab() {
       }
     } finally {
       setIsProcessing(false)
-      if ((window as any).api?.refreshDiskInfo) {
+      if (window.api?.refreshDiskInfo) {
         try {
-          await (window as any).api.refreshDiskInfo()
+          await window.api.refreshDiskInfo()
         } catch (err) {
           console.error('[MultiCut] refreshDiskInfo error:', err)
         }
@@ -388,7 +388,7 @@ function MultiCutTab() {
   const handleCancel = async () => {
     if (!currentRequestId) return
     try {
-      await (window as any).api.videoCancelJob(currentRequestId)
+      await window.api.videoCancelJob(currentRequestId)
       setIsProcessing(false)
       setCurrentRequestId(null)
       setCurrentProgress(null)
@@ -746,7 +746,7 @@ function MultiCutTab() {
         )}
         {successData && (
           <button
-            onClick={() => (window as any).api.openPath(outputDir)}
+            onClick={() => window.api.openPath(outputDir)}
             style={{
               padding: '12px 24px',
               backgroundColor: '#2d2d2d',

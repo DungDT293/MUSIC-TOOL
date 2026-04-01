@@ -83,7 +83,7 @@ const OUTPUT_PREVIEW_LIMIT = 6
 
 function FinalExportTab() {
   // MED-14 fix: api stored in ref so it's not re-evaluated on every render
-  const apiRef = useRef<any>((window as any).api)
+  const apiRef = useRef(window.api)
   // Stable getter — safe to call from any callback or effect
   const api = apiRef.current
 
@@ -180,7 +180,7 @@ function FinalExportTab() {
 
     const restoreRunningJob = async () => {
       try {
-        const jobs = await (window as any).api.jobQueue.list()
+        const jobs = await window.api.jobQueue.list()
         const runningJob = jobs.find(
           (job: any) =>
             job.type === 'video:final-export' &&

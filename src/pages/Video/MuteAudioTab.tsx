@@ -57,7 +57,7 @@ function MuteAudioTab() {
 
     const restoreRunningJob = async () => {
       try {
-        const api = (window as any).api
+        const api = window.api
         if (!api || typeof api.videoGetActiveMuteJobId !== 'function') {
           if (mounted) {
             setIsProcessing(false)
@@ -96,7 +96,7 @@ function MuteAudioTab() {
   useEffect(() => {
     if (!currentRequestId) return
 
-    const unsubscribe = (window as any).api.onVideoProgress?.((payload: any) => {
+    const unsubscribe = window.api.onVideoProgress?.((payload: any) => {
       if (payload.requestId === currentRequestId) {
         if (payload.currentFile && payload.currentIndex !== undefined && payload.totalFiles) {
           setCurrentProgress({
@@ -126,7 +126,7 @@ function MuteAudioTab() {
     setErrorMessage(null)
     setSuccessData(null)
     try {
-      const paths: string[] | null = await (window as any).api.selectManyVideos?.()
+      const paths: string[] | null = await window.api.selectManyVideos?.()
       if (!paths || !paths.length) return
 
       const existingPaths = new Set(videoItems.map((v) => v.path))
@@ -146,7 +146,7 @@ function MuteAudioTab() {
         
         runLimited(itemsForInfo, 8, async (item) => {
           try {
-            const info = await (window as any).api.videoGetFileInfo(item.path)
+            const info = await window.api.videoGetFileInfo(item.path)
             const durationSec = info?.durationSec
             
             if (typeof durationSec === 'number' && durationSec > 0) {
@@ -173,14 +173,14 @@ function MuteAudioTab() {
     setErrorMessage(null)
     setSuccessData(null)
     try {
-      const folder = await (window as any).api.selectFolder()
+      const folder = await window.api.selectFolder()
       if (!folder) {
         console.log('[MuteAudioTab] No folder selected')
         return
       }
 
       console.log('[MuteAudioTab] Selected folder:', folder)
-      const files = (await (window as any).api.listVideosInFolderSimple?.(folder)) || []
+      const files = (await window.api.listVideosInFolderSimple?.(folder)) || []
       console.log('[MuteAudioTab] Found files:', files.length, files)
       
       if (files.length === 0) {
@@ -208,7 +208,7 @@ function MuteAudioTab() {
         
         runLimited(itemsForInfo, 8, async (item) => {
           try {
-            const info = await (window as any).api.videoGetFileInfo(item.path)
+            const info = await window.api.videoGetFileInfo(item.path)
             const durationSec = info?.durationSec
             
             if (typeof durationSec === 'number' && durationSec > 0) {
@@ -240,7 +240,7 @@ function MuteAudioTab() {
 
   const handleSelectOutputDir = async () => {
     try {
-      const dir = await (window as any).api.selectFolder()
+      const dir = await window.api.selectFolder()
       if (dir) {
         setOutputDir(dir)
       }
@@ -276,7 +276,7 @@ function MuteAudioTab() {
       }
 
       // Kiểm tra API có sẵn sàng không
-      const api = (window as any).api
+      const api = window.api
       console.log('[MuteAudioTab] Checking API:', {
         apiExists: !!api,
         videoMuteAudioExists: !!(api && api.videoMuteAudio),
@@ -331,9 +331,9 @@ function MuteAudioTab() {
       setIsProcessing(false)
       setCurrentRequestId(null)
       setCurrentProgress(null)
-      if ((window as any).api?.refreshDiskInfo) {
+      if (window.api?.refreshDiskInfo) {
         try {
-          await (window as any).api.refreshDiskInfo()
+          await window.api.refreshDiskInfo()
         } catch (err) {
           console.error('[MuteAudioTab] refreshDiskInfo error', err)
         }

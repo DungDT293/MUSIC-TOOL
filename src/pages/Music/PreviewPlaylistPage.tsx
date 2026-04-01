@@ -93,7 +93,7 @@ function PreviewPlaylistPage() {
       }
 
       // Try blob URL via IPC readFileAsBase64 (works with CSP)
-      const api = (window as any).api
+      const api = window.api
       if (api?.readFileAsBase64) {
         const res = await api.readFileAsBase64(filePath)
         if (res?.ok && res.base64) {

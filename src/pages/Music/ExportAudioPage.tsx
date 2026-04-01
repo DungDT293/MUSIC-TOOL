@@ -253,7 +253,7 @@ const filteredHistory = useMemo(() => {
 
   // Lắng nghe jobQueue update để lấy jobId ngay khi export bắt đầu
   useEffect(() => {
-    const api: any = (window as any).api
+    const api = window.api
     if (!api?.jobQueue?.onUpdate) return
 
     const unsubscribe = api.jobQueue.onUpdate((job: any) => {
@@ -360,7 +360,7 @@ const filteredHistory = useMemo(() => {
   useEffect(() => {
     if (!historyVisible) return
     let mounted = true
-    const api: any = (window as any).api
+    const api = window.api
     if (api?.music?.getExportHistory) {
       api.music.getExportHistory().then((list: any) => {
       if (!mounted) return
@@ -435,7 +435,7 @@ const filteredHistory = useMemo(() => {
     setSuccessMessage(null)
 
     try {
-      const api: any = (window as any).api
+      const api = window.api
       if (!api?.music?.deleteExportHistory) {
         throw new Error('Backend chưa sẵn sàng.')
       }
@@ -502,7 +502,7 @@ const filteredHistory = useMemo(() => {
     setSuccessMessage(null)
 
     try {
-      const api: any = (window as any).api
+      const api = window.api
       if (!api?.music?.downloadPlaylistHistory) {
         throw new Error('Backend chưa sẵn sàng.')
       }
@@ -729,7 +729,7 @@ const filteredHistory = useMemo(() => {
         
         // Refresh lịch sử nếu modal đang mở
         if (historyVisible) {
-          const api: any = (window as any).api
+          const api = window.api
           if (api?.music?.getExportHistory) {
             api.music.getExportHistory().then((list: any) => {
               const sorted = (list || []).sort((a: any, b: any) => b.exportedAt - a.exportedAt)
@@ -753,9 +753,9 @@ const filteredHistory = useMemo(() => {
     } finally {
       setLoading(false)
       setCurrentJobId(null) // Reset jobId khi hoàn thành hoặc lỗi
-      if ((window as any).api?.refreshDiskInfo) {
+      if (window.api?.refreshDiskInfo) {
         try {
-          await (window as any).api.refreshDiskInfo()
+          await window.api.refreshDiskInfo()
         } catch (err) {
           console.error('[ExportAudio] refreshDiskInfo error:', err)
         }
@@ -1005,7 +1005,7 @@ const filteredHistory = useMemo(() => {
                 setValidationResults(null)
                 setErrorMessage(null)
                 try {
-                  const api: any = (window as any).api
+                  const api = window.api
                   if (!api?.music?.validatePlaylistsForCrossfade) {
                     setErrorMessage('API validatePlaylistsForCrossfade chưa sẵn sàng.')
                     return

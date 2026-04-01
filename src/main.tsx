@@ -5,7 +5,7 @@ import './index.css'
 import { ErrorBoundary } from './components/ErrorBoundary'
 
 // Kiểm tra window.api trước khi render
-if (typeof window !== 'undefined' && !(window as any).api) {
+if (typeof window !== 'undefined' && !window.api) {
   console.error('[main.tsx] window.api is not available! Check preload script.')
 }
 
