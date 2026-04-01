@@ -351,9 +351,12 @@ export async function cutVideoIntoSegmentsSimple(
     // Watch progress file khi normalizeOutput = true
     let progressFileWatcher: fs.FSWatcher | null = null
     if (normalizeOutput && progressFilePath) {
-      // Xóa file progress cũ nếu có
+      // Xóa file progress cũ nếu có (unwatch trước để tránh EBUSY trên Windows)
       if (fs.existsSync(progressFilePath)) {
-        fs.unlinkSync(progressFilePath)
+        try { fs.unwatchFile(progressFilePath) } catch {}
+        try { fs.unlinkSync(progressFilePath) } catch (e) {
+          console.warn('[cutSingleSimple] Could not delete old progress file:', e)
+        }
       }
       
       // Watch file progress để đọc progress real-time
