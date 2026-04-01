@@ -299,10 +299,15 @@ async function prepareAudioForOutput(
   const { ffmpeg } = getFfmpegPaths()
 
     await new Promise<void>((resolve, reject) => {
+    let settled = false
+    const safeResolve = () => { if (!settled) { settled = true; resolve() } }
+    const safeReject = (err: Error) => { if (!settled) { settled = true; reject(err) } }
+
     const child = spawn(ffmpeg, [
       '-hide_banner',
       '-loglevel',
       'error',
+      '-fflags', '+genpts+igndts',       // Fix broken DTS/PTS trong audio source
       '-i',
       audioFile.path,
       '-c:a',
@@ -311,17 +316,18 @@ async function prepareAudioForOutput(
       '192k',
       '-ac',
       '2',
+      '-avoid_negative_ts', 'make_zero', // Fix negative timestamps (MP3 start_time)
       '-y',
       tempPath,
     ])
 
-    child.on('error', reject)
+    child.on('error', (err) => safeReject(err))
     // Bug #16 fix: drain stdout/stderr to prevent pipe buffer full → process hang
     child.stdout?.resume()
     child.stderr?.resume()
     child.on('close', (code) => {
-      if (code === 0) resolve()
-      else reject(new Error(`FFmpeg lỗi khi chuẩn hoá audio ${audioFile.path} (code ${code}).`))
+      if (code === 0) safeResolve()
+      else safeReject(new Error(`FFmpeg lỗi khi chuẩn hoá audio ${audioFile.path} (code ${code}).`))
     })
   })
 
@@ -1173,6 +1179,9 @@ async function runFinalCommand(opts: RunFinalCommandOptions): Promise<void> {
 
   // Single-step export
   await new Promise<void>((resolve, reject) => {
+    let settled = false
+    const safeResolve = () => { if (!settled) { settled = true; resolve() } }
+    const safeReject = (err: Error) => { if (!settled) { settled = true; reject(err) } }
 
     const shouldNormalizeAudio = normalizeAudio
     const shouldEncodeAudio = forceReencode || needAudioEncode || shouldNormalizeAudio
@@ -1290,7 +1299,7 @@ async function runFinalCommand(opts: RunFinalCommandOptions): Promise<void> {
     })
 
     child.on('error', async (error) => {
-      reject(new Error(`FFmpeg spawn error: ${error.message}`))
+      safeReject(new Error(`FFmpeg spawn error: ${error.message}`))
     })
 
     child.on('close', async (code) => {
@@ -1306,7 +1315,7 @@ async function runFinalCommand(opts: RunFinalCommandOptions): Promise<void> {
           speedX: undefined,
           etaSec: 0,
         })
-        resolve()
+        safeResolve()
       } else {
         // FFmpeg exit code != 0 — kiểm tra xem có phải warning vô hại không
         try {
@@ -1339,7 +1348,7 @@ async function runFinalCommand(opts: RunFinalCommandOptions): Promise<void> {
                     speedX: undefined,
                     etaSec: 0,
                   })
-                  resolve()
+                  safeResolve()
                   return
                 } else {
                   console.error(
@@ -1357,7 +1366,7 @@ async function runFinalCommand(opts: RunFinalCommandOptions): Promise<void> {
 
         // Reject: file không tồn tại, rỗng, probe fail, hoặc không phải buffer warning
         const tail = stderrLines.slice(-10).join('\n')
-        reject(new Error(`FFmpeg final export failed với mã ${code}. stderr:\n${tail}`))
+        safeReject(new Error(`FFmpeg final export failed với mã ${code}. stderr:\n${tail}`))
       }
     })
   })
