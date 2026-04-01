@@ -890,6 +890,9 @@ async function fallbackTranscodeAndConcat(
       const input = inputs[i]
       const safeOut = path.join(tmpDir, `safe_${i + 1}.mp4`)
       await new Promise<void>(async (resolve, reject) => {
+        let settled = false
+        const safeReject = (err: Error) => { if (!settled) { settled = true; reject(err) } }
+        const safeResolve = () => { if (!settled) { settled = true; resolve() } }
         // Build encoder args based on user choice (GPU/CPU/Auto)
         const userChoice: 'gpu' | 'cpu' | 'auto' = useGpuEncoding === true ? 'gpu' : useGpuEncoding === false ? 'cpu' : 'auto'
         const { args: encoderArgs, usedEncoder, gpuInfo } = await buildVideoEncoderArgsWithChoice(
@@ -975,7 +978,7 @@ async function fallbackTranscodeAndConcat(
                 }
               }, 1000)
             }
-            reject(new Error('Đã dừng bởi người dùng'))
+            safeReject(new Error('Đã dừng bởi người dùng'))
             return
           }
           // Parse speed= from FFmpeg stderr so UI can show ETA during transcode phase
@@ -994,17 +997,17 @@ async function fallbackTranscodeAndConcat(
           }
         })
 
-        proc.on('error', (err) => reject(err))
+        proc.on('error', (err) => safeReject(err))
         proc.on('close', (code) => {
           // Check cancel trước khi resolve/reject
           if (requestId && videoJobManager.isCancelled(requestId)) {
             cleanupOnCancel = true // Fix Critical #1.1: Mark for cleanup on cancel
-            reject(new Error('Đã dừng bởi người dùng'))
+            safeReject(new Error('Đã dừng bởi người dùng'))
             return
           }
 
-          if (code === 0 && fs.existsSync(safeOut)) resolve()
-          else reject(new Error(`Transcode failed for ${input} (code ${code})`))
+          if (code === 0 && fs.existsSync(safeOut)) safeResolve()
+          else safeReject(new Error(`Transcode failed for ${input} (code ${code})`))
         })
       })
       safeOutputs.push(safeOut)

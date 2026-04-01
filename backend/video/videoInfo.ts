@@ -4,7 +4,7 @@
 
 import { spawn } from 'child_process'
 import { getFfmpegPaths } from '../ffmpeg/config'
-import fs from 'node:fs'
+import fsp from 'node:fs/promises'
 
 export interface VideoFileInfo {
   filePath: string
@@ -18,13 +18,14 @@ export interface VideoFileInfo {
  * Probe video file để lấy duration, width, height
  */
 export async function getVideoFileInfo(filePath: string): Promise<VideoFileInfo> {
-  // Kiểm tra file tồn tại
-  if (!fs.existsSync(filePath)) {
+  // Lấy file size async — TOCTOU-safe, không block event loop
+  let sizeBytes: number | null = null
+  try {
+    const stats = await fsp.stat(filePath)
+    sizeBytes = stats?.size ?? null
+  } catch {
     throw new Error(`File không tồn tại: ${filePath}`)
   }
-
-  const stats = fs.statSync(filePath)
-  const sizeBytes = stats?.size ?? null
 
   const paths = getFfmpegPaths()
   const ffprobePath = paths.ffprobe

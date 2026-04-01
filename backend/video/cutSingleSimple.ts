@@ -309,6 +309,13 @@ export async function cutVideoIntoSegmentsSimple(
   const startTime = Date.now()
 
   return new Promise<CutSingleSimpleResult>((resolve) => {
+    let isSettled = false
+    const safeResolve = (result: CutSingleSimpleResult) => {
+      if (isSettled) return
+      isSettled = true
+      resolve(result)
+    }
+
     const ffmpegProcess = spawn(ffmpeg, ffmpegArgs, {
       stdio: ['ignore', 'ignore', 'pipe'],
       windowsHide: true,
@@ -319,6 +326,12 @@ export async function cutVideoIntoSegmentsSimple(
 
     // Check signal để cancel khi cần
     if (options?.signal) {
+      // Guard: nếu signal đã aborted trước khi start → return ngay
+      if (options.signal.aborted) {
+        ffmpegProcess.kill('SIGTERM')
+        safeResolve(buildResult(requestId, false, Date.now() - startTime, 0, 0, [], 'Đã dừng bởi người dùng'))
+        return
+      }
       options.signal.addEventListener('abort', () => {
         console.log(`[cutSingleSimple] Job ${requestId} cancelled via AbortSignal`)
         // Cleanup progress file watcher
@@ -334,8 +347,8 @@ export async function cutVideoIntoSegmentsSimple(
             }
           }, 2000)
         }
-        resolve(buildResult(requestId, false, Date.now() - startTime, 0, 0, [], 'Đã dừng bởi người dùng'))
-      })
+        safeResolve(buildResult(requestId, false, Date.now() - startTime, 0, 0, [], 'Đã dừng bởi người dùng'))
+      }, { once: true })
     }
 
     let stderrBuffer = ''
@@ -422,11 +435,16 @@ export async function cutVideoIntoSegmentsSimple(
             }
           }, 1000) // Giảm timeout xuống 1 giây để kill nhanh hơn
         }
-        resolve(buildResult(requestId, false, Date.now() - startTime, 0, 0, [], 'Đã dừng bởi người dùng'))
+        safeResolve(buildResult(requestId, false, Date.now() - startTime, 0, 0, [], 'Đã dừng bởi người dùng'))
         return
       }
 
       const chunk = data.toString()
+      // Cap stderrBuffer — chỉ giữ 80 dòng cuối để tránh OOM với file dài
+      const lines = stderrBuffer.split('\n')
+      if (lines.length > 80) {
+        stderrBuffer = lines.slice(-80).join('\n')
+      }
       stderrBuffer += chunk
       
       // Debug: Log first few chunks to see what FFmpeg outputs (chỉ khi normalizeOutput = true để debug)
@@ -510,7 +528,7 @@ export async function cutVideoIntoSegmentsSimple(
 
       // Nếu job đã bị cancel, không resolve success
       if (videoJobManager.isCancelled(requestId) || options?.signal?.aborted) {
-        resolve(buildResult(requestId, false, elapsedMs, 0, 0, [], 'Đã dừng bởi người dùng'))
+        safeResolve(buildResult(requestId, false, elapsedMs, 0, 0, [], 'Đã dừng bởi người dùng'))
         return
       }
 
@@ -590,12 +608,12 @@ export async function cutVideoIntoSegmentsSimple(
 
           // Emit final progress with 100% completion (etaSec = 0 when done)
           emitProgress(onProgress, requestId, 100, files.length, files.length, avgSpeed, duration, duration, 0)
-          resolve(buildResult(requestId, true, elapsedMs, avgSpeed, files.length, files))
+          safeResolve(buildResult(requestId, true, elapsedMs, avgSpeed, files.length, files))
         } catch (err: any) {
           const error = `Failed to list output files: ${err.message}`
           console.error(`âœ— ${error}`)
           console.log('â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•\n')
-          resolve(buildResult(requestId, false, elapsedMs, 0, 0, [], error))
+          safeResolve(buildResult(requestId, false, elapsedMs, 0, 0, [], error))
         }
         })()
       } else {
@@ -604,7 +622,7 @@ export async function cutVideoIntoSegmentsSimple(
         console.error(`[cutSingleSimple] Full FFmpeg stderr (last 2000 chars):\n${stderrBuffer.slice(-2000)}`)
         console.error(`[cutSingleSimple] FFmpeg command that failed:\n  ${ffmpeg} ${ffmpegArgs.join(' ')}`)
         console.log('â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•\n')
-        resolve(buildResult(requestId, false, elapsedMs, 0, 0, [], error))
+        safeResolve(buildResult(requestId, false, elapsedMs, 0, 0, [], error))
       }
     })
 
@@ -613,7 +631,7 @@ export async function cutVideoIntoSegmentsSimple(
       const error = `FFmpeg process error: ${err.message}`
       console.error(`âœ— ${error}`)
       console.log('â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•\n')
-      resolve(buildResult(requestId, false, elapsedMs, 0, 0, [], error))
+      safeResolve(buildResult(requestId, false, elapsedMs, 0, 0, [], error))
     })
   })
 }

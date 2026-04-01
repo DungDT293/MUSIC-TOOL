@@ -78,6 +78,8 @@ export async function verifyOutputVideo(
         ['-v', 'error', '-t', '60', '-i', outputPath, '-f', 'null', '-'],
         { windowsHide: true }
       )
+      // Drain stdout để tránh pipe buffer đầy → process treo
+      child.stdout?.resume()
 
       let stderr = ''
       child.stderr?.on('data', (chunk: Buffer) => {
