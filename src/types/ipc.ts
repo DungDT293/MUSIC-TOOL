@@ -748,10 +748,10 @@ export interface IPCAPI {
     }>
   }
   music: {
-    scan: (payload: MusicScanPayload) => Promise<any>
-    createPlaylist: (payload: MusicCreatePlaylistPayload) => Promise<any>
-    preview: (payload: MusicPreviewPayload) => Promise<any>
-    export: (payload: MusicExportPayload) => Promise<any>
+    scan: (payload: any) => Promise<any>
+    createPlaylist: (payload: any) => Promise<any>
+    preview: (payload: any) => Promise<any>
+    export: (payload: any) => Promise<any>
     validatePlaylistsForCrossfade: (
       payload: ValidatePlaylistsForCrossfadeRequest
     ) => Promise<ValidatePlaylistsForCrossfadeResult>
@@ -794,12 +794,12 @@ export interface IPCAPI {
     }>
   }
   video: {
-    cutSingle: (payload: VideoCutSinglePayload) => Promise<any>
-    cutBatch: (payload: VideoCutBatchPayload) => Promise<any>
+    cutSingle: (payload: any) => Promise<any>
+    cutBatch: (payload: any) => Promise<any>
     /** @deprecated Use videoMergeSimple instead */
-    merge?: (payload: VideoMergePayload) => Promise<any>
+    merge?: (payload: any) => Promise<any>
     /** @deprecated Use videoFinalExport.start instead */
-    finalExport?: (payload: VideoFinalExportPayload) => Promise<any>
+    finalExport?: (payload: any) => Promise<any>
   }
   probeFile: (path: string) => Promise<ProbeResult>
   preset?: {
@@ -813,11 +813,7 @@ export interface IPCAPI {
   getDiskInfo: () => Promise<DiskInfoSummary>
   refreshDiskInfo: () => Promise<DiskInfoSummary>
   onDiskInfo?: (handler: (info: DiskInfoSummary) => void) => () => void
-  whisper: {
-    preloadModel: () => Promise<{ success: boolean; error?: string }>
-    checkAvailable: () => Promise<{ available: boolean; error?: string }>
-    onPreloadProgress?: (handler: (progress: { percent: number; message: string }) => void) => () => void
-  }
+  // whisper: đã xóa (không có IPC handler nào)
   selectFolder: () => Promise<string | null>
   selectAudioFile: () => Promise<string | null>
   selectAudioFilesMulti: () => Promise<string[] | null>

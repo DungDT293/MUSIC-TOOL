@@ -120,7 +120,7 @@ export class ThreeJsEngine {
 
   // Audio processing
   private smoother: AudioSmoother
-  private freqTexture: THREE.DataTexture | null = null
+  private freqTexture: THREEType.DataTexture | null = null
   private freqTextureData: Uint8Array
 
   // Config
