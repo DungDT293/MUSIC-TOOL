@@ -90,7 +90,7 @@ export async function normalizeVideo(
     const vfFilter =
       req.targetResolution && req.targetFps
         ? buildNormalizeVfFilter(req.targetResolution, req.targetFps)
-        : 'scale=iw:ih,setsar=1,fps=30'
+        : 'scale=trunc(iw/2)*2:trunc(ih/2)*2,setsar=1,format=yuv420p'
 
     // Detect GPU encoder availability (try nvenc first)
     const preferGpu = req.useGpu !== false // default true
@@ -251,6 +251,13 @@ function runFfmpegEncode(
   requestId: string
 ): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
+    let isSettled = false
+    const safeResolve = (result: boolean) => {
+      if (isSettled) return
+      isSettled = true
+      resolve(result)
+    }
+
     const videoCodec = mode === 'gpu' ? 'h264_nvenc' : 'libx264'
     const encoderArgs =
       mode === 'gpu'
@@ -259,11 +266,18 @@ function runFfmpegEncode(
 
     const args = [
       '-y',
+      '-fflags', '+genpts+igndts',       // Fix broken DTS/PTS → tránh freeze frame
       '-i', inputPath,
+      '-map', '0:v:0',                   // Explicit video stream (tránh pick cover art)
+      '-map', '0:a?',                    // Optional audio (tránh fail khi input không có audio)
       '-vf', vfFilter,
       ...encoderArgs,
+      '-vsync', 'cfr',                   // Force constant frame rate → tránh VFR stutter
+      '-avoid_negative_ts', 'make_zero', // Fix negative timestamps
       '-c:a', 'aac',
       '-b:a', '192k',
+      '-ar', '48000',                    // Normalize sample rate
+      '-ac', '2',                        // Normalize channels to stereo
       '-movflags', '+faststart',
       outputPath,
     ]
@@ -271,12 +285,22 @@ function runFfmpegEncode(
     console.log(`[normalizeVideo] FFmpeg ${mode} encode:`, path.basename(inputPath), '→', path.basename(outputPath))
 
     const proc = spawn(ffmpeg, args, { windowsHide: true })
+    // Drain stdout để tránh pipe buffer đầy → process treo
+    proc.stdout?.resume()
+
     videoJobManager.registerJob(requestId, proc)
 
     let stderrBuffer = ''
 
     proc.stderr.on('data', (data) => {
-      stderrBuffer += data.toString()
+      const chunk = data.toString()
+      // Cap stderrBuffer — chỉ giữ 80 dòng cuối để tránh OOM
+      const lines = stderrBuffer.split('\n')
+      if (lines.length > 80) {
+        stderrBuffer = lines.slice(-80).join('\n')
+      }
+      stderrBuffer += chunk
+
       if (videoJobManager.isCancelled(requestId)) {
         try {
           if (!proc.killed) {
@@ -293,12 +317,12 @@ function runFfmpegEncode(
 
     proc.on('close', (code) => {
       if (videoJobManager.isCancelled(requestId)) {
-        resolve(false)
+        safeResolve(false)
         return
       }
 
       if (code === 0 && fs.existsSync(outputPath)) {
-        resolve(true)
+        safeResolve(true)
       } else {
         // GPU failed: log snippet and signal failure for fallback
         if (mode === 'gpu') {
@@ -308,13 +332,13 @@ function runFfmpegEncode(
           const snippet = stderrBuffer.slice(-400)
           console.error(`[normalizeVideo] CPU encode failed (code=${code}):`, snippet)
         }
-        resolve(false)
+        safeResolve(false)
       }
     })
 
     proc.on('error', (err) => {
       console.error(`[normalizeVideo] FFmpeg process error (${mode}):`, err)
-      resolve(false)
+      safeResolve(false)
     })
   })
 }

@@ -110,11 +110,29 @@ export async function muteVideoAudio(
 
       // Chạy FFmpeg để copy video stream và bỏ audio (-an)
       await new Promise<void>((resolve) => {
-        const args = ['-y', '-i', inputPath, '-c', 'copy', '-an', outputPath]
+        let isSettled = false
+        const safeResolve = () => {
+          if (isSettled) return
+          isSettled = true
+          resolve()
+        }
+
+        const args = [
+          '-y',
+          '-fflags', '+genpts+igndts',       // Fix broken DTS/PTS
+          '-i', inputPath,
+          '-c', 'copy',
+          '-an',
+          '-avoid_negative_ts', 'make_zero', // Fix negative timestamps
+          '-movflags', '+faststart',         // moov atom đầu file
+          outputPath,
+        ]
 
         const proc = spawn(ffmpeg, args, {
           windowsHide: true,
         })
+        // Drain stdout để tránh pipe buffer đầy → process treo
+        proc.stdout?.resume()
 
         // Đăng ký job để có thể cancel
         videoJobManager.registerJob(requestId, proc)
@@ -122,7 +140,13 @@ export async function muteVideoAudio(
         let stderrBuffer = ''
 
         proc.stderr.on('data', (data) => {
-          stderrBuffer += data.toString()
+          const chunk = data.toString()
+          // Cap stderrBuffer — chỉ giữ 80 dòng cuối để tránh OOM
+          const lines = stderrBuffer.split('\n')
+          if (lines.length > 80) {
+            stderrBuffer = lines.slice(-80).join('\n')
+          }
+          stderrBuffer += chunk
 
           // Nếu user cancel trong khi đang chạy, kill process
           if (videoJobManager.isCancelled(requestId)) {
@@ -157,7 +181,7 @@ export async function muteVideoAudio(
               percent: (index + 1) / validTotal * 100,
               error: lastError,
             })
-            resolve()
+            safeResolve()
             return
           }
 
@@ -185,7 +209,7 @@ export async function muteVideoAudio(
               error: lastError,
             })
           }
-          resolve()
+          safeResolve()
         })
 
         proc.on('error', (err) => {
@@ -200,7 +224,7 @@ export async function muteVideoAudio(
             percent: ((index + 1) / validTotal) * 100,
             error: lastError,
           })
-          resolve()
+          safeResolve()
         })
       })
     }
