@@ -9,7 +9,7 @@ import VideoToolsPage from './pages/Video/VideoToolsPage'
 import CutMergeVideoPage from './pages/Video/CutMergeVideoPage'
 import FinalExportPage from './pages/Video/FinalExportPage'
 import YouTubeDownloaderTab from './pages/Video/YouTubeDownloaderTab'
-import SeoToolPage from './pages/Video/SeoToolPage'
+import EnhanceAudioPage from './pages/Music/EnhanceAudioPage'
 import { HIDE_FEATURE_AUTOPILOT } from './config/featureFlags'
 import AutopilotPage from './pages/AutopilotPage'
 import SettingsPage from './pages/SettingsPage'
@@ -42,7 +42,7 @@ const KEEP_ALIVE_PAGES: KeepAlivePage[] = [
   { path: '/video/cut-merge', component: CutMergeVideoPage },
   { path: '/video/final-export', component: FinalExportPage },
   { path: '/video/youtube-downloader', component: YouTubeDownloaderTab },
-  { path: '/video/seo', component: SeoToolPage },
+  { path: '/music/enhance', component: EnhanceAudioPage },
   ...(!HIDE_FEATURE_AUTOPILOT ? [{ path: '/autopilot', component: AutopilotPage }] : []),
   { path: '/settings', component: SettingsPage },
 ]

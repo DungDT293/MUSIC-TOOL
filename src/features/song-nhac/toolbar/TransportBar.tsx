@@ -139,7 +139,7 @@ export default function TransportBar({
           title="Pause"
           style={btnStyle}
         >
-          ⏸
+          ||
         </button>
       ) : (
         <button
@@ -153,7 +153,7 @@ export default function TransportBar({
             cursor: playDisabled ? 'not-allowed' : undefined,
           }}
         >
-          ▶
+          {'>'}
         </button>
       )}
       <span style={{ color: 'rgba(255,255,255,0.85)', minWidth: 36 }}>

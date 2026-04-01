@@ -195,7 +195,7 @@ function Section({ title, icon, defaultOpen = true, badge, children }: {
         <span>{icon}</span>
         <span style={{ flex: 1 }}>{title}</span>
         {badge && <span style={{ fontSize: 9, background: 'rgba(77,159,255,0.3)', color: '#a8d4ff', padding: '1px 5px', borderRadius: 8, fontWeight: 700 }}>{badge}</span>}
-        <span style={{ fontSize: 9, opacity: 0.5 }}>{open ? '▲' : '▼'}</span>
+        <span style={{ fontSize: 9, opacity: 0.5 }}>{open ? '^' : 'v'}</span>
       </button>
       {open && <div style={{ padding: '10px 12px' }}>{children}</div>}
     </div>
@@ -204,16 +204,16 @@ function Section({ title, icon, defaultOpen = true, badge, children }: {
 
 /* ── Wave style picker ── */
 const WAVE_STYLES: { value: SongNhacWaveStyleId; label: string; icon: string }[] = [
-  { value: 'circlebars', label: 'Tia tròn', icon: '⭕' },
+  { value: 'circlebars', label: 'Tia tròn', icon: 'O' },
   { value: 'bars', label: 'Thanh', icon: '📊' },
   { value: 'line', label: 'Đường', icon: '〰️' },
-  { value: 'waveform', label: 'Sóng âm', icon: '🔊' },
+  { value: 'waveform', label: 'Sóng âm', icon: '~' },
   { value: 'ring', label: 'Vành', icon: '💿' },
   { value: 'dots', label: 'Chấm', icon: '·' },
   { value: 'plasma', label: 'Plasma', icon: '🌀' },
-  { value: 'lightning', label: 'Sét', icon: '⚡' },
+  { value: 'lightning', label: 'Sét', icon: '/' },
   { value: 'galaxy', label: 'Thiên hà', icon: '🌌' },
-  { value: 'fire', label: 'Lửa', icon: '🔥' },
+  { value: 'fire', label: 'Lửa', icon: '^' },
 ]
 
 const FONT_FAMILIES = [
@@ -496,7 +496,7 @@ export default function InspectorPanel() {
     return (
       <div style={panelStyle}>
         <div style={{ padding: '10px 14px', borderBottom: '1px solid rgba(255,255,255,0.06)', fontSize: 12, fontWeight: 700, color: '#fff' }}>
-          📁 {layer.name}
+          [grp] {layer.name}
         </div>
         <div style={{ padding: '12px 14px' }}>
           <FieldRow label="Tên group">
@@ -514,7 +514,7 @@ export default function InspectorPanel() {
 
   const t = layer.transform ?? { ...DEFAULT_TRANSFORM }
   const f = (layer as any).filter as SongNhacLayerFilter | undefined
-  const typeIcon = { image: '🖼️', text: '📝', visualizer: '🎵', video: '🎬' }[layer.type] ?? '📄'
+  const typeIcon = { image: '[img]', text: '[txt]', visualizer: '[wav]', video: '[vid]' }[layer.type] ?? '[?]'
 
   return (
     <div style={panelStyle}>
@@ -538,7 +538,7 @@ export default function InspectorPanel() {
           title={layer.locked ? 'Mở khóa' : 'Khóa'}
           style={{ padding: '3px 7px', fontSize: 12, border: '1px solid rgba(255,255,255,0.15)', borderRadius: 4, background: layer.locked ? 'rgba(0,122,204,0.25)' : 'transparent', color: 'rgba(255,255,255,0.8)', cursor: 'pointer' }}
         >
-          {layer.locked ? '🔒' : '🔓'}
+          {layer.locked ? 'Khoa' : 'Mo'}
         </button>
       </div>
 
@@ -546,7 +546,7 @@ export default function InspectorPanel() {
       <div style={{ flex: 1, overflowY: 'auto' }}>
 
         {/* ── Transform ── */}
-        <Section title="Transform" icon="📐" defaultOpen={true}>
+        <Section title="Transform" icon="[xy]" defaultOpen={true}>
           {/* Flip buttons */}
           <FieldRow label="Lật ảnh / video">
             <div style={{ display: 'flex', gap: 6 }}>
@@ -613,7 +613,7 @@ export default function InspectorPanel() {
 
         {/* ── Image props ── */}
         {isSongNhacImageLayer(layer) && (
-          <Section title="Ảnh" icon="🖼️" defaultOpen={true}>
+          <Section title="Ảnh" icon="[img]" defaultOpen={true}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
               {layer.src && (
                 <img src={layer.src} alt="" style={{ width: 52, height: 52, objectFit: 'contain', background: 'rgba(0,0,0,0.3)', borderRadius: 5, flexShrink: 0 }} />
@@ -631,7 +631,7 @@ export default function InspectorPanel() {
                   }
                 }} />
                 <button type="button" onClick={() => fileInputRef.current?.click()} style={{ padding: '5px 12px', fontSize: 11, border: '1px solid rgba(255,255,255,0.2)', borderRadius: 5, background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.85)', cursor: 'pointer' }}>
-                  {layer.src ? '🔄 Đổi ảnh…' : '📂 Chọn ảnh…'}
+                  {layer.src ? 'Đổi ảnh…' : 'Chọn ảnh…'}
                 </button>
                 {layer.naturalWidth && <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)', marginTop: 4 }}>{layer.naturalWidth} × {layer.naturalHeight}px</div>}
               </div>
@@ -648,7 +648,7 @@ export default function InspectorPanel() {
 
         {/* ── Video props ── */}
         {isSongNhacVideoLayer(layer) && (
-          <Section title="Video" icon="🎬" defaultOpen={true}>
+          <Section title="Video" icon="[vid]" defaultOpen={true}>
             <FieldRow label="Fit mode">
               <select value={(layer as any).fitMode ?? 'free'} onChange={(e) => onInspectorChangeFinal(() => updateLayer(layer.id, { fitMode: e.target.value as any }))} style={{ ...inputStyle, paddingRight: 24 }}>
                 <option value="free">Tự do</option>
@@ -671,7 +671,7 @@ export default function InspectorPanel() {
 
         {/* ── Text props ── */}
         {isSongNhacTextLayer(layer) && (
-          <Section title="Văn bản" icon="📝" defaultOpen={true}>
+          <Section title="Văn bản" icon="[txt]" defaultOpen={true}>
             <FieldRow label="Nội dung">
               <input ref={contentInputRef} type="text" value={layer.text ?? ''}
                 onChange={(e) => onInspectorChange(() => updateLayer(layer.id, { text: e.target.value }))}
@@ -746,7 +746,7 @@ export default function InspectorPanel() {
         {/* ── Visualizer props ── */}
         {isSongNhacVisualizerLayer(layer) && (
           <>
-            <Section title="Kiểu sóng" icon="🎵" defaultOpen={true}>
+            <Section title="Kiểu sóng" icon="[wav]" defaultOpen={true}>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
                 {WAVE_STYLES.map((ws) => {
                   const active = layer.waveStyle === ws.value
@@ -769,12 +769,12 @@ export default function InspectorPanel() {
               </div>
             </Section>
 
-            <Section title="Màu sắc" icon="🎨" defaultOpen={true}>
+            <Section title="Màu sắc" icon="[clr]" defaultOpen={true}>
               <FieldRow label="Chế độ màu">
                 <div style={{ display: 'flex', gap: 4 }}>
                   {(['rainbow', 'solid', 'gradient'] as SongNhacColorMode[]).map((cm) => {
                     const active = (layer.colorMode ?? 'rainbow') === cm
-                    const labels = { rainbow: '🌈 Rainbow', solid: '🔵 Solid', gradient: '🌊 Gradient' }
+                    const labels = { rainbow: 'Rainbow', solid: 'Solid', gradient: 'Gradient' }
                     return (
                       <button key={cm} type="button" onClick={() => onInspectorChangeFinal(() => updateLayer(layer.id, { colorMode: cm }))}
                         style={{ flex: 1, padding: '5px 4px', fontSize: 10, fontWeight: active ? 700 : 400, border: `1px solid ${active ? 'rgba(77,159,255,0.6)' : 'rgba(255,255,255,0.1)'}`, borderRadius: 5, background: active ? 'rgba(77,159,255,0.15)' : 'rgba(255,255,255,0.03)', color: active ? '#a8d4ff' : 'rgba(255,255,255,0.6)', cursor: 'pointer' }}
@@ -822,7 +822,7 @@ export default function InspectorPanel() {
 
         {/* ── Image/Video effects ── */}
         {(isSongNhacImageLayer(layer) || isSongNhacVideoLayer(layer)) && (
-          <Section title="Hiệu ứng hình ảnh" icon="🎨" defaultOpen={false} badge="Mới">
+          <Section title="Hiệu ứng hình ảnh" icon="[fx]" defaultOpen={false} badge="Mới">
             <FilterSection
               filter={f}
               onChangeFilter={(partial) => onInspectorChange(() => setFilter(layer.id, partial))}
@@ -846,7 +846,7 @@ export default function InspectorPanel() {
 
         {/* ── Image beat + wave effects ── */}
         {isSongNhacImageLayer(layer) && (
-          <Section title="Hiệu ứng nhạc" icon="🎵" defaultOpen={false}>
+          <Section title="Hiệu ứng nhạc" icon="[mus]" defaultOpen={false}>
             <CheckRow label="Ảnh đập theo beat" checked={imageBeatEnabled} onChange={setImageBeatEnabled} />
             {imageBeatEnabled && (
               <SliderField label="Cường độ đập" value={Math.round((imageBeatIntensity || 0) * 100)} min={0} max={150} step={5} display={`${Math.round((imageBeatIntensity || 0) * 100)}%`} onChange={(v) => setImageBeatIntensity(v / 100)} />

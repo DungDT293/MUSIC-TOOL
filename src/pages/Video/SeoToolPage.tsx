@@ -94,17 +94,17 @@ function SeoToolPage() {
         const res = await window.api?.videoSeoApply?.(payload)
         if (Array.isArray(res)) {
           res.forEach((r: any) => {
-            setResultLog((prev) => [...prev, `${r.success ? '✓' : '✗'} ${r.file}${r.error ? ` - ${r.error}` : ''}`])
+            setResultLog((prev) => [...prev, `${r.success ? 'OK' : 'NG'} ${r.file}${r.error ? ` - ${r.error}` : ''}`])
           })
         } else {
-          setResultLog((prev) => [...prev, `✗ ${f.path} - lỗi không xác định`])
+          setResultLog((prev) => [...prev, `NG ${f.path} - lỗi không xác định`])
         }
       }
       setProgressPercent(100)
       setProgressText('Hoàn tất')
     } catch (err) {
       console.error('[SEO] apply error', err)
-      setResultLog((prev) => [...prev, `✗ Lỗi: ${String(err)}`])
+      setResultLog((prev) => [...prev, `NG Lỗi: ${String(err)}`])
     } finally {
       setApplying(false)
     }

@@ -130,22 +130,22 @@ export default function VisualizerToolbar({ playbackState, onPlay, onPause }: Vi
     >
       {/* ── Transport ── */}
       {isPlaying ? (
-        <TBtn onClick={onPause} title="Pause (Space)">⏸ Pause</TBtn>
+        <TBtn onClick={onPause} title="Pause (Space)">Pause</TBtn>
       ) : (
         <TBtn onClick={onPlay} disabled={playDisabled} title={playDisabled ? 'Cần chọn file nhạc' : 'Play (Space)'} accent>
-          ▶ Play
+          Play
         </TBtn>
       )}
 
       <Divider />
 
       {/* ── Edit ── */}
-      <TBtn onClick={undo} disabled={!canUndo} title="Hoàn tác (Ctrl+Z)">↩ Undo</TBtn>
-      <TBtn onClick={redo} disabled={!canRedo} title="Làm lại (Ctrl+Y)">↪ Redo</TBtn>
+      <TBtn onClick={undo} disabled={!canUndo} title="Hoàn tác (Ctrl+Z)">Undo</TBtn>
+      <TBtn onClick={redo} disabled={!canRedo} title="Làm lại (Ctrl+Y)">Redo</TBtn>
 
       <Divider />
 
-      <TBtn onClick={() => selectedLayerId && copyLayer(selectedLayerId)} disabled={!selectedLayerId} title="Copy (Ctrl+C)">📋 Copy</TBtn>
+      <TBtn onClick={() => selectedLayerId && copyLayer(selectedLayerId)} disabled={!selectedLayerId} title="Copy (Ctrl+C)">Copy</TBtn>
       <TBtn onClick={pasteLayers} disabled={!canPaste} title="Paste (Ctrl+V)">📄 Paste</TBtn>
 
       <Divider />
@@ -157,7 +157,7 @@ export default function VisualizerToolbar({ playbackState, onPlay, onPause }: Vi
         title={!hasAudio ? 'Cần chọn file nhạc' : 'Xuất video'}
         accent={!isExporting && hasAudio}
       >
-        {isExporting ? '⏳ Xuất…' : '🎬 Export'}
+        {isExporting ? 'Xuất…' : 'Export'}
       </TBtn>
 
       <Divider />

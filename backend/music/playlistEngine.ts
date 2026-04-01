@@ -1,5 +1,6 @@
 import type { ScannedTrack } from './scanMusic'
 import { randomUUID } from 'crypto'
+import { sortByLRU } from './musicPool'
 
 export interface PlaylistTrack extends ScannedTrack {
   order: number // vị trí trong playlist (1-based)
@@ -7,26 +8,43 @@ export interface PlaylistTrack extends ScannedTrack {
 }
 
 export interface PlaylistDefinition {
-  id: string // uuid
-  name: string // tên playlist
-  targetDurationSec: number // mục tiêu (giây)
-  totalDurationSec: number // tổng thực tế (giây)
+  id: string
+  name: string
+  targetDurationSec: number
+  totalDurationSec: number
   priorityDurationSec: number
   randomDurationSec: number
   priorityCount: number
   randomCount: number
   tracks: PlaylistTrack[]
-  createdAt: number // timestamp
+  createdAt: number
+}
+
+export interface BuildPlaylistWarning {
+  type: 'priority_ratio_not_met' | 'track_reuse_needed' | 'insufficient_tracks'
+  playlistIndex?: number // undefined = warning toàn cục
+  message: string
+  actualRatioPct?: number  // tỷ lệ thực tế đạt được (%)
+  targetRatioPct?: number  // tỷ lệ người dùng yêu cầu (%)
+}
+
+export interface BuildPlaylistsResult {
+  playlists: PlaylistDefinition[]
+  warnings: BuildPlaylistWarning[]
 }
 
 export interface BuildPlaylistsOptions {
   tracks: ScannedTrack[]
-  pinnedTrackIds: string[] // id các bài user chọn
-  playlistCount: number // số playlist cần tạo (>=1)
-  targetDurationMinutes: number // thời lượng target (phút), vd 30 → 30'
+  pinnedTrackIds: string[]
+  playlistCount: number
+  targetDurationMinutes: number
   priorityRatioMin?: number // default 0.65
   priorityRatioMax?: number // default 0.8
+  /** Thời lượng crossfade (giây). Nếu có, target sẽ được inflate để sau crossfade vẫn đạt đủ thời lượng */
+  crossfadeDurationSec?: number
 }
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 // Fisher-Yates shuffle
 function shuffle<T>(array: T[]): T[] {
@@ -38,553 +56,217 @@ function shuffle<T>(array: T[]): T[] {
   return shuffled
 }
 
-// Rotate array
+// Rotate array by offset (xoay vòng để mỗi playlist có thứ tự pinned khác nhau)
 function rotate<T>(array: T[], offset: number): T[] {
   if (array.length === 0) return array
-  const normalizedOffset = offset % array.length
-  return [...array.slice(normalizedOffset), ...array.slice(0, normalizedOffset)]
+  const n = ((offset % array.length) + array.length) % array.length
+  return [...array.slice(n), ...array.slice(0, n)]
 }
 
+// Thêm track vào playlist
+function pushTrack(
+  playlistTracks: PlaylistTrack[],
+  track: ScannedTrack,
+  currentTotalSec: number
+): PlaylistTrack {
+  const pt: PlaylistTrack = {
+    ...track,
+    order: playlistTracks.length + 1,
+    cumulativeDuration: currentTotalSec + track.duration,
+  }
+  playlistTracks.push(pt)
+  return pt
+}
+
+// ── Core builder ──────────────────────────────────────────────────────────────
+
+/**
+ * Build một playlist đơn theo thứ tự: Pinned → Priority → Random
+ *
+ * Thứ tự CỨNG, không bao giờ trộn lẫn nhóm.
+ * Mỗi nhóm được xáo trộn nội bộ (LRU-sorted + index offset).
+ *
+ * @param index  chỉ số playlist (0-based), dùng để tính offset xoay vòng
+ * @param pinnedTracks  bài đã ghim — luôn đứng đầu, xoay vòng theo index
+ * @param priorityPool  nhạc ưu tiên (đã LRU-sorted), có index offset
+ * @param randomPool    nhạc random (đã LRU-sorted), có index offset
+ * @param targetSec     thời lượng mục tiêu (giây)
+ * @param desiredPriorityMin  ngưỡng tối thiểu nhạc priority (giây)
+ * @param desiredPriorityMax  ngưỡng tối đa nhạc priority (giây)
+ * @param allowReuse    cho phép lặp bài nếu không đủ thư viện
+ */
 function buildSinglePlaylist(
   index: number,
   pinnedTracks: ScannedTrack[],
-  shuffledPriority: ScannedTrack[],
-  shuffledRandom: ScannedTrack[],
+  priorityPool: ScannedTrack[],
+  randomPool: ScannedTrack[],
   targetSec: number,
   desiredPriorityMin: number,
-  desiredPriorityMax: number,
-  allowReuse: boolean = false, // Cho phép reuse tracks khi thiếu
-  hasPinnedTracks: boolean = true, // Có pinned tracks hay không
-  shuffledAll: ScannedTrack[] = [] // Dùng cho trường hợp 2 (xáo trộn toàn bộ)
+  _desiredPriorityMax: number,
+  allowReuse: boolean
 ): PlaylistDefinition {
   const playlistTracks: PlaylistTrack[] = []
   const usedTrackIds = new Set<string>()
-  let lastTrackId: string | null = null // Track ID cuối cùng để tránh trùng liên tiếp
-
+  let lastTrackId: string | null = null
   let currentTotalSec = 0
   let currentPrioritySec = 0
   let currentRandomSec = 0
 
-  // Helper: Chọn track không trùng với lastTrackId
-  const pickTrackAvoidingLast = (
-    pool: ScannedTrack[],
-    avoidId: string | null,
-    maxAttempts: number = 10
-  ): ScannedTrack | null => {
-    if (pool.length === 0) return null
-    
-    // Lọc các track không trùng với avoidId
-    const available = avoidId ? pool.filter(t => t.id !== avoidId) : pool
-    
-    if (available.length > 0) {
-      // Random từ available
-      const randomIndex = Math.floor(Math.random() * available.length)
-      return available[randomIndex]
-    }
-    
-    // Nếu không có available (trường hợp cực đoan: chỉ còn 1 bài), chấp nhận trùng
-    if (pool.length > 0) {
-      return pool[Math.floor(Math.random() * pool.length)]
-    }
-    
-    return null
+  // ── Hàm tiện ích ──────────────────────────────────────────────────────────
+
+  function canUse(track: ScannedTrack): boolean {
+    if (track.id === lastTrackId) return false
+    if (!allowReuse && usedTrackIds.has(track.id)) return false
+    return true
   }
 
-  // TRƯỜNG HỢP 2: Không có pinned tracks → xáo trộn toàn bộ nhưng vẫn đảm bảo tỷ lệ
-  if (!hasPinnedTracks && shuffledAll.length > 0) {
-    let allIndex = 0
-    let allCycles = 0
-    const maxAllCycles = allowReuse ? 200 : 10
-
-    while (currentTotalSec < targetSec && allCycles < maxAllCycles) {
-      let addedInCycle = false
-
-      for (let j = 0; j < shuffledAll.length; j++) {
-        const track = shuffledAll[allIndex]
-
-        // Kiểm tra tỷ lệ: nếu priority chưa đạt min, ưu tiên priority
-        const priorityRatio = currentTotalSec > 0 ? currentPrioritySec / currentTotalSec : 0
-        const shouldPreferPriority = priorityRatio < (desiredPriorityMin / targetSec) && track.folderType === 'priority'
-
-        // Nếu không cho phép reuse và đã dùng, skip
-        if (!allowReuse && usedTrackIds.has(track.id)) {
-          allIndex = (allIndex + 1) % shuffledAll.length
-          continue
-        }
-
-        // Tránh trùng liên tiếp
-        if (track.id === lastTrackId) {
-          allIndex = (allIndex + 1) % shuffledAll.length
-          continue
-        }
-
-        // Nếu priority đã đạt max và track là priority, skip (ưu tiên random)
-        const priorityRatioAfter = (currentPrioritySec + track.duration) / (currentTotalSec + track.duration)
-        if (track.folderType === 'priority' && priorityRatioAfter > (desiredPriorityMax / targetSec)) {
-          allIndex = (allIndex + 1) % shuffledAll.length
-          continue
-        }
-
-        // THÊM TRACK VÀO TRƯỚC (phát hết bài hát dù có vượt target)
-        const cumulativeDuration = currentTotalSec + track.duration
-        playlistTracks.push({
-          ...track,
-          order: playlistTracks.length + 1,
-          cumulativeDuration,
-        })
-
-        currentTotalSec = cumulativeDuration
-        lastTrackId = track.id
-        if (!allowReuse) {
-          usedTrackIds.add(track.id)
-        }
-
-        if (track.folderType === 'priority') {
-          currentPrioritySec += track.duration
-        } else if (track.folderType === 'random') {
-          currentRandomSec += track.duration
-        }
-        addedInCycle = true
-
-        // SAU KHI THÊM, mới check đạt target để dừng
-        if (currentTotalSec >= targetSec) break
-
-        allIndex = (allIndex + 1) % shuffledAll.length
-      }
-
-      if (!addedInCycle && !allowReuse) break
-      if (!addedInCycle && allowReuse) {
-        const picked = pickTrackAvoidingLast(shuffledAll, lastTrackId)
-        if (picked) {
-          // THÊM TRACK VÀO TRƯỚC (phát hết bài hát dù có vượt target)
-          const cumulativeDuration = currentTotalSec + picked.duration
-          playlistTracks.push({
-            ...picked,
-            order: playlistTracks.length + 1,
-            cumulativeDuration,
-          })
-          currentTotalSec = cumulativeDuration
-          lastTrackId = picked.id
-          if (picked.folderType === 'priority') {
-            currentPrioritySec += picked.duration
-          } else if (picked.folderType === 'random') {
-            currentRandomSec += picked.duration
-          }
-          addedInCycle = true
-          
-          // SAU KHI THÊM, mới check đạt target để dừng
-          if (currentTotalSec >= targetSec) break
-        }
-      }
-      if (!addedInCycle) break
-      allCycles++
-    }
-
-    // Đảm bảo playlist luôn >= targetSec (BẮT BUỘC) - cho TRƯỜNG HỢP 2
-    if (currentTotalSec < targetSec && shuffledAll.length > 0) {
-      let fillIndex = 0
-      let fillCycles = 0
-      const maxFillCycles = 500
-
-      while (currentTotalSec < targetSec && fillCycles < maxFillCycles) {
-        const track = shuffledAll[fillIndex % shuffledAll.length]
-
-        // Tránh trùng liên tiếp nếu có thể
-        if (track.id === lastTrackId && shuffledAll.length > 1) {
-          fillIndex++
-          fillCycles++
-          continue
-        }
-
-        const cumulativeDuration = currentTotalSec + track.duration
-        playlistTracks.push({
-          ...track,
-          order: playlistTracks.length + 1,
-          cumulativeDuration,
-        })
-
-        currentTotalSec = cumulativeDuration
-        lastTrackId = track.id
-
-        if (track.folderType === 'priority') {
-          currentPrioritySec += track.duration
-        } else if (track.folderType === 'random') {
-          currentRandomSec += track.duration
-        }
-
-        // SAU KHI THÊM, mới check đạt target để dừng
-        if (currentTotalSec >= targetSec) break
-
-        fillIndex++
-        fillCycles++
-      }
-    }
-
-    // Tính stats và return
-    let finalPrioritySec = 0
-    let finalRandomSec = 0
-    let finalPriorityCount = 0
-    let finalRandomCount = 0
-
-    for (const track of playlistTracks) {
-      if (track.folderType === 'priority') {
-        finalPrioritySec += track.duration
-        finalPriorityCount++
-      } else if (track.folderType === 'random') {
-        finalRandomSec += track.duration
-        finalRandomCount++
-      }
-    }
-
-    let cumulative = 0
-    for (const track of playlistTracks) {
-      cumulative += track.duration
-      track.cumulativeDuration = cumulative
-    }
-
-    return {
-      id: randomUUID(),
-      name: `Playlist ${index + 1}`,
-      targetDurationSec: targetSec,
-      totalDurationSec: cumulative,
-      priorityDurationSec: finalPrioritySec,
-      randomDurationSec: finalRandomSec,
-      priorityCount: finalPriorityCount,
-      randomCount: finalRandomCount,
-      tracks: playlistTracks,
-      createdAt: Date.now(),
-    }
-  }
-
-  // TRƯỜNG HỢP 1: Có pinned tracks
-  // Bước 1: Pinned lên đầu
-  const rotatedPinned = rotate(pinnedTracks, index * 7) // Offset khác nhau cho mỗi playlist
-  for (const track of rotatedPinned) {
-    if (!allowReuse && usedTrackIds.has(track.id)) continue
-    
-    // Tránh trùng liên tiếp
-    if (track.id === lastTrackId) continue
-
-    // THÊM TRACK VÀO TRƯỚC (phát hết bài hát dù có vượt target)
-    const cumulativeDuration = currentTotalSec + track.duration
-    playlistTracks.push({
-      ...track,
-      order: playlistTracks.length + 1,
-      cumulativeDuration,
-    })
-
-    currentTotalSec = cumulativeDuration
+  function add(track: ScannedTrack): void {
+    const pt = pushTrack(playlistTracks, track, currentTotalSec)
+    currentTotalSec = pt.cumulativeDuration
     lastTrackId = track.id
-    if (!allowReuse) {
-      usedTrackIds.add(track.id)
-    }
-
+    if (!allowReuse) usedTrackIds.add(track.id)
     if (track.folderType === 'priority') {
       currentPrioritySec += track.duration
-    } else if (track.folderType === 'random') {
+    } else {
       currentRandomSec += track.duration
     }
-
-    // SAU KHI THÊM, mới check đạt target để dừng
-    if (currentTotalSec >= targetSec) break
   }
 
-  // Bước 2: Bổ sung PRIORITY (không pinned) đến khi đạt ngưỡng MIN
-  const priorityStart = shuffledPriority.length > 0 ? (index * 13) % shuffledPriority.length : 0 // Offset khác nhau
-  let priorityIndex = priorityStart
-  let priorityCycles = 0
-  const maxPriorityCycles = allowReuse ? 100 : 3 // Nếu cho phép reuse, tăng cycles
-
-  while (
-    currentTotalSec < targetSec &&
-    currentPrioritySec < desiredPriorityMin &&
-    priorityCycles < maxPriorityCycles &&
-    shuffledPriority.length > 0
-  ) {
+  function drainPool(
+    pool: ScannedTrack[],
+    startOffset: number,
+    stopWhen: () => boolean,
+    maxCycles: number
+  ): void {
+    if (pool.length === 0 || stopWhen()) return
+    let idx = startOffset % pool.length
+    let cycles = 0
     let addedInCycle = false
 
-    for (let j = 0; j < shuffledPriority.length; j++) {
-      const track = shuffledPriority[priorityIndex]
-
-      // Nếu không cho phép reuse và đã dùng, skip
-      if (!allowReuse && usedTrackIds.has(track.id)) {
-        priorityIndex = (priorityIndex + 1) % shuffledPriority.length
-        continue
-      }
-
-      // Tránh trùng liên tiếp
-      if (track.id === lastTrackId) {
-        priorityIndex = (priorityIndex + 1) % shuffledPriority.length
-        continue
-      }
-
-      if (currentPrioritySec >= desiredPriorityMin) break
-
-      // THÊM TRACK VÀO TRƯỚC (phát hết bài hát dù có vượt target)
-      const cumulativeDuration = currentTotalSec + track.duration
-      playlistTracks.push({
-        ...track,
-        order: playlistTracks.length + 1,
-        cumulativeDuration,
-      })
-
-      currentTotalSec = cumulativeDuration
-      currentPrioritySec += track.duration
-      lastTrackId = track.id
-      if (!allowReuse) {
-        usedTrackIds.add(track.id)
-      }
-      addedInCycle = true
-
-      // SAU KHI THÊM, mới check đạt target để dừng
-      if (currentTotalSec >= targetSec) break
-
-      priorityIndex = (priorityIndex + 1) % shuffledPriority.length
-    }
-
-    if (!addedInCycle && !allowReuse) break
-    if (!addedInCycle && allowReuse) {
-      // Nếu allowReuse và không thêm được, thử lại với logic khác
-      const picked = pickTrackAvoidingLast(shuffledPriority, lastTrackId)
-      if (picked && currentPrioritySec < desiredPriorityMin) {
-        // THÊM TRACK VÀO TRƯỚC (phát hết bài hát dù có vượt target)
-        const cumulativeDuration = currentTotalSec + picked.duration
-        playlistTracks.push({
-          ...picked,
-          order: playlistTracks.length + 1,
-          cumulativeDuration,
-        })
-        currentTotalSec = cumulativeDuration
-        currentPrioritySec += picked.duration
-        lastTrackId = picked.id
-        addedInCycle = true
-        
-        // SAU KHI THÊM, mới check đạt target để dừng
-        if (currentTotalSec >= targetSec) break
-      }
-    }
-    if (!addedInCycle) break
-    priorityCycles++
-  }
-
-  // Bước 3: Bổ sung RANDOM cho đủ target
-  if (shuffledRandom.length > 0) {
-    const randomStart = (index * 17) % shuffledRandom.length // Offset khác nhau
-    let randomIndex = randomStart
-    let randomCycles = 0
-    const maxRandomCycles = allowReuse ? 100 : 3
-
-    while (currentTotalSec < targetSec && randomCycles < maxRandomCycles) {
-      let addedInCycle = false
-
-      for (let j = 0; j < shuffledRandom.length; j++) {
-        const track = shuffledRandom[randomIndex]
-
-        // Nếu không cho phép reuse và đã dùng, skip
-        if (!allowReuse && usedTrackIds.has(track.id)) {
-          randomIndex = (randomIndex + 1) % shuffledRandom.length
-          continue
-        }
-
-        // Tránh trùng liên tiếp
-        if (track.id === lastTrackId) {
-          randomIndex = (randomIndex + 1) % shuffledRandom.length
-          continue
-        }
-
-        // THÊM TRACK VÀO TRƯỚC (phát hết bài hát dù có vượt target)
-        const cumulativeDuration = currentTotalSec + track.duration
-        playlistTracks.push({
-          ...track,
-          order: playlistTracks.length + 1,
-          cumulativeDuration,
-        })
-
-        currentTotalSec = cumulativeDuration
-        currentRandomSec += track.duration
-        lastTrackId = track.id
-        if (!allowReuse) {
-          usedTrackIds.add(track.id)
-        }
-        addedInCycle = true
-
-        // SAU KHI THÊM, mới check đạt target để dừng
-        if (currentTotalSec >= targetSec) break
-
-        randomIndex = (randomIndex + 1) % shuffledRandom.length
-      }
-
-      if (!addedInCycle && !allowReuse) break
-      if (!addedInCycle && allowReuse) {
-        // Nếu allowReuse và không thêm được, thử lại với logic khác
-        const picked = pickTrackAvoidingLast(shuffledRandom, lastTrackId)
-        if (picked) {
-          // THÊM TRACK VÀO TRƯỚC (phát hết bài hát dù có vượt target)
-          const cumulativeDuration = currentTotalSec + picked.duration
-          playlistTracks.push({
-            ...picked,
-            order: playlistTracks.length + 1,
-            cumulativeDuration,
-          })
-          currentTotalSec = cumulativeDuration
-          currentRandomSec += picked.duration
-          lastTrackId = picked.id
+    outerLoop:
+    while (!stopWhen() && cycles < maxCycles) {
+      addedInCycle = false
+      for (let j = 0; j < pool.length; j++) {
+        const track = pool[idx]
+        if (canUse(track)) {
+          add(track)
           addedInCycle = true
-          
-          // SAU KHI THÊM, mới check đạt target để dừng
-          if (currentTotalSec >= targetSec) break
+          if (stopWhen()) break outerLoop
+        }
+        idx = (idx + 1) % pool.length
+      }
+      if (!addedInCycle) {
+        if (!allowReuse) break // không còn bài chưa dùng
+        // allowReuse: chọn random tránh lastTrackId
+        const available = pool.filter(t => t.id !== lastTrackId)
+        const picked = available.length > 0
+          ? available[Math.floor(Math.random() * available.length)]
+          : pool[Math.floor(Math.random() * pool.length)]
+        if (picked) {
+          add(picked)
+          if (stopWhen()) break
+        } else {
+          break
         }
       }
-      if (!addedInCycle) break
-      randomCycles++
+      cycles++
     }
   }
 
-  // Bước 4: Nếu vẫn thiếu, thêm PRIORITY/RANDOM xen kẽ (với reuse nếu cần)
-  // CHỈ CHẠY TRONG TRƯỜNG HỢP 1 (có pinned tracks)
-  if (hasPinnedTracks) {
-    const marginSec = 5 // Margin để tránh loop vô hạn
-    const combinedPool = [...shuffledPriority, ...shuffledRandom]
-    let combinedIndex = 0
-    let combinedCycles = 0
-    const maxCombinedCycles = allowReuse ? 200 : 10
+  const maxCycles = allowReuse ? 200 : 5
 
-    while (
-      currentTotalSec < targetSec - marginSec &&
-      combinedCycles < maxCombinedCycles &&
-      combinedPool.length > 0
-    ) {
-      let addedInCycle = false
-
-      // Ưu tiên priority nếu chưa đạt min
-      const preferPriority = currentPrioritySec < desiredPriorityMin && shuffledPriority.length > 0
-      const candidatePool = preferPriority ? shuffledPriority : combinedPool
-
-      // Thử chọn track từ pool
-      const picked = pickTrackAvoidingLast(candidatePool, lastTrackId, 10)
-    
-    if (picked) {
-      // Nếu không cho phép reuse và đã dùng, skip
-      if (!allowReuse && usedTrackIds.has(picked.id)) {
-        combinedIndex = (combinedIndex + 1) % combinedPool.length
-        combinedCycles++
-        continue
-      }
-
-      // THÊM TRACK VÀO TRƯỚC (phát hết bài hát dù có vượt target)
-      const cumulativeDuration = currentTotalSec + picked.duration
-      playlistTracks.push({
-        ...picked,
-        order: playlistTracks.length + 1,
-        cumulativeDuration,
-      })
-
-      currentTotalSec = cumulativeDuration
-      lastTrackId = picked.id
-      if (!allowReuse) {
-        usedTrackIds.add(picked.id)
-      }
-
-      if (picked.folderType === 'priority') {
-        currentPrioritySec += picked.duration
-      } else if (picked.folderType === 'random') {
-        currentRandomSec += picked.duration
-      }
-      addedInCycle = true
-
-      // SAU KHI THÊM, mới check đạt target để dừng
+  // ── BƯỚC 1: Pinned tracks (luôn đứng đầu, xoay vòng theo index) ──────────
+  // Xoay vòng để mỗi playlist trong phiên có thứ tự pinned khác nhau
+  // Nhưng vị trí đầu tiên (bài "anchor") luôn là bài đã chọn đầu tiên
+  if (pinnedTracks.length > 0) {
+    const rotated = rotate(pinnedTracks, index * 3)
+    for (const track of rotated) {
+      if (canUse(track)) add(track)
       if (currentTotalSec >= targetSec) break
     }
-
-      if (!addedInCycle) break
-      combinedCycles++
-      combinedIndex = (combinedIndex + 1) % combinedPool.length
-    }
   }
 
-  // Bước 5: Đảm bảo playlist luôn >= targetSec (BẮT BUỘC)
-  // Nếu vẫn chưa đạt target sau tất cả các bước trên, tiếp tục thêm tracks
-  // Bỏ qua allowReuse ở đây vì đây là yêu cầu bắt buộc
+  // ── BƯỚC 2: Priority tracks cho đến khi đạt ngưỡng MIN ───────────────────
   if (currentTotalSec < targetSec) {
-    const allAvailableTracks = [...shuffledPriority, ...shuffledRandom]
-    if (allAvailableTracks.length > 0) {
-      let fillIndex = 0
-      let fillCycles = 0
-      const maxFillCycles = 500 // Giới hạn để tránh loop vô hạn
+    const priorityStart = priorityPool.length > 0 ? (index * 13) % priorityPool.length : 0
+    drainPool(
+      priorityPool,
+      priorityStart,
+      () => currentTotalSec >= targetSec || currentPrioritySec >= desiredPriorityMin,
+      maxCycles
+    )
+  }
 
-      while (currentTotalSec < targetSec && fillCycles < maxFillCycles) {
-        const track = allAvailableTracks[fillIndex % allAvailableTracks.length]
+  // ── BƯỚC 3: Random tracks cho đủ targetSec ───────────────────────────────
+  if (currentTotalSec < targetSec && randomPool.length > 0) {
+    const randomStart = randomPool.length > 0 ? (index * 17) % randomPool.length : 0
+    drainPool(
+      randomPool,
+      randomStart,
+      () => currentTotalSec >= targetSec,
+      maxCycles
+    )
+  }
 
-        // Tránh trùng liên tiếp nếu có thể
-        if (track.id === lastTrackId && allAvailableTracks.length > 1) {
-          fillIndex++
-          fillCycles++
-          continue
+  // ── BƯỚC 4: Nếu vẫn thiếu, thêm priority (tránh vượt max nếu có thể) ────
+  if (currentTotalSec < targetSec && priorityPool.length > 0) {
+    drainPool(
+      priorityPool,
+      0,
+      () => {
+        if (currentTotalSec >= targetSec) return true
+        // Nếu chưa vượt max thì ok, nếu vượt rồi vẫn fill vì bước emergency
+        return false
+      },
+      allowReuse ? 100 : 3
+    )
+  }
+
+  // ── BƯỚC 5 (Emergency fill): vẫn thiếu → dùng tất cả không giới hạn ──────
+  if (currentTotalSec < targetSec) {
+    const allPool = [...priorityPool, ...randomPool]
+    if (allPool.length > 0) {
+      let fi = 0
+      let fc = 0
+      while (currentTotalSec < targetSec && fc < 500) {
+        const track = allPool[fi % allPool.length]
+        if (track.id !== lastTrackId || allPool.length === 1) {
+          add(track)
+        } else {
+          fi++
         }
-
-        const cumulativeDuration = currentTotalSec + track.duration
-        playlistTracks.push({
-          ...track,
-          order: playlistTracks.length + 1,
-          cumulativeDuration,
-        })
-
-        currentTotalSec = cumulativeDuration
-        lastTrackId = track.id
-
-        if (track.folderType === 'priority') {
-          currentPrioritySec += track.duration
-        } else if (track.folderType === 'random') {
-          currentRandomSec += track.duration
-        }
-
-        // SAU KHI THÊM, mới check đạt target để dừng
-        if (currentTotalSec >= targetSec) break
-
-        fillIndex++
-        fillCycles++
+        fi++
+        fc++
       }
     }
   }
 
-  // Bước 6: Tính stats chính xác từ playlistTracks
-  let finalPrioritySec = 0
-  let finalRandomSec = 0
-  let finalPriorityCount = 0
-  let finalRandomCount = 0
+  // ── Tính stats ────────────────────────────────────────────────────────────
+  let finalPrioritySec = 0, finalRandomSec = 0
+  let finalPriorityCount = 0, finalRandomCount = 0
+  let cumulative = 0
 
   for (const track of playlistTracks) {
+    cumulative += track.duration
+    track.cumulativeDuration = cumulative
     if (track.folderType === 'priority') {
       finalPrioritySec += track.duration
       finalPriorityCount++
-    } else if (track.folderType === 'random') {
+    } else {
       finalRandomSec += track.duration
       finalRandomCount++
     }
   }
 
-  // Tính lại cumulativeDuration cho tất cả tracks
-  let cumulative = 0
-  for (const track of playlistTracks) {
-    cumulative += track.duration
-    track.cumulativeDuration = cumulative
-  }
-
-  const totalDurationSec = cumulative
-
-  // VALIDATION CUỐI CÙNG: Đảm bảo playlist luôn >= targetSec
-  // Nếu vẫn chưa đạt (edge case hiếm), log warning nhưng vẫn return
-  if (totalDurationSec < targetSec) {
-    console.warn(
-      `[PlaylistEngine] WARNING: Playlist ${index + 1} chỉ có ${totalDurationSec.toFixed(1)}s, nhỏ hơn target ${targetSec}s. Có thể do không đủ tracks trong thư viện.`
-    )
+  if (cumulative < targetSec) {
+    console.warn(`[PlaylistEngine] Playlist ${index + 1}: chỉ đạt ${cumulative.toFixed(0)}s / ${targetSec}s. Thư viện không đủ bài.`)
   }
 
   return {
     id: randomUUID(),
     name: `Playlist ${index + 1}`,
     targetDurationSec: targetSec,
-    totalDurationSec,
+    totalDurationSec: cumulative,
     priorityDurationSec: finalPrioritySec,
     randomDurationSec: finalRandomSec,
     priorityCount: finalPriorityCount,
@@ -594,7 +276,9 @@ function buildSinglePlaylist(
   }
 }
 
-export function buildPlaylists(options: BuildPlaylistsOptions): PlaylistDefinition[] {
+// ── Main export ───────────────────────────────────────────────────────────────
+
+export function buildPlaylists(options: BuildPlaylistsOptions): BuildPlaylistsResult {
   const {
     tracks,
     pinnedTrackIds,
@@ -602,180 +286,225 @@ export function buildPlaylists(options: BuildPlaylistsOptions): PlaylistDefiniti
     targetDurationMinutes,
     priorityRatioMin = 0.65,
     priorityRatioMax = 0.8,
+    crossfadeDurationSec,
   } = options
 
-  if (playlistCount < 1) {
-    throw new Error('playlistCount must be >= 1')
-  }
-
-  if (targetDurationMinutes <= 0) {
-    throw new Error('targetDurationMinutes must be > 0')
-  }
+  if (playlistCount < 1) throw new Error('playlistCount must be >= 1')
+  if (targetDurationMinutes <= 0) throw new Error('targetDurationMinutes must be > 0')
 
   const targetSec = targetDurationMinutes * 60
-  const desiredPriorityMin = targetSec * priorityRatioMin
-  const desiredPriorityMax = targetSec * priorityRatioMax
 
-  // Chuẩn bị chung
-  const priorityTracks = tracks.filter((t) => t.folderType === 'priority')
-  const randomTracks = tracks.filter((t) => t.folderType === 'random')
-  const pinnedTracks = tracks.filter((t) => pinnedTrackIds.includes(t.id))
+  // Nếu có crossfade, inflate targetSec để sau khi overlap playlist vẫn đạt đủ thời lượng.
+  // Ước tính số bài dựa trên thời lượng trung bình 3.5 phút (210s), rồi tính tổng overlap.
+  const effectiveTargetSec = (() => {
+    if (!crossfadeDurationSec || crossfadeDurationSec <= 0) return targetSec
+    const avgTrackSec = 210 // 3.5 phút — trung bình nhạc DJ/pop
+    const estimatedTrackCount = Math.ceil(targetSec / avgTrackSec)
+    const totalOverlap = crossfadeDurationSec * Math.max(0, estimatedTrackCount - 1)
+    return targetSec + totalOverlap
+  })()
+  const desiredPriorityMin = effectiveTargetSec * priorityRatioMin
+  const desiredPriorityMax = effectiveTargetSec * priorityRatioMax
+  const warnings: BuildPlaylistWarning[] = []
 
-  // PHÂN BIỆT 2 TRƯỜNG HỢP:
-  const hasPinnedTracks = pinnedTracks.length > 0
+  // ── Phân loại tracks ──────────────────────────────────────────────────────
+  const pinnedTracks = tracks.filter(t => pinnedTrackIds.includes(t.id))
+  const priorityTracks = tracks.filter(t => t.folderType === 'priority' && !pinnedTrackIds.includes(t.id))
+  const randomTracks = tracks.filter(t => t.folderType === 'random' && !pinnedTrackIds.includes(t.id))
 
-  // Tính tổng duration thư viện
-  const totalLibraryDuration = tracks.reduce((sum, t) => sum + t.duration, 0)
-  const totalRequiredDuration = playlistCount * targetSec
+  // ── LRU sort: tracks chưa dùng sẽ lên trước ──────────────────────────────
+  // Priority và random được sort riêng theo LRU pool
+  // Pinned không cần sort LRU (người dùng đã chọn cụ thể, chỉ xoay vòng vị trí)
+  const lruSortedPriority = sortByLRU(priorityTracks)
+  const lruSortedRandom = sortByLRU(randomTracks)
 
-  // Xác định có cần reuse không
+  console.log(`[PlaylistEngine] Phân loại: ${pinnedTracks.length} pinned, ${priorityTracks.length} priority, ${randomTracks.length} random`)
+
+  // ── Kiểm tra đủ tỷ lệ priority không ─────────────────────────────────────
+  const totalPriorityDuration = [...pinnedTracks, ...priorityTracks]
+    .filter(t => t.folderType === 'priority' || pinnedTrackIds.includes(t.id))
+    .reduce((s, t) => s + t.duration, 0)
+
+  if (desiredPriorityMin > 0 && totalPriorityDuration < desiredPriorityMin) {
+    const achievablePct = totalPriorityDuration > 0
+      ? Math.round((totalPriorityDuration / effectiveTargetSec) * 100)
+      : 0
+    warnings.push({
+      type: 'priority_ratio_not_met',
+      message: `Nhạc ưu tiên chỉ đủ cho ~${achievablePct}% thời lượng (yêu cầu ${Math.round(priorityRatioMin * 100)}%). Sẽ bổ sung thêm nhạc random để đủ thời lượng.`,
+      actualRatioPct: achievablePct,
+      targetRatioPct: Math.round(priorityRatioMin * 100),
+    })
+  }
+
+  // ── Kiểm tra có cần reuse không ──────────────────────────────────────────
+  const totalLibraryDuration = tracks.reduce((s, t) => s + t.duration, 0)
+  const totalRequiredDuration = playlistCount * effectiveTargetSec
   const allowReuse = totalRequiredDuration > totalLibraryDuration
 
   if (allowReuse) {
-    console.log(
-      `[PlaylistEngine] Total required duration (${totalRequiredDuration.toFixed(1)}s) > library duration (${totalLibraryDuration.toFixed(1)}s). Enabling track reuse.`
-    )
+    console.log(`[PlaylistEngine] Cần reuse: required ${totalRequiredDuration.toFixed(0)}s > library ${totalLibraryDuration.toFixed(0)}s`)
+    warnings.push({
+      type: 'track_reuse_needed',
+      message: `Thư viện (${Math.round(totalLibraryDuration / 60)} phút) không đủ cho ${playlistCount} playlist × ${targetDurationMinutes} phút. Một số bài sẽ được lặp lại (nhưng không lặp liên tiếp).`,
+    })
   }
 
-  // TRƯỜNG HỢP 1: Có pinned tracks
-  // - Pinned → Priority (không pinned) → Random
-  // TRƯỜNG HỢP 2: Không có pinned tracks
-  // - Xáo trộn toàn bộ (cả priority và random) nhưng vẫn đảm bảo tỷ lệ
-
-  let shuffledPriority: ScannedTrack[] = []
-  let shuffledPriorityNonPinned: ScannedTrack[] = []
-  let shuffledRandom: ScannedTrack[] = []
-  let shuffledAll: ScannedTrack[] = [] // Dùng cho trường hợp 2
-
-  if (hasPinnedTracks) {
-    // TRƯỜNG HỢP 1: Tách priority thành pinned và non-pinned
-    const priorityPinnedIds = new Set(pinnedTracks.filter(t => t.folderType === 'priority').map(t => t.id))
-    shuffledPriorityNonPinned = shuffle(priorityTracks.filter(t => !priorityPinnedIds.has(t.id)))
-    shuffledRandom = shuffle(randomTracks)
-    console.log(`[PlaylistEngine] Trường hợp 1: Có ${pinnedTracks.length} bài đã chọn. Priority (không pinned): ${shuffledPriorityNonPinned.length}, Random: ${shuffledRandom.length}`)
-  } else {
-    // TRƯỜNG HỢP 2: Xáo trộn toàn bộ
-    shuffledAll = shuffle([...priorityTracks, ...randomTracks])
-    console.log(`[PlaylistEngine] Trường hợp 2: Không có bài đã chọn. Xáo trộn toàn bộ ${shuffledAll.length} bài.`)
+  // ── Kiểm tra thư viện rỗng ────────────────────────────────────────────────
+  if (tracks.length === 0) {
+    warnings.push({
+      type: 'insufficient_tracks',
+      message: 'Không có bài hát nào trong thư viện. Vui lòng quét nhạc trước.',
+    })
+    return { playlists: [], warnings }
   }
 
-  // Build từng playlist
+  // ── Build từng playlist ───────────────────────────────────────────────────
   const playlists: PlaylistDefinition[] = []
-  const playlistSignatures = new Set<string>() // Để đảm bảo mỗi playlist khác nhau
+  const playlistSignatures = new Set<string>()
 
   for (let i = 0; i < playlistCount; i++) {
     let playlist: PlaylistDefinition
     let attempts = 0
-    const MAX_ATTEMPTS = 50 // Tối đa 50 lần thử để tạo playlist khác nhau
 
-    // Đảm bảo mỗi playlist khác nhau
     do {
-      if (hasPinnedTracks) {
-        // TRƯỜNG HỢP 1: Shuffle lại mỗi lần để đảm bảo khác nhau
-        const shuffledPriorityNonPinnedThisTime = shuffle(priorityTracks.filter(t => !pinnedTrackIds.includes(t.id)))
-        const shuffledRandomThisTime = shuffle(randomTracks)
-        const shuffledPinnedThisTime = shuffle(pinnedTracks) // Shuffle pinned để mỗi playlist khác nhau
+      // Mỗi lần thử: shuffle lại trong tier (LRU order giữ nguyên, shuffle trong tier)
+      // Pinned: shuffle để đa dạng thứ tự nội bộ nhóm, rotate để mỗi playlist khác nhau
+      const pinnedShuffled = shuffle(pinnedTracks)
 
-        playlist = buildSinglePlaylist(
-          i,
-          shuffledPinnedThisTime,
-          shuffledPriorityNonPinnedThisTime,
-          shuffledRandomThisTime,
-          targetSec,
-          desiredPriorityMin,
-          desiredPriorityMax,
-          allowReuse,
-          hasPinnedTracks
-        )
-      } else {
-        // TRƯỜNG HỢP 2: Shuffle lại toàn bộ mỗi lần
-        const shuffledAllThisTime = shuffle([...priorityTracks, ...randomTracks])
-        playlist = buildSinglePlaylist(
-          i,
-          [],
-          [],
-          [],
-          targetSec,
-          desiredPriorityMin,
-          desiredPriorityMax,
-          allowReuse,
-          hasPinnedTracks,
-          shuffledAllThisTime
-        )
-      }
+      // Priority và random: LRU sort (tier 0→1→2), rồi shuffle trong mỗi tier → đã làm trong sortByLRU()
+      // Để mỗi attempt khác nhau, shuffle lại
+      const priorityForBuild = attempts === 0 ? lruSortedPriority : shuffle(lruSortedPriority)
+      const randomForBuild   = attempts === 0 ? lruSortedRandom   : shuffle(lruSortedRandom)
 
-      // Tạo signature từ thứ tự tracks
-      const signature = playlist.tracks.map(t => t.id).join('|')
-      
-      if (!playlistSignatures.has(signature)) {
-        playlistSignatures.add(signature)
-        break // Tìm được playlist khác nhau
+      playlist = buildSinglePlaylist(
+        i,
+        pinnedShuffled,
+        priorityForBuild,
+        randomForBuild,
+        effectiveTargetSec,
+        desiredPriorityMin,
+        desiredPriorityMax,
+        allowReuse
+      )
+
+      const sig = playlist.tracks.map(t => t.id).join('|')
+      if (!playlistSignatures.has(sig)) {
+        playlistSignatures.add(sig)
+        break
       }
 
       attempts++
-      if (attempts >= MAX_ATTEMPTS) {
-        console.warn(`[PlaylistEngine] Không thể tạo playlist ${i + 1} khác nhau sau ${MAX_ATTEMPTS} lần thử. Sử dụng playlist hiện tại.`)
-        break // Chấp nhận playlist trùng nếu không thể tạo khác
+    } while (attempts < 30)
+
+    // ── Cảnh báo per-playlist nếu tỷ lệ lệch nhiều ────────────────────────
+    if (playlist.totalDurationSec > 0) {
+      const actualPct = Math.round((playlist.priorityDurationSec / playlist.totalDurationSec) * 100)
+      const targetPct = Math.round(priorityRatioMin * 100)
+
+      // Warn nếu thực tế thấp hơn yêu cầu tối thiểu quá 10%
+      if (actualPct < targetPct - 10) {
+        const alreadyWarned = warnings.some(w => w.type === 'priority_ratio_not_met' && w.playlistIndex == null)
+        if (!alreadyWarned) {
+          warnings.push({
+            type: 'priority_ratio_not_met',
+            playlistIndex: i,
+            message: `Playlist ${i + 1}: nhạc ưu tiên chỉ đạt ${actualPct}% (yêu cầu ${targetPct}%). Không đủ nhạc ưu tiên trong thư viện.`,
+            actualRatioPct: actualPct,
+            targetRatioPct: targetPct,
+          })
+        }
       }
-    } while (true)
+
+      // Warn nếu playlist không đủ thời lượng
+      if (playlist.totalDurationSec < effectiveTargetSec * 0.9) {
+        warnings.push({
+          type: 'insufficient_tracks',
+          playlistIndex: i,
+          message: `Playlist ${i + 1}: chỉ đạt ${Math.round(playlist.totalDurationSec / 60)} phút / ${targetDurationMinutes} phút do thư viện không đủ bài.`,
+        })
+      }
+    }
 
     playlists.push(playlist)
 
-    // Logging
-    const priorityPercent = playlist.totalDurationSec > 0
+    const pPct = playlist.totalDurationSec > 0
       ? ((playlist.priorityDurationSec / playlist.totalDurationSec) * 100).toFixed(1)
       : '0.0'
-    const randomPercent = playlist.totalDurationSec > 0
+    const rPct = playlist.totalDurationSec > 0
       ? ((playlist.randomDurationSec / playlist.totalDurationSec) * 100).toFixed(1)
       : '0.0'
-    const targetPercent = playlist.totalDurationSec > 0
-      ? ((playlist.totalDurationSec / targetSec) * 100).toFixed(1)
-      : '0.0'
-
     console.log(
-      `[PlaylistEngine] P${i + 1}: total=${playlist.totalDurationSec.toFixed(1)}s (${targetPercent}% of target), priority=${playlist.priorityDurationSec.toFixed(1)}s (${priorityPercent}%), random=${playlist.randomDurationSec.toFixed(1)}s (${randomPercent}%), tracks=${playlist.tracks.length}`
+      `[PlaylistEngine] P${i + 1}: ${playlist.totalDurationSec.toFixed(0)}s, priority=${pPct}%, random=${rPct}%, tracks=${playlist.tracks.length}`
     )
   }
 
-  return playlists
+  return { playlists, warnings }
 }
 
-// In-memory storage
+// ── In-memory storage + disk persistence ─────────────────────────────────────
+
+import fs from 'node:fs'
+import path from 'node:path'
+
+function getPlaylistStorePath(): string {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { app } = require('electron') as typeof import('electron')
+    return path.join(app.getPath('userData'), 'playlists.json')
+  } catch {
+    return path.join(process.cwd(), '.playlists.json')
+  }
+}
+
+function persistPlaylists(list: PlaylistDefinition[]): void {
+  try {
+    fs.writeFileSync(getPlaylistStorePath(), JSON.stringify(list, null, 2), 'utf-8')
+  } catch (err) {
+    console.warn('[PlaylistEngine] Không thể lưu playlist ra disk:', err)
+  }
+}
+
+function loadPersistedPlaylists(): PlaylistDefinition[] {
+  try {
+    const fp = getPlaylistStorePath()
+    if (!fs.existsSync(fp)) return []
+    return JSON.parse(fs.readFileSync(fp, 'utf-8')) as PlaylistDefinition[]
+  } catch {
+    return []
+  }
+}
+
 const inMemoryPlaylists: PlaylistDefinition[] = []
 
 export function savePlaylists(list: PlaylistDefinition[]) {
-  // Ghi vào inMemoryPlaylists, có thể overwrite toàn bộ batch mới
   inMemoryPlaylists.length = 0
   inMemoryPlaylists.push(...list)
+  persistPlaylists(list)
 }
 
 export function getPlaylists(): PlaylistDefinition[] {
+  // Nếu RAM trống (vd: vừa restart app) → load từ disk
+  if (inMemoryPlaylists.length === 0) {
+    const fromDisk = loadPersistedPlaylists()
+    if (fromDisk.length > 0) {
+      inMemoryPlaylists.push(...fromDisk)
+    }
+  }
   return [...inMemoryPlaylists]
 }
 
 export function getPlaylistById(id: string): PlaylistDefinition | undefined {
-  return inMemoryPlaylists.find((p) => p.id === id)
+  getPlaylists() // ensure loaded
+  return inMemoryPlaylists.find(p => p.id === id)
 }
 
 export function clearPlaylists(): void {
-  // Clear in-memory playlists (khi quét nhạc mới)
   inMemoryPlaylists.length = 0
+  try {
+    const fp = getPlaylistStorePath()
+    if (fs.existsSync(fp)) fs.unlinkSync(fp)
+  } catch {
+    // ignore
+  }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

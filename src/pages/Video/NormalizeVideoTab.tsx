@@ -9,10 +9,36 @@ function getFileName(filePath: string): string {
   return parts[parts.length - 1] || filePath
 }
 
+const RESOLUTION_OPTIONS = [
+  { label: '16:9 — 1920×1080 (Full HD Ngang)', value: '1920x1080' },
+  { label: '4:3 — 1440×1080 (Cổ điển)', value: '1440x1080' },
+  { label: '2.35:1 — 2560×1080 (Cinemascope)', value: '2560x1080' },
+  { label: '2:1 — 2160×1080 (Univisium)', value: '2160x1080' },
+  { label: '1.85:1 — 1998×1080 (Widescreen)', value: '1998x1080' },
+  { label: '9:16 — 1080×1920 (Dọc / Reels / Shorts)', value: '1080x1920' },
+  { label: '3:4 — 1080×1440 (Dọc cổ điển)', value: '1080x1440' },
+  { label: '5.8-inch — 1080×1868 (Mobile tall)', value: '1080x1868' },
+  { label: '1:1 — 1080×1080 (Vuông / Instagram)', value: '1080x1080' },
+  { label: '16:9 — 3840×2160 (4K UHD)', value: '3840x2160' },
+  { label: '16:9 — 1280×720 (HD 720p)', value: '1280x720' },
+]
+
+const FPS_OPTIONS = [
+  { label: '24.00 fps (Cinema)', value: '24' },
+  { label: '25.00 fps (PAL / Europe)', value: '25' },
+  { label: '29.97 fps (NTSC)', value: '30000/1001' },
+  { label: '30.00 fps (YouTube phổ biến)', value: '30' },
+  { label: '50.00 fps (PAL HFR)', value: '50' },
+  { label: '59.94 fps (NTSC HFR)', value: '60000/1001' },
+  { label: '60.00 fps (Gaming / HFR)', value: '60' },
+]
+
 interface NormalizeVideoRequest {
   inputFiles: string[]
   outputDir: string
   useGpu: boolean
+  targetResolution?: string
+  targetFps?: string
 }
 
 interface NormalizeVideoResult {
@@ -35,6 +61,8 @@ function NormalizeVideoTab() {
   const [videoItems, setVideoItems] = useState<VideoItem[]>([])
   const [outputDir, setOutputDir] = useState<string>('')
   const [useGpu, setUseGpu] = useState<boolean>(true) // Default: sử dụng GPU
+  const [targetResolution, setTargetResolution] = useState<string>('1920x1080')
+  const [targetFps, setTargetFps] = useState<string>('30')
 
   const [isProcessing, setIsProcessing] = useState<boolean>(false)
   const [currentRequestId, setCurrentRequestId] = useState<string | null>(null)
@@ -269,6 +297,8 @@ function NormalizeVideoTab() {
         inputFiles: videoItems.map((v) => v.path),
         outputDir,
         useGpu,
+        targetResolution,
+        targetFps,
         requestId, // Truyền requestId vào backend
       }
 
@@ -346,7 +376,7 @@ function NormalizeVideoTab() {
     <div style={{ padding: '24px', color: '#e0e0e0', backgroundColor: '#1e1e1e', minHeight: '100%' }}>
       <h3 style={{ marginBottom: '8px', fontSize: '20px', fontWeight: 'bold' }}>Chuẩn hóa video</h3>
       <p style={{ fontSize: '13px', color: '#b0b0b0', marginBottom: '24px' }}>
-        Xuất H.264/AAC, fps 30, yuv420p — giữ nguyên tỉ lệ khung hình gốc (đồng bộ với Cắt/Ghép/Xuất video hoàn chỉnh — tránh dừng hình, FPS sai).
+        Xuất H.264/AAC, chuẩn hóa tỉ lệ khung hình + FPS — thêm viền đen nếu cần (letterbox/pillarbox). Tương thích với Cắt/Ghép/Xuất video.
       </p>
 
       {/* Danh sách video */}
@@ -486,8 +516,63 @@ function NormalizeVideoTab() {
         </div>
       </div>
 
-      {/* GPU Encoding Option */}
+      {/* Cài đặt chuẩn hóa */}
       <div style={{ marginBottom: '24px', padding: '16px', backgroundColor: '#2d2d2d', borderRadius: '4px' }}>
+        <div style={{ fontWeight: '600', marginBottom: '12px', fontSize: '14px' }}>Cài đặt chuẩn hóa</div>
+
+        {/* Resolution */}
+        <div style={{ marginBottom: '12px' }}>
+          <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', color: '#ccc' }}>
+            Tỉ lệ khung hình / Độ phân giải mục tiêu
+          </label>
+          <select
+            value={targetResolution}
+            onChange={(e) => setTargetResolution(e.target.value)}
+            disabled={isProcessing}
+            style={{
+              width: '100%',
+              padding: '8px 12px',
+              backgroundColor: '#1a1a1a',
+              color: '#e0e0e0',
+              border: '1px solid #555',
+              borderRadius: '4px',
+              fontSize: '13px',
+              cursor: isProcessing ? 'not-allowed' : 'pointer',
+            }}
+          >
+            {RESOLUTION_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+        </div>
+
+        {/* FPS */}
+        <div style={{ marginBottom: '12px' }}>
+          <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', color: '#ccc' }}>
+            FPS mục tiêu
+          </label>
+          <select
+            value={targetFps}
+            onChange={(e) => setTargetFps(e.target.value)}
+            disabled={isProcessing}
+            style={{
+              width: '100%',
+              padding: '8px 12px',
+              backgroundColor: '#1a1a1a',
+              color: '#e0e0e0',
+              border: '1px solid #555',
+              borderRadius: '4px',
+              fontSize: '13px',
+              cursor: isProcessing ? 'not-allowed' : 'pointer',
+            }}
+          >
+            {FPS_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+        </div>
+
+        {/* GPU */}
         <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', fontSize: '14px' }}>
           <input
             type="checkbox"
@@ -504,8 +589,7 @@ function NormalizeVideoTab() {
           <div>
             <div style={{ fontWeight: '500', marginBottom: '4px' }}>Sử dụng GPU để mã hóa (nhanh hơn)</div>
             <div style={{ fontSize: '12px', color: '#999' }}>
-              Sử dụng GPU (NVIDIA/AMD/Apple) để mã hóa video, nhanh hơn nhiều so với CPU.
-              Nếu GPU không khả dụng, hệ thống sẽ tự động chuyển sang CPU.
+              Ưu tiên GPU (NVIDIA/AMD). Tự động fallback sang CPU nếu GPU không khả dụng.
             </div>
           </div>
         </label>
@@ -539,7 +623,7 @@ function NormalizeVideoTab() {
       {/* Success message */}
       {successData && !isProcessing && (
         <div style={{ marginBottom: '24px', padding: '16px', backgroundColor: '#1b5e20', borderRadius: '4px', color: '#fff' }}>
-          <div style={{ fontWeight: 'bold', marginBottom: '8px' }}>✓ Chuẩn hóa thành công!</div>
+          <div style={{ fontWeight: 'bold', marginBottom: '8px' }}>Chuẩn hóa thành công!</div>
           <div style={{ fontSize: '13px' }}>
             Đã xử lý: {successData.processed} video
             {successData.failed > 0 && <span style={{ color: '#ffccbc' }}> ({successData.failed} lỗi)</span>}
@@ -572,7 +656,7 @@ function NormalizeVideoTab() {
               fontWeight: 'bold',
             }}
           >
-            📁 Mở thư mục đã xuất
+            Mở thư mục đã xuất
           </button>
         </div>
       )}

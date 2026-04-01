@@ -713,7 +713,7 @@ function ScanMusicPage() {
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
               <h3 style={{ fontSize: '16px', fontWeight: 'bold', margin: 0 }}>
-                {normalizeResult.success ? '✓ Hoàn thành' : '✗ Có lỗi xảy ra'}
+                {normalizeResult.success ? 'Hoàn thành' : 'Có lỗi xảy ra'}
               </h3>
               {(normalizeResult.outputFiles.length > 0 || outputFolder) && (
                 <button
@@ -729,7 +729,7 @@ function ScanMusicPage() {
                     fontWeight: 500,
                   }}
                 >
-                  📁 Mở thư mục xuất
+                  Mở thư mục xuất
                 </button>
               )}
             </div>

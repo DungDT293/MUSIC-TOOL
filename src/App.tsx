@@ -258,7 +258,7 @@ function App() {
         justifyContent: 'center',
         gap: '20px'
       }}>
-        <h1 style={{ fontSize: '24px', margin: 0 }}>❌ Lỗi khi tải ứng dụng</h1>
+        <h1 style={{ fontSize: '24px', margin: 0 }}>Lỗi khi tải ứng dụng</h1>
         <div style={{ 
           backgroundColor: '#2a2a2a', 
           padding: '20px', 
@@ -292,7 +292,7 @@ function App() {
         justifyContent: 'center',
         gap: '20px'
       }}>
-        <h1 style={{ fontSize: '24px', margin: 0 }}>❌ Lỗi: window.api không khả dụng</h1>
+        <h1 style={{ fontSize: '24px', margin: 0 }}>Lỗi: window.api không khả dụng</h1>
         <div style={{ 
           backgroundColor: '#2a2a2a', 
           padding: '20px', 

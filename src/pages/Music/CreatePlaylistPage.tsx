@@ -2,8 +2,11 @@ import { useState, useEffect } from 'react'
 import {
   ScanMusicResult,
   BuildPlaylistsOptions,
+  BuildPlaylistsResult,
+  BuildPlaylistWarning,
   PlaylistDefinition,
   ScannedTrack,
+  MusicPoolStats,
 } from '../../types/ipc'
 
 function formatDuration(seconds: number): string {
@@ -32,7 +35,11 @@ function CreatePlaylistPage() {
   const [targetMinutesInput, setTargetMinutesInput] = useState<string>('30')
   const [priorityRatioInput, setPriorityRatioInput] = useState<string>('') // % nhạc ưu tiên (để trống = dùng mặc định 65-85%)
   const [playlists, setPlaylists] = useState<PlaylistDefinition[]>([])
+  const [warnings, setWarnings] = useState<BuildPlaylistWarning[]>([])
   const [error, setError] = useState<string | null>(null)
+  const [poolStats, setPoolStats] = useState<MusicPoolStats | null>(null)
+  const [poolLoading, setPoolLoading] = useState(false)
+  const [showPoolDetail, setShowPoolDetail] = useState(false)
   const [loading, setLoading] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [expandedPlaylistId, setExpandedPlaylistId] = useState<string | null>(null)
@@ -102,9 +109,9 @@ function CreatePlaylistPage() {
 
   // Reset playlists khi scanResult thay đổi (quét nhạc mới)
   useEffect(() => {
-    // Mỗi khi scanResult thay đổi → reset playlists
-    // Playlist chỉ được tạo khi user bấm "Tạo playlist"
     setPlaylists([])
+    setWarnings([])
+    if (scanResult) loadPoolStats(scanResult.tracks)
   }, [scanResult])
 
   // Listen for custom event khi Tab 1 quét nhạc mới (trong cùng window)
@@ -112,6 +119,7 @@ function CreatePlaylistPage() {
     const handleMusicScanCompleted = (e: CustomEvent<ScanMusicResult>) => {
       // Quét nhạc mới → reset playlists và update scanResult
       setPlaylists([])
+      setWarnings([])
       setScanResult(e.detail)
     }
 
@@ -131,6 +139,27 @@ function CreatePlaylistPage() {
     })
   }
 
+  const loadPoolStats = async (tracks: ScanMusicResult['tracks']) => {
+    if (!window.api?.getMusicPoolStats) return
+    setPoolLoading(true)
+    try {
+      const ids = tracks.map(t => t.id)
+      const stats = await window.api.getMusicPoolStats(ids)
+      setPoolStats(stats)
+    } catch (e) {
+      console.warn('Không thể load pool stats:', e)
+    } finally {
+      setPoolLoading(false)
+    }
+  }
+
+  const handleClearPool = async () => {
+    if (!window.api?.clearMusicPool) return
+    if (!confirm('Xoá toàn bộ lịch sử sử dụng nhạc? Pool sẽ reset về trạng thái ban đầu.')) return
+    await window.api.clearMusicPool()
+    if (scanResult) await loadPoolStats(scanResult.tracks)
+  }
+
   const handleCreatePlaylists = async () => {
     if (!scanResult) return
 
@@ -142,6 +171,7 @@ function CreatePlaylistPage() {
     setError(null)
     setLoading(true)
     setPlaylists([])
+    setWarnings([])
 
     try {
       const options: BuildPlaylistsOptions = {
@@ -153,9 +183,12 @@ function CreatePlaylistPage() {
         priorityRatioMax, // từ UI (mặc định 0.8)
       }
 
-      const result = await window.api.createPlaylists(options)
-      setPlaylists(result)
-      setExpandedPlaylistId(result[0]?.id || null)
+      const result: BuildPlaylistsResult = await window.api.createPlaylists(options)
+      setPlaylists(result.playlists)
+      setWarnings(result.warnings ?? [])
+      setExpandedPlaylistId(result.playlists[0]?.id || null)
+      // Load pool stats sau khi tạo xong để cập nhật trạng thái mới
+      await loadPoolStats(scanResult.tracks)
 
       // Reset input về số đã chuẩn hóa sau khi tạo thành công
       if (playlistCount > 0 && targetDurationMinutes > 0) {
@@ -263,6 +296,83 @@ function CreatePlaylistPage() {
             ))
           )}
         </div>
+
+        {/* Pool Monitor — bên trong left panel, dưới danh sách bài */}
+        {poolStats && (
+          <div style={{ marginTop: '10px', backgroundColor: '#252526', border: '1px solid #444', borderRadius: '6px', padding: '10px', flexShrink: 0 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+              <div style={{ fontSize: '12px', fontWeight: 'bold', color: '#ccc' }}>
+                Pool nhạc ({poolStats.total} bài)
+              </div>
+              <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                <button
+                  onClick={() => setShowPoolDetail(v => !v)}
+                  style={{ fontSize: '11px', padding: '2px 7px', backgroundColor: '#3a3a3a', color: '#aaa', border: '1px solid #555', borderRadius: '3px', cursor: 'pointer' }}
+                >
+                  {showPoolDetail ? 'Ẩn' : 'Chi tiết'}
+                </button>
+                <button
+                  onClick={handleClearPool}
+                  style={{ fontSize: '11px', padding: '2px 7px', backgroundColor: '#3a1f1f', color: '#ff8888', border: '1px solid #662222', borderRadius: '3px', cursor: 'pointer' }}
+                >
+                  Reset
+                </button>
+                <button
+                  onClick={() => scanResult && loadPoolStats(scanResult.tracks)}
+                  disabled={poolLoading}
+                  style={{ fontSize: '11px', padding: '2px 7px', backgroundColor: '#2a3a2a', color: '#88cc88', border: '1px solid #446644', borderRadius: '3px', cursor: 'pointer' }}
+                >
+                  {poolLoading ? '…' : 'R'}
+                </button>
+              </div>
+            </div>
+            {/* Tier counters */}
+            <div style={{ display: 'flex', gap: '6px', fontSize: '11px' }}>
+              <div style={{ flex: 1, backgroundColor: '#1e2e1e', borderRadius: '4px', padding: '5px 6px', textAlign: 'center' }}>
+                <div style={{ color: '#66cc66', fontWeight: 'bold', fontSize: '15px' }}>{poolStats.tier0}</div>
+                <div style={{ color: '#666', fontSize: '10px' }}>Chưa dùng</div>
+              </div>
+              <div style={{ flex: 1, backgroundColor: '#2e2e1e', borderRadius: '4px', padding: '5px 6px', textAlign: 'center' }}>
+                <div style={{ color: '#ccaa44', fontWeight: 'bold', fontSize: '15px' }}>{poolStats.tier1}</div>
+                <div style={{ color: '#666', fontSize: '10px' }}>&gt;7 ngày</div>
+              </div>
+              <div style={{ flex: 1, backgroundColor: '#2e1e1e', borderRadius: '4px', padding: '5px 6px', textAlign: 'center' }}>
+                <div style={{ color: '#cc6644', fontWeight: 'bold', fontSize: '15px' }}>{poolStats.tier2}</div>
+                <div style={{ color: '#666', fontSize: '10px' }}>Gần đây</div>
+              </div>
+            </div>
+            {/* Progress bar */}
+            {poolStats.total > 0 && (
+              <div style={{ marginTop: '6px', height: '4px', borderRadius: '2px', overflow: 'hidden', display: 'flex', backgroundColor: '#333' }}>
+                <div style={{ flex: poolStats.tier0, backgroundColor: '#3a6a3a', transition: 'flex 0.3s' }} />
+                <div style={{ flex: poolStats.tier1, backgroundColor: '#6a5a1a', transition: 'flex 0.3s' }} />
+                <div style={{ flex: poolStats.tier2, backgroundColor: '#6a2a1a', transition: 'flex 0.3s' }} />
+              </div>
+            )}
+            {/* Chi tiết từng bài */}
+            {showPoolDetail && poolStats.tracks.length > 0 && (
+              <div style={{ marginTop: '8px', maxHeight: '180px', overflowY: 'auto', fontSize: '11px', borderTop: '1px solid #333', paddingTop: '6px' }}>
+                {[...poolStats.tracks]
+                  .sort((a, b) => (b.lastUsedAt ?? 0) - (a.lastUsedAt ?? 0))
+                  .map(t => {
+                    const color = t.tier === 0 ? '#66cc66' : t.tier === 1 ? '#ccaa44' : '#cc6644'
+                    const label = t.tier === 0 ? 'Chưa dùng' : t.daysSinceUsed === 0 ? 'Hôm nay' : `${t.daysSinceUsed}n trước`
+                    const track = scanResult?.tracks.find(s => s.id === t.id)
+                    return (
+                      <div key={t.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', borderBottom: '1px solid #2a2a2a' }}>
+                        <div style={{ color: '#bbb', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {track?.fileName ?? t.id.slice(0, 12) + '…'}
+                        </div>
+                        <div style={{ color, marginLeft: '8px', whiteSpace: 'nowrap', flexShrink: 0 }}>
+                          {label}{t.useCount > 0 ? ` ×${t.useCount}` : ''}
+                        </div>
+                      </div>
+                    )
+                  })}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Bên phải: Cấu hình và preview */}
@@ -501,6 +611,29 @@ function CreatePlaylistPage() {
           </div>
         )}
 
+        {/* Warnings từ backend (sau khi tạo playlist) */}
+        {warnings.length > 0 && (
+          <div style={{ marginBottom: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {warnings.map((w, i) => (
+              <div
+                key={i}
+                style={{
+                  padding: '10px 14px',
+                  backgroundColor: w.type === 'insufficient_tracks' ? '#3a1f1f' : '#3a3a1f',
+                  border: `1px solid ${w.type === 'insufficient_tracks' ? '#ff6666' : '#ffaa00'}`,
+                  borderRadius: '4px',
+                  color: w.type === 'insufficient_tracks' ? '#ff9999' : '#ffcc88',
+                  fontSize: '12px',
+                  lineHeight: '1.5',
+                }}
+              >
+                {w.playlistIndex != null ? `Playlist ${w.playlistIndex + 1}: ` : ''}
+                {w.message}
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* Preview kết quả */}
         <div style={{ flex: 1, overflowY: 'auto' }}>
           {playlists.length > 0 && (
@@ -553,7 +686,7 @@ function CreatePlaylistPage() {
                         </div>
                       </div>
                       <div style={{ color: '#888', fontSize: '20px' }}>
-                        {isExpanded ? '▼' : '▶'}
+                        {isExpanded ? 'v' : '>'}
                       </div>
                     </div>
 

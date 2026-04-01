@@ -93,7 +93,6 @@ export default function VersionBlockingScreen({
       >
         {rule === 'block-old' ? (
           <>
-            <div style={{ fontSize: '64px', marginBottom: '20px' }}>⚠️</div>
             <h1 style={{ fontSize: '28px', fontWeight: '600', marginBottom: '16px', color: '#fbbf24' }}>
               Phiên Bản Quá Cũ
             </h1>
@@ -189,7 +188,6 @@ export default function VersionBlockingScreen({
           </>
         ) : (
           <>
-            <div style={{ fontSize: '64px', marginBottom: '20px' }}>🚫</div>
             <h1 style={{ fontSize: '28px', fontWeight: '600', marginBottom: '16px', color: '#ef4444' }}>
               Phiên Bản Bị Chặn
             </h1>

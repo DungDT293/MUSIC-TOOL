@@ -20,11 +20,11 @@ const panelStyle: React.CSSProperties = {
 }
 
 const LAYER_TYPE_ICON: Record<string, string> = {
-  image: '🖼️',
-  text: '📝',
-  visualizer: '🎵',
-  video: '🎬',
-  group: '📁',
+  image: '[img]',
+  text: '[txt]',
+  visualizer: '[wav]',
+  video: '[vid]',
+  group: '[grp]',
 }
 
 const LAYER_TYPE_COLOR: Record<string, string> = {
@@ -210,28 +210,28 @@ export default function LayersPanel() {
       {/* ── Action buttons row ── */}
       <div style={{ padding: '8px 10px', borderBottom: '1px solid rgba(255,255,255,0.06)', display: 'flex', flexWrap: 'wrap', gap: 4 }}>
         <button type="button" onClick={handleAddImage} style={addBtn('rgba(30,80,50,0.4)')} title="Thêm layer ảnh">
-          🖼️ Ảnh
+          Anh
         </button>
         <button type="button" onClick={() => addTextLayer()} style={addBtn('rgba(60,60,20,0.4)')} title="Thêm layer chữ">
-          📝 Text
+          Text
         </button>
         <button type="button" onClick={() => addVisualizerLayer()} style={addBtn('rgba(20,40,80,0.4)')} title="Thêm sóng nhạc">
-          🎵 Wave
+          Wave
         </button>
         <button type="button" onClick={() => videoInputRef.current?.click()} style={addBtn('rgba(60,20,60,0.4)')} title="Thêm video">
-          🎬 Video
+          Video
         </button>
         <button type="button" onClick={() => logoInputRef.current?.click()} style={addBtn('rgba(20,60,60,0.4)')} title="Thêm logo / watermark (luôn trên cùng)">
-          💎 Logo
+          Logo
         </button>
         <button type="button" onClick={() => introInputRef.current?.click()} style={addBtn('rgba(50,30,10,0.4)')} title="Thêm intro layer (5 giây đầu)">
-          🎬 Intro
+          Intro
         </button>
         <button type="button" onClick={() => outroInputRef.current?.click()} style={addBtn('rgba(50,10,30,0.4)')} title="Thêm outro layer (5 giây cuối)">
-          🏁 Outro
+          Outro
         </button>
         <button type="button" onClick={() => addGroup()} style={addBtn()} title="Tạo group">
-          📁 Group
+          Group
         </button>
       </div>
 
@@ -248,7 +248,7 @@ export default function LayersPanel() {
               color: showPresets ? '#a8d4ff' : 'rgba(255,255,255,0.7)',
             }}
           >
-            🎨 Preset sóng {showPresets ? '▲' : '▼'}
+            Preset sóng {showPresets ? '^' : 'v'}
           </button>
           <button
             type="button"
@@ -259,7 +259,7 @@ export default function LayersPanel() {
               color: showTemplates ? 'rgba(255,220,150,0.9)' : 'rgba(255,255,255,0.7)',
             }}
           >
-            📂 Template {showTemplates ? '▲' : '▼'}
+            Template {showTemplates ? '^' : 'v'}
           </button>
         </div>
 
@@ -304,7 +304,7 @@ export default function LayersPanel() {
                 }}
                 title={preset.description}
               >
-                <span style={{ fontSize: 14 }}>🎵</span>
+                <span style={{ fontSize: 14 }}>[wav]</span>
                 <span>
                   <span style={{ fontWeight: 600 }}>{preset.name}</span>
                   <span style={{ color: 'rgba(255,255,255,0.35)', marginLeft: 6 }}>[{preset.category}]</span>
@@ -319,7 +319,7 @@ export default function LayersPanel() {
           <div style={{ marginTop: 6, background: 'rgba(0,0,0,0.2)', borderRadius: 5, padding: 6 }}>
             {templateError && (
               <div style={{ fontSize: 10, color: 'rgba(255,150,100,0.9)', marginBottom: 6, padding: '4px 6px', background: 'rgba(255,100,80,0.1)', borderRadius: 4 }}>
-                ⚠️ {templateError}
+                {templateError}
               </div>
             )}
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
@@ -329,7 +329,7 @@ export default function LayersPanel() {
                 disabled={layers.length === 0 || savingTemplate}
                 style={{ ...addBtn('rgba(255,200,100,0.1)'), opacity: layers.length === 0 ? 0.5 : 1 }}
               >
-                {savingTemplate ? '…' : '💾 Lưu'}
+                {savingTemplate ? '…' : 'Lưu'}
               </button>
               {templates.map((t) => (
                 <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
@@ -350,7 +350,7 @@ export default function LayersPanel() {
       <div style={{ flex: 1, overflowY: 'auto', padding: '4px 6px' }}>
         {displayOrder.length === 0 ? (
           <div style={{ padding: 16, textAlign: 'center', fontSize: 11, color: 'rgba(255,255,255,0.3)' }}>
-            <div style={{ fontSize: 28, marginBottom: 8 }}>🎵</div>
+            <div style={{ fontSize: 28, marginBottom: 8 }}>[wav]</div>
             Chưa có layer.<br />Thêm Ảnh, Text hoặc Wave để bắt đầu.
           </div>
         ) : (
@@ -383,16 +383,16 @@ export default function LayersPanel() {
                     }}
                   >
                     <button type="button" onClick={(e) => { e.stopPropagation(); toggleGroupExpanded(group.id) }} style={{ ...iconBtn, padding: '1px 3px', fontSize: 9 }}>
-                      {isExpanded ? '▼' : '▶'}
+                      {isExpanded ? 'v' : '>'}
                     </button>
-                    <span style={{ fontSize: 13 }}>📁</span>
+                    <span style={{ fontSize: 13 }}>[grp]</span>
                     <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {group.name} <span style={{ color: 'rgba(255,255,255,0.35)', fontSize: 10 }}>({group.children.length})</span>
                     </span>
                     {isEditing && <span style={{ fontSize: 9, color: '#4d9fff' }}>✏️ Đang sửa</span>}
                     <button type="button" onClick={(e) => { e.stopPropagation(); moveLayerUp(group.id) }} disabled={!canMoveUp} title="Lên trên" style={{ ...iconBtn, opacity: canMoveUp ? 1 : 0.3 }}>↑</button>
                     <button type="button" onClick={(e) => { e.stopPropagation(); moveLayerDown(group.id) }} disabled={!canMoveDown} title="Xuống dưới" style={{ ...iconBtn, opacity: canMoveDown ? 1 : 0.3 }}>↓</button>
-                    <button type="button" onClick={(e) => { e.stopPropagation(); removeLayer(group.id) }} title="Xóa" style={{ ...iconBtn, color: 'rgba(255,100,100,0.8)' }}>🗑</button>
+                    <button type="button" onClick={(e) => { e.stopPropagation(); removeLayer(group.id) }} title="Xóa" style={{ ...iconBtn, color: 'rgba(255,100,100,0.8)' }}>x</button>
                   </div>
                   {isExpanded && childLayers.map((child, idx) => {
                     const isFirst = idx === 0
@@ -586,16 +586,16 @@ function LayerRow({
       {/* Controls */}
       <div style={{ display: 'flex', gap: 2, flexShrink: 0 }} onClick={(e) => e.stopPropagation()}>
         <button type="button" onClick={onToggleLocked} title={layer.locked ? 'Mở khóa' : 'Khóa'} style={{ ...iconBtn, opacity: layer.locked ? 1 : 0.45, padding: '2px 4px', fontSize: 10 }}>
-          {layer.locked ? '🔒' : '🔓'}
+          {layer.locked ? 'Khoa' : 'Mo'}
         </button>
         <button type="button" onClick={onToggleVisible} title={layer.visible ? 'Ẩn' : 'Hiện'} style={{ ...iconBtn, opacity: layer.visible ? 1 : 0.45, padding: '2px 4px', fontSize: 10 }}>
-          {layer.visible ? '👁' : '🚫'}
+          {layer.visible ? 'Hien' : 'An'}
         </button>
         <button type="button" onClick={onMoveUp} disabled={!canMoveUp} title="Lên trên" style={{ ...iconBtn, opacity: canMoveUp ? 1 : 0.25 }}>↑</button>
         <button type="button" onClick={onMoveDown} disabled={!canMoveDown} title="Xuống dưới" style={{ ...iconBtn, opacity: canMoveDown ? 1 : 0.25 }}>↓</button>
 
         {onRemoveFromGroup && (
-          <button type="button" onClick={onRemoveFromGroup} title="Ra khỏi group" style={iconBtn}>↩</button>
+          <button type="button" onClick={onRemoveFromGroup} title="Ra khỏi group" style={iconBtn}>{'<'}</button>
         )}
 
         {groups.length > 0 && onAddToGroup && (
@@ -616,7 +616,7 @@ function LayerRow({
                     onClick={() => { onAddToGroup(g.id); setAddToGroupLayerId(null) }}
                     style={{ display: 'block', width: '100%', padding: '4px 8px', textAlign: 'left', background: 'transparent', border: 'none', color: 'rgba(255,255,255,0.85)', cursor: 'pointer', fontSize: 11, borderRadius: 3 }}
                   >
-                    📁 {g.name}
+                    [grp] {g.name}
                   </button>
                 ))}
               </div>
@@ -624,8 +624,8 @@ function LayerRow({
           </div>
         )}
 
-        <button type="button" onClick={onRemove} title="Xóa" style={{ ...iconBtn, color: 'rgba(255,100,100,0.8)', padding: '2px 5px' }}>
-          🗑
+          <button type="button" onClick={onRemove} title="Xóa" style={{ ...iconBtn, color: 'rgba(255,100,100,0.8)', padding: '2px 5px' }}>
+          x
         </button>
       </div>
     </div>

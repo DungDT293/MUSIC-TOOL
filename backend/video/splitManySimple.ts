@@ -16,6 +16,8 @@ export interface SplitManySimpleRequest {
   requestId?: string
   normalizeOutput?: boolean
   useGpuEncoding?: boolean // true = prefer GPU, false = force CPU, undefined = auto
+  targetResolution?: string // '1920x1080' | etc. (chỉ áp dụng khi normalizeOutput = true)
+  targetFps?: string        // '24' | '25' | '30000/1001' | '30' | etc.
 }
 
 export interface SplitManySimpleResult {
@@ -324,6 +326,8 @@ export async function splitManyVideosSimple(
         format: req.format,
         normalizeOutput: !!req.normalizeOutput,
         useGpuEncoding: req.useGpuEncoding, // Pass GPU encoding choice to single cut
+        targetResolution: req.targetResolution,
+        targetFps: req.targetFps,
         requestId: `${requestId}-${currentFileIndex}`, // Dùng parent requestId + index để track child jobs
       }
 

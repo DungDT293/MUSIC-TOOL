@@ -1505,7 +1505,7 @@ export function drawLayers(
         ctx.fillStyle = 'rgba(255,255,255,0.5)'
         ctx.font = '11px system-ui'
         ctx.textAlign = 'center'
-        ctx.fillText('🎬 Đang tải video...', 0, 4)
+        ctx.fillText('Đang tải video...', 0, 4)
       }
     } else if (layer.type === 'text') {
       const text = layer.text ?? 'New Text'

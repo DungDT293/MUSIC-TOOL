@@ -512,7 +512,7 @@ function MuteAudioTab() {
       {/* Success message */}
       {successData && !isProcessing && (
         <div style={{ marginBottom: '24px', padding: '16px', backgroundColor: '#1b5e20', borderRadius: '4px', color: '#fff' }}>
-          <div style={{ fontWeight: 'bold', marginBottom: '8px' }}>✓ Tắt âm thanh thành công!</div>
+          <div style={{ fontWeight: 'bold', marginBottom: '8px' }}>Tắt âm thanh thành công!</div>
           <div style={{ fontSize: '13px' }}>
             Đã xử lý: {successData.processed} video
             {successData.failed > 0 && <span style={{ color: '#ffccbc' }}> ({successData.failed} lỗi)</span>}

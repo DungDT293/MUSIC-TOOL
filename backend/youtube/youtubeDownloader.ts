@@ -1578,19 +1578,20 @@ export class YouTubeDownloader extends EventEmitter {
     console.log(`[YouTubeDownloader] Created channel folder: ${channelFolder}`);
     
     // Create subfolders
-    const videosFolder = path.join(channelFolder, 'videos');
+    const mediaSubfolder = options.audioOnly ? 'audios' : 'videos';
+    const videosFolder = path.join(channelFolder, mediaSubfolder);
     await fs.mkdir(videosFolder, { recursive: true });
-    
+
     let thumbnailsFolder: string | undefined;
     if (options.downloadThumbnail) {
       thumbnailsFolder = path.join(channelFolder, 'thumbnails');
       await fs.mkdir(thumbnailsFolder, { recursive: true });
       console.log(`[YouTubeDownloader] Created thumbnails folder: ${thumbnailsFolder}`);
     }
-    
+
     console.log(`[YouTubeDownloader] Folder structure:`);
     console.log(`  ${channelFolder}/`);
-    console.log(`    videos/`);
+    console.log(`    ${mediaSubfolder}/`);
     if (thumbnailsFolder) {
       console.log(`    thumbnails/`);
     }

@@ -205,12 +205,12 @@ export function YouTubeDownloaderTab() {
 
       if (result.success && result.isValid) {
         // MED-*: replace alert() with inline state message
-        setError(`✅ URL hợp lệ! Loại: ${result.type || 'unknown'}`);
+        setError(`URL hợp lệ! Loại: ${result.type || 'unknown'}`);
       } else {
-        setError(`❌ URL không hợp lệ: ${result.error || 'URL không đúng định dạng'}`);
+        setError(`URL không hợp lệ: ${result.error || 'URL không đúng định dạng'}`);
       }
     } catch (error: any) {
-      setError(`❌ Lỗi kiểm tra URL: ${error?.message || 'Unknown error'}`);
+      setError(`Lỗi kiểm tra URL: ${error?.message || 'Unknown error'}`);
     }
   };
   
@@ -554,7 +554,7 @@ export function YouTubeDownloaderTab() {
             whiteSpace: 'nowrap',
           }}
         >
-          {isUpdatingYtDlp ? '⏳ Đang cập nhật...' : '🔄 Cập nhật yt-dlp'}
+          {isUpdatingYtDlp ? 'Đang cập nhật...' : 'Cập nhật yt-dlp'}
         </button>
         {ytDlpUpdateMsg && (
           <span style={{
@@ -584,13 +584,13 @@ export function YouTubeDownloaderTab() {
           
           {!isValidating && isValidUrl === true && (
             <span className="status valid">
-              ✓ URL hợp lệ ({urlType})
+              URL hợp lệ ({urlType})
             </span>
           )}
           
           {!isValidating && isValidUrl === false && (
             <span className="status invalid">
-              ✗ URL không hợp lệ
+              URL không hợp lệ
             </span>
           )}
         </div>
@@ -602,7 +602,7 @@ export function YouTubeDownloaderTab() {
             className="btn-secondary"
             style={{ fontSize: '12px', padding: '6px 12px' }}
           >
-            📋 Dán URL
+            Dán URL
           </button>
           
           <button
@@ -621,7 +621,7 @@ export function YouTubeDownloaderTab() {
               className="btn-primary"
               style={{ fontSize: '12px', padding: '6px 12px' }}
             >
-              {isLoadingInfo ? '⏳ Đang tải...' : '📋 Lấy thông tin'}
+              {isLoadingInfo ? 'Đang tải...' : 'Lấy thông tin'}
             </button>
           )}
         </div>
@@ -672,19 +672,19 @@ export function YouTubeDownloaderTab() {
         <div style={{ display: 'flex', gap: '8px', marginTop: '6px', flexWrap: 'wrap' }}>
           <button className="btn-secondary" onClick={handleAddToQueue} disabled={queueRunning || !queueUrlInput.trim()}
             style={{ fontSize: '12px', padding: '6px 12px' }}>
-            ➕ Thêm vào Queue
+            Thêm vào Queue
           </button>
           <button className="btn-primary" onClick={handleRunQueue} disabled={queueRunning || queue.filter(q => q.status === 'pending').length === 0 || !outputDir}
             style={{ fontSize: '12px', padding: '6px 12px' }}>
-            {queueRunning ? '⏳ Đang chạy...' : '▶️ Chạy Queue'}
+            {queueRunning ? 'Đang chạy...' : 'Chạy Queue'}
           </button>
           <button className="btn-secondary" onClick={handleClearQueue} disabled={queueRunning || queue.length === 0}
             style={{ fontSize: '12px', padding: '6px 12px' }}>
-            🗑️ Xóa hoàn thành
+            Xóa hoàn thành
           </button>
           {!outputDir && (
             <span style={{ fontSize: '12px', color: '#f87171', alignSelf: 'center' }}>
-              ⚠️ Chưa chọn thư mục lưu
+              Chưa chọn thư mục lưu
             </span>
           )}
         </div>
@@ -703,9 +703,9 @@ export function YouTubeDownloaderTab() {
                 fontSize: '12px',
               }}>
                 <span style={{ flexShrink: 0 }}>
-                  {item.status === 'pending' ? '⏳' :
-                   item.status === 'running' ? '⬇️' :
-                   item.status === 'done' ? '✅' : '❌'}
+                  {item.status === 'pending' ? '[...]' :
+                   item.status === 'running' ? '[dl]' :
+                   item.status === 'done' ? '[ok]' : '[!]'}
                 </span>
                 <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: '#e5e7eb' }}>
                   {item.url}
@@ -803,7 +803,7 @@ export function YouTubeDownloaderTab() {
                   if (maxHeight < 1080 && quality === '1080') {
                     return (
                       <p style={{ fontSize: '12px', color: '#ffaa66', marginTop: '4px' }}>
-                        ⚠️ Video chỉ có resolution tối đa {maxHeight}p, không có 1080p. Tool sẽ tải resolution cao nhất có sẵn.
+                        Video chỉ có resolution tối đa {maxHeight}p, không có 1080p. Tool sẽ tải resolution cao nhất có sẵn.
                       </p>
                     );
                   }
@@ -970,7 +970,7 @@ export function YouTubeDownloaderTab() {
         {videoInfo?.hasSubtitles === false && (
           <div className="setting-item" style={{ padding: '8px', backgroundColor: '#2a2a2a', borderRadius: '4px' }}>
             <p style={{ fontSize: '12px', color: '#ffaa66', margin: 0 }}>
-              ⚠️ Video không có phụ đề
+              Video không có phụ đề
             </p>
           </div>
         )}
@@ -1143,7 +1143,7 @@ export function YouTubeDownloaderTab() {
           <div className="warnings">
             {warnings.map((warning, i) => (
               <div key={i} className="warning-item">
-                ⚠️ {warning}
+                {warning}
               </div>
             ))}
           </div>
@@ -1155,7 +1155,7 @@ export function YouTubeDownloaderTab() {
             disabled={!canDownload()}
             className="btn-download"
           >
-            🚀 Bắt đầu download
+            Bắt đầu download
           </button>
         ) : (
           <div className="cancel-group">
@@ -1163,7 +1163,7 @@ export function YouTubeDownloaderTab() {
               onClick={handleCancelDownload}
               className={showCancelConfirm ? 'btn-cancel confirm' : 'btn-cancel'}
             >
-              {showCancelConfirm ? '⚠️ Xác nhận hủy?' : '❌ Hủy download'}
+              {showCancelConfirm ? 'Xác nhận hủy?' : 'Hủy download'}
             </button>
             {showCancelConfirm && (
               <button
@@ -1180,8 +1180,8 @@ export function YouTubeDownloaderTab() {
           <div className="requirements">
             <p>Yêu cầu:</p>
             <ul>
-              {!videoInfo && !channelInfo && <li>✗ Lấy thông tin video/channel</li>}
-              {!outputDir && <li>✗ Chọn thư mục lưu</li>}
+              {!videoInfo && !channelInfo && <li>Lấy thông tin video/channel</li>}
+              {!outputDir && <li>Chọn thư mục lưu</li>}
             </ul>
           </div>
         )}
@@ -1259,12 +1259,12 @@ export function YouTubeDownloaderTab() {
         
         <div className="results-summary">
           <div className="success-count">
-            ✓ Thành công: {downloadResult.downloaded.length} videos
+            Thành công: {downloadResult.downloaded.length} videos
           </div>
           
           {downloadResult.failed.length > 0 && (
             <div className="error-count">
-              ✗ Thất bại: {downloadResult.failed.length} videos
+              Thất bại: {downloadResult.failed.length} videos
             </div>
           )}
         </div>
@@ -1275,7 +1275,7 @@ export function YouTubeDownloaderTab() {
             <ul>
               {downloadResult.downloaded.map((file, i) => (
                 <li key={i}>
-                  <span className="file-icon">📁</span>
+                  <span className="file-icon">[f]</span>
                   {file.split(/[/\\]/).pop()}
                 </li>
               ))}
@@ -1289,7 +1289,7 @@ export function YouTubeDownloaderTab() {
             <ul>
               {downloadResult.failed.map((f, i) => (
                 <li key={i}>
-                  <span className="error-icon">❌</span>
+                  <span className="error-icon">[!]</span>
                   {f.video.title}: {f.error}
                 </li>
               ))}
@@ -1312,7 +1312,7 @@ export function YouTubeDownloaderTab() {
     
     return (
       <div className="error-message">
-        <strong>❌ Lỗi:</strong>
+        <strong>Lỗi:</strong>
         <p>{error}</p>
         <button onClick={() => setError(null)}>Đóng</button>
       </div>

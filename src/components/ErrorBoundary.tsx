@@ -46,7 +46,7 @@ export class ErrorBoundary extends Component<Props, State> {
             gap: '20px',
           }}
         >
-          <h1 style={{ fontSize: '24px', margin: 0 }}>❌ Đã xảy ra lỗi</h1>
+          <h1 style={{ fontSize: '24px', margin: 0 }}>Đã xảy ra lỗi</h1>
           <div
             style={{
               backgroundColor: '#2a2a2a',

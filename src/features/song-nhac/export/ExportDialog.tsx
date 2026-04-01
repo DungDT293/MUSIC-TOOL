@@ -331,7 +331,7 @@ export default function ExportDialog() {
           <>
             {hasAudio && (
               <div style={{ marginBottom: 10, color: 'rgba(255,255,255,0.85)', fontSize: 12 }}>
-                <div>🎵 {audioDisplayName ?? 'Audio'} · ⏱️ {formatDuration(trackDurationSec)}</div>
+                <div>{audioDisplayName ?? 'Audio'} · {formatDuration(trackDurationSec)}</div>
                 <div style={{ color: 'rgba(255,255,255,0.5)', marginTop: 2, fontSize: 11 }}>
                   Xuất {width}×{height} ({aspectRatio})
                 </div>
@@ -388,7 +388,7 @@ export default function ExportDialog() {
               </div>
               {encoderQuality === 'lowend' && (
                 <div style={{ marginTop: 6, padding: '6px 8px', background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 4, fontSize: 10 }}>
-                  <div style={{ color: 'rgba(245,158,11,0.9)', fontWeight: 600, marginBottom: 2 }}>⚡ Chế độ máy yếu</div>
+                  <div style={{ color: 'rgba(245,158,11,0.9)', fontWeight: 600, marginBottom: 2 }}>Chế độ máy yếu</div>
                   <div style={{ color: 'rgba(255,255,255,0.5)' }}>
                     • Dùng CPU encoder (không cần GPU mạnh)<br />
                     • Canvas 2D renderer (thay vì WebGL)<br />
@@ -403,7 +403,7 @@ export default function ExportDialog() {
             {/* File size estimation */}
             {durationSec >= MIN_DURATION_SEC && (
               <div style={{ color: 'rgba(255,255,255,0.45)', fontSize: 11, marginBottom: 8 }}>
-                📁 Ước tính dung lượng: ~{formatFileSize(estimateExportFileSize(width, height, fps, durationSec, encoderQuality))}
+                Ước tính dung lượng: ~{formatFileSize(estimateExportFileSize(width, height, fps, durationSec, encoderQuality))}
               </div>
             )}
             {!hasAudio && (
@@ -468,7 +468,7 @@ export default function ExportDialog() {
 
         {mode === 'done' && (
           <div style={{ marginTop: 8 }}>
-            <p style={{ color: 'rgba(120,220,120,0.9)', marginBottom: 8 }}>✅ Export hoàn tất!</p>
+            <p style={{ color: 'rgba(120,220,120,0.9)', marginBottom: 8 }}>Export hoàn tất!</p>
             {exportSummary && (
               <div style={{
                 background: 'rgba(0,0,0,0.3)',

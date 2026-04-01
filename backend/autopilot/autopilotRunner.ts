@@ -5,14 +5,13 @@ import { randomUUID } from 'node:crypto'
 import { buildPlaylists, clearPlaylists, savePlaylists, type BuildPlaylistsOptions, type PlaylistDefinition } from '../music/playlistEngine'
 import { exportPlaylistToFile, type ExportPlaylistRequest } from '../music/exportAudio'
 import { scanMusicFolders, type ScanMusicResult } from '../music/scanMusic'
-import { exportFinalVideo, type FinalExportJobRequest, type FinalExportEmitter, planFinalExport, executeFinalExport, type ExecuteFinalExportOptions } from '../video/finalExport'
+import { type FinalExportJobRequest, type FinalExportEmitter, planFinalExport, executeFinalExport } from '../video/finalExport'
 import { videoJobManager } from '../video/videoJobManager'
 import { getDiskSpace, formatBytes } from '../utils/diskSpace'
 import { syncPoolWithFiles, pickUniqueSequence, markClipsUsed, getPoolStats } from './videoPool'
 
 export type DayPresetId = 'tomorrowland' | 'partymix' | 'custom'
 
-import type { SubtitleOptions } from '../../shared/videoFinalExportChannels'
 
 export interface DayPlanDetailOverrides {
   priorityTracksPerPlaylist?: number
@@ -25,6 +24,12 @@ export interface DayPlanDetailOverrides {
   generateTracklist?: boolean
   /** Bật re-encode + kiểm tra sâu khi ghép video (an toàn hơn nhưng chậm hơn) */
   normalizeVideoInput?: boolean
+  /** Chuẩn hóa tỉ lệ khung hình + FPS khi ghép video (thêm dải đen nếu cần) */
+  unifyVideoFormat?: boolean
+  /** Tỉ lệ khung hình / độ phân giải mục tiêu khi unifyVideoFormat = true */
+  targetResolution?: string
+  /** FPS mục tiêu khi unifyVideoFormat = true */
+  targetFps?: string
   /** Bật chế độ nhập tiêu đề thủ công */
   useCustomTitles?: boolean
   /** Danh sách tiêu đề tùy chỉnh (mỗi phần tử = 1 file) */
@@ -33,8 +38,6 @@ export interface DayPlanDetailOverrides {
   prioritySelectionMode?: 'auto' | 'manual'
   /** Danh sách track id ưu tiên (chọn tay) dùng khi prioritySelectionMode === 'manual' */
   priorityPinnedTrackIds?: string[]
-  /** Cấu hình subtitle (phụ đề nhạc) cho video xuất ra */
-  subtitle?: SubtitleOptions
 }
 
 export interface DayPlanConfig {
@@ -1050,13 +1053,12 @@ function generateSimpleTitles(
   return titles
 }
 
-// Helper function để chạy export video với options cụ thể
+// Helper function để chạy export video
 async function runExportVideoWithOptions(
   jobRequest: FinalExportJobRequest,
   dateCode: string,
   playlists: PlaylistDefinition[],
-  options?: ExecuteFinalExportOptions
-): Promise<{ tempVideoPaths: Map<number, string>, subtitleFiles: Map<number, string> } | void> {
+): Promise<void> {
   const requestId = jobRequest.requestId || randomUUID()
   
   // Plan first
@@ -1122,8 +1124,8 @@ async function runExportVideoWithOptions(
         : 'Đang chuẩn bị audio...',
   })
   
-  // Execute with options
-  return await executeFinalExport(
+  // Execute final export
+  await executeFinalExport(
     plan,
     requestId,
     emitter,
@@ -1131,10 +1133,13 @@ async function runExportVideoWithOptions(
     !!jobRequest.forceReencode,
     !!jobRequest.normalizeAudio,
     !!jobRequest.tracklistAuto,
-    jobRequest.subtitle,
-    options,
+    undefined, // subtitle removed
+    undefined, // options removed
     jobRequest.useGpuEncoding || 'auto', // GPU encoding choice (default: 'auto')
-    !!jobRequest.deleteSourceFiles // Xóa file audio/video sau khi xuất xong
+    !!jobRequest.deleteSourceFiles, // Xóa file audio/video sau khi xuất xong
+    !!jobRequest.unifyFormat,       // Chuẩn hóa tỉ lệ khung hình + FPS
+    jobRequest.targetResolution,
+    jobRequest.targetFps
   )
 }
 
@@ -1143,10 +1148,7 @@ async function runAutopilotForDay(
   index: number,
   config: AutopilotConfig,
   scan: ScanMusicResult,
-  phase?: 'all' | 'step1' | 'step2' | 'whisper',
-  tempVideoPaths?: Map<number, string>,
-  subtitleFiles?: Map<number, string>,
-): Promise<{ tempVideoPaths?: Map<number, string>, subtitleFiles?: Map<number, string> } | void> {
+): Promise<void> {
   const { folders } = config
 
   // Pool tracking — set during video selection, used after export
@@ -1228,17 +1230,36 @@ async function runAutopilotForDay(
       ? overrides.priorityPinnedTrackIds.filter((id) => typeof id === 'string' && id.trim().length > 0)
       : []
 
+  // Tính crossfade trước buildOptions để có thể inflate target duration khi build playlist
+  const smoothTransitions = !!overrides.enableCrossfade
+  const crossfadeSec = smoothTransitions
+    ? (() => {
+        const raw = normalizeNumber(
+          overrides.crossfadeSeconds as any,
+          4, // default 4s nếu bật nhưng không nhập
+        )
+        return Math.min(Math.max(raw, 1), 10)
+      })()
+    : undefined
+
   const buildOptions: BuildPlaylistsOptions = {
     tracks: scan.tracks,
-    pinnedTrackIds: pinnedFromOverrides, // nếu rỗng → behave như random theo priority/random
+    pinnedTrackIds: pinnedFromOverrides,
     playlistCount,
     targetDurationMinutes: minutesPerPlaylist,
     priorityRatioMin: 0.65,
     priorityRatioMax: 0.8,
+    crossfadeDurationSec: crossfadeSec, // inflate target để bù overlap crossfade
   }
 
   clearPlaylists()
-  const playlists = buildPlaylists(buildOptions)
+  const buildResult = buildPlaylists(buildOptions)
+  const playlists = buildResult.playlists
+  if (buildResult.warnings && buildResult.warnings.length > 0) {
+    for (const w of buildResult.warnings) {
+      emitLog('warn', `[Bước 2] ${w.message}`)
+    }
+  }
   savePlaylists(playlists)
   emitLog('info', `[Bước 2] Đã tạo thành công ${playlists.length} playlist`)
 
@@ -1247,20 +1268,6 @@ async function runAutopilotForDay(
   throwIfCancelling()
 
   // Step 3: Export audio playlists
-  const smoothTransitions = !!overrides.enableCrossfade
-  // Chỉ tính crossfadeSec khi smoothTransitions = true, giống với xuất nhạc thông thường
-  // Clamp giá trị trong khoảng 1-10 giây, giống với xuất nhạc thông thường
-  const crossfadeSec = smoothTransitions
-    ? (() => {
-        const raw = normalizeNumber(
-          overrides.crossfadeSeconds as any,
-          4, // default 4s nếu bật nhưng không nhập
-        )
-        // Clamp trong khoảng 1-10 giây, giống với backend exportAudio.ts
-        return Math.min(Math.max(raw, 1), 10)
-      })()
-    : undefined
-
   emit({
     currentStep: 2,
     stepPercent: 40,
@@ -1527,6 +1534,10 @@ async function runAutopilotForDay(
     shuffle: false,
     // Mặc định copy-stream video; nếu user chọn "Chuẩn hoá video đầu vào" thì re-encode + deep verify
     forceReencode: !!overrides.normalizeVideoInput,
+    // Chuẩn hóa tỉ lệ khung hình + FPS (letterbox/pillarbox)
+    unifyFormat: !!overrides.unifyVideoFormat,
+    targetResolution: overrides.unifyVideoFormat ? (overrides.targetResolution || '1920x1080') : undefined,
+    targetFps: overrides.unifyVideoFormat ? (overrides.targetFps || '30') : undefined,
     normalizeAudio: false,
     tracklistAuto: !!overrides.generateTracklist,
     priorityVideoSource:
@@ -1536,82 +1547,22 @@ async function runAutopilotForDay(
             return p ? { type: 'folder' as const, path: p } : undefined
           })()
         : undefined,
-    subtitle: overrides.subtitle,
   }
 
   emitLog('info', `[Bước 4] Ngày ${dateCode}: Bắt đầu xuất ${playlists.length} video hoàn chỉnh...`)
-  if (overrides.subtitle) {
-    emitLog('info', `[Bước 4] Subtitle config: ${JSON.stringify({
-      enabled: overrides.subtitle.enabled,
-      useWhisper: overrides.subtitle.useWhisper,
-      autoLyrics: overrides.subtitle.autoLyrics,
-      subtitleStyle: overrides.subtitle.subtitleStyle,
-      subtitleFormat: overrides.subtitle.subtitleFormat,
-      whisperLanguage: overrides.subtitle.whisperLanguage,
-      hasText: !!overrides.subtitle.text,
-    })}`)
-    
-    // CRITICAL: Log forceReencode status for subtitle 2-step process
-    if (overrides.subtitle.enabled) {
-      if (overrides.normalizeVideoInput) {
-        emitLog('info', `[Bước 4] ⚠️ Re-encode video: BẬT → Sẽ dùng 1-step process (forceReencode=true)`)
-      } else {
-        emitLog('info', `[Bước 4] ✅ Re-encode video: TẮT → Sẽ dùng 2-step process (ghép video trước, burn subtitle sau)`)
-      }
-    }
-  } else {
-    emitLog('info', `[Bước 4] Subtitle: KHÔNG CÓ CONFIG (overrides.subtitle is undefined)`)
-  }
   if (overrides.normalizeVideoInput) {
     emitLog('info', `[Bước 4] Re-encode video: BẬT (chậm hơn nhưng an toàn hơn)`)
   } else {
     emitLog('info', `[Bước 4] Re-encode video: TẮT (copy-stream, nhanh)`)
   }
+  if (overrides.unifyVideoFormat) {
+    emitLog('info', `[Bước 4] Chuẩn hóa tỉ lệ khung hình: BẬT — ${overrides.targetResolution || '1920x1080'} @ ${overrides.targetFps || '30'} fps`)
+  }
   if (overrides.generateTracklist) {
     emitLog('info', `[Bước 4] Tự động tạo tracklist: BẬT`)
   }
 
-  // CRITICAL: 3-Phase Process for subtitle-enabled days
-  emitLog('info', `[Bước 4] DEBUG: phase=${phase}, dateCode=${dateCode}, hasTempVideoPaths=${!!tempVideoPaths}, hasSubtitleFiles=${!!subtitleFiles}`)
-  
-  if (phase === 'step1') {
-    // Phase 1: Only Step 1 (concat video)
-    emitLog('info', `[Bước 4] Phase 1: Chỉ ghép video (copy-stream) cho ngày ${dateCode}...`)
-    const result = await runExportVideoWithOptions(jobRequest, dateCode, playlists, { onlyStep1: true })
-    if (result) {
-      emitLog('info', `[Bước 4] Phase 1: Đã tạo ${result.tempVideoPaths?.size || 0} tempVideoPaths`)
-      return { tempVideoPaths: result.tempVideoPaths }
-    }
-  } else if (phase === 'whisper') {
-    // Phase 2: Only Whisper (create subtitle files)
-    if (!tempVideoPaths) {
-      throw new Error(`Phase 2: Missing tempVideoPaths for day ${dateCode}`)
-    }
-    emitLog('info', `[Bước 4] Phase 2: Chỉ chạy Whisper cho ngày ${dateCode}...`)
-    const result = await runExportVideoWithOptions(jobRequest, dateCode, playlists, {
-      onlyWhisper: true,
-      tempVideoPaths,
-    })
-    if (result) {
-      emitLog('info', `[Bước 4] Phase 2: Đã tạo ${result.subtitleFiles?.size || 0} subtitleFiles`)
-      return { subtitleFiles: result.subtitleFiles }
-    }
-  } else if (phase === 'step2') {
-    // Phase 3: Only Step 2 (burn subtitle)
-    if (!tempVideoPaths || !subtitleFiles) {
-      throw new Error(`Phase 3: Missing tempVideoPaths or subtitleFiles for day ${dateCode}`)
-    }
-    emitLog('info', `[Bước 4] Phase 3: Chỉ burn subtitle cho ngày ${dateCode}...`)
-    await runExportVideoWithOptions(jobRequest, dateCode, playlists, {
-      onlyStep2: true,
-      tempVideoPaths,
-      subtitleFiles,
-    })
-  } else {
-    // Normal flow: all steps (or no subtitle)
-    emitLog('info', `[Bước 4] DEBUG: Chạy normal flow (phase=${phase || 'undefined'}) cho ngày ${dateCode}`)
-    await runExportVideoWithOptions(jobRequest, dateCode, playlists)
-  }
+  await runExportVideoWithOptions(jobRequest, dateCode, playlists)
 
   // ── Đánh dấu clips đã dùng trong Video Pool (sau khi export xong) ────────────
   if (_poolClipIds.length > 0 && _poolFingerprint) {
@@ -1628,6 +1579,10 @@ export async function startAutopilot(config: AutopilotConfig): Promise<void> {
   if (currentProgress.status === 'running') {
     throw new Error('Autopilot đang chạy. Hãy dừng job hiện tại trước khi chạy job mới.')
   }
+
+  // Set status synchronously ngay sau guard để tránh race condition
+  // nếu có 2 call đồng thời (cả 2 pass guard trước khi emit chạy)
+  currentProgress.status = 'running'
 
   activeAbortControllers = []
   isCancelling = false
@@ -1736,185 +1691,33 @@ export async function startAutopilot(config: AutopilotConfig): Promise<void> {
       message: `Đã quét ${scanResult.summary.totalCount} bài nhạc (ưu tiên ${scanResult.summary.priorityCount}, random ${scanResult.summary.randomCount}).`,
     })
 
-    // CRITICAL: 3-Phase Process for subtitle-enabled days
-    // Phase 1: Concat all videos (Step 1)
-    // Phase 2: Run Whisper for all audio
-    // Phase 3: Burn subtitles for all videos (Step 2)
-    
-    // Separate days into subtitle-enabled and non-subtitle days
-    const subtitleDays: Array<{ plan: DayPlanConfig, index: number }> = []
-    const normalDays: Array<{ plan: DayPlanConfig, index: number }> = []
-    
-    for (let i = 0; i < validPlans.length; i++) {
-      const plan = validPlans[i]
-      const overrides = plan.overrides || {}
-      // CRITICAL: hasSubtitle = subtitle enabled AND NOT forceReencode (normalizeVideoInput)
-      // If normalizeVideoInput=true, we use 1-step process (forceReencode), so no need for 3-phase
-      const hasSubtitle = !!(overrides.subtitle?.enabled) && !overrides.normalizeVideoInput
-      emitLog('info', `[Autopilot] Debug day ${i + 1} (${plan.dateCode}): subtitle.enabled=${overrides.subtitle?.enabled}, normalizeVideoInput=${overrides.normalizeVideoInput}, hasSubtitle=${hasSubtitle}`)
-      if (hasSubtitle) {
-        subtitleDays.push({ plan, index: i })
-      } else {
-        normalDays.push({ plan, index: i })
-      }
-    }
-    
-    emitLog('info', `[Autopilot] Tổng hợp: ${subtitleDays.length} ngày có subtitle (3-phase), ${normalDays.length} ngày không subtitle (1-phase)`)
-    
-    // CRITICAL: If no subtitle days, fallback to old flow
-    if (subtitleDays.length === 0) {
-      emitLog('info', `[Autopilot] ⚠️ Không có ngày nào có subtitle enabled, sẽ dùng flow cũ (1-phase)`)
-      emitLog('info', `[Autopilot] DEBUG: Tất cả ${validPlans.length} ngày sẽ chạy flow cũ (normal flow)`)
-    } else {
-      emitLog('info', `[Autopilot] ✅ Có ${subtitleDays.length} ngày sẽ chạy 3-phase process`)
-      for (const { plan, index } of subtitleDays) {
-        emitLog('info', `[Autopilot]   - Ngày ${plan.dateCode} (index ${index})`)
-      }
-    }
-    
     const failedDays: string[] = []
-    const allTempVideoPaths = new Map<string, Map<number, string>>() // dateCode -> jobIndex -> tempVideoPath
-    const allSubtitleFiles = new Map<string, Map<number, string>>() // dateCode -> jobIndex -> subtitleFile
-    
-    // PHASE 1: Concat all videos for subtitle-enabled days
-    if (subtitleDays.length > 0) {
-      emitLog('info', `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`)
-      emitLog('info', `[Phase 1] Bắt đầu ghép video cho ${subtitleDays.length} ngày có subtitle...`)
-      emit({
-        currentStep: 4,
-        stepPercent: 60,
-        message: `Phase 1: Đang ghép video cho ${subtitleDays.length} ngày có subtitle...`,
-      })
-      
-      for (let idx = 0; idx < subtitleDays.length; idx++) {
-        if (isCancelling) break
-        const { plan, index } = subtitleDays[idx]
-        emit({
-          currentDayIndex: index,
-          currentStep: 4,
-          stepPercent: 60 + Math.round((idx / subtitleDays.length) * 5),
-          message: `Phase 1: Đang ghép video cho ngày ${plan.dateCode}...`,
-        })
-        emitLog('info', `[Phase 1] 📅 Đang ghép video cho ngày ${plan.dateCode}...`)
-        try {
-          const result = await runAutopilotForDay(plan, index, { ...config, dayPlans: validPlans }, scanResult, 'step1')
-          if (result?.tempVideoPaths) {
-            allTempVideoPaths.set(plan.dateCode || '', result.tempVideoPaths)
-            emitLog('info', `[Phase 1] ✓ Đã ghép video cho ngày ${plan.dateCode}`)
-          }
-        } catch (err: any) {
-          failedDays.push(plan.dateCode || `plan-${index + 1}`)
-          emitLog('error', `[Phase 1] Lỗi ở ngày ${plan.dateCode || index + 1}: ${err?.message || err}`)
-          if (isCancelling) break
-        }
-      }
-    }
-    
-    // PHASE 2: Run Whisper for all audio (using onlyWhisper option)
-    if (subtitleDays.length > 0 && !isCancelling) {
-      emitLog('info', `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`)
-      emitLog('info', `[Phase 2] Bắt đầu Whisper cho ${subtitleDays.length} ngày có subtitle...`)
-      emit({
-        currentStep: 4,
-        stepPercent: 65,
-        message: `Phase 2: Đang chạy Whisper cho ${subtitleDays.length} ngày có subtitle...`,
-      })
-      
-      for (let idx = 0; idx < subtitleDays.length; idx++) {
-        if (isCancelling) break
-        const { plan, index } = subtitleDays[idx]
-        const dateCode = plan.dateCode || ''
-        const tempVideoPaths = allTempVideoPaths.get(dateCode)
-        
-        if (!tempVideoPaths) {
-          emitLog('warn', `[Phase 2] ⚠️ Thiếu tempVideoPaths cho ngày ${dateCode}, bỏ qua`)
-          continue
-        }
-        
-        emit({
-          currentDayIndex: index,
-          currentStep: 4,
-          stepPercent: 65 + Math.round((idx / subtitleDays.length) * 5),
-          message: `Phase 2: Đang chạy Whisper cho ngày ${dateCode}...`,
-        })
-        emitLog('info', `[Phase 2] 📅 Đang chạy Whisper cho ngày ${dateCode}...`)
-        try {
-          const result = await runAutopilotForDay(plan, index, { ...config, dayPlans: validPlans }, scanResult, 'whisper', tempVideoPaths)
-          if (result?.subtitleFiles) {
-            allSubtitleFiles.set(dateCode, result.subtitleFiles)
-            emitLog('info', `[Phase 2] ✓ Đã chạy Whisper cho ngày ${dateCode}`)
-          }
-        } catch (err: any) {
-          failedDays.push(plan.dateCode || `plan-${index + 1}`)
-          emitLog('error', `[Phase 2] Lỗi ở ngày ${plan.dateCode || index + 1}: ${err?.message || err}`)
-          if (isCancelling) break
-        }
-      }
-    }
-    
-    // PHASE 3: Burn subtitles for all videos
-    if (subtitleDays.length > 0 && !isCancelling) {
-      emitLog('info', `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`)
-      emitLog('info', `[Phase 3] Bắt đầu burn subtitle cho ${subtitleDays.length} ngày có subtitle...`)
-      emit({
-        currentStep: 4,
-        stepPercent: 70,
-        message: `Phase 3: Đang burn subtitle cho ${subtitleDays.length} ngày có subtitle...`,
-      })
-      
-      for (let idx = 0; idx < subtitleDays.length; idx++) {
-        if (isCancelling) break
-        const { plan, index } = subtitleDays[idx]
-        const dateCode = plan.dateCode || ''
-        const tempVideoPaths = allTempVideoPaths.get(dateCode)
-        const subtitleFiles = allSubtitleFiles.get(dateCode)
-        
-        if (!tempVideoPaths || !subtitleFiles) {
-          emitLog('warn', `[Phase 3] ⚠️ Thiếu tempVideoPaths hoặc subtitleFiles cho ngày ${dateCode}, bỏ qua`)
-          continue
-        }
-        
-        emit({
-          currentDayIndex: index,
-          currentStep: 4,
-          stepPercent: 70 + Math.round((idx / subtitleDays.length) * 25),
-          message: `Phase 3: Đang burn subtitle cho ngày ${dateCode}...`,
-        })
-        emitLog('info', `[Phase 3] 📅 Đang burn subtitle cho ngày ${dateCode}...`)
-        try {
-          await runAutopilotForDay(plan, index, { ...config, dayPlans: validPlans }, scanResult, 'step2', tempVideoPaths, subtitleFiles)
-          emitLog('info', `[Phase 3] ✓ Đã burn subtitle cho ngày ${dateCode}`)
-        } catch (err: any) {
-          failedDays.push(plan.dateCode || `plan-${index + 1}`)
-          emitLog('error', `[Phase 3] Lỗi ở ngày ${plan.dateCode || index + 1}: ${err?.message || err}`)
-          if (isCancelling) break
-        }
-      }
-    }
-    
-    // Process normal days (no subtitle, run normally)
-    for (const { plan, index } of normalDays) {
+
+    // Process all days sequentially
+    for (let i = 0; i < validPlans.length; i++) {
       if (isCancelling) break
+      const plan = validPlans[i]
+      const totalDays = validPlans.length
       emit({
-        currentDayIndex: index,
+        currentDayIndex: i,
         currentStep: 1,
         stepPercent: currentProgress.stepPercent,
-        message: `Bắt đầu ngày ${plan.dateCode} (${index + 1}/${totalDays})...`,
+        message: `Bắt đầu ngày ${plan.dateCode} (${i + 1}/${totalDays})...`,
       })
-      emitLog('info', `📅 Bắt đầu ngày ${plan.dateCode} (${index + 1}/${totalDays})`)
+      emitLog('info', `📅 Bắt đầu ngày ${plan.dateCode} (${i + 1}/${totalDays})`)
       try {
-        await runAutopilotForDay(plan, index, { ...config, dayPlans: validPlans }, scanResult, 'all')
-        const overallPercent = Math.round(((index + 1) / totalDays) * 100)
+        await runAutopilotForDay(plan, i, { ...config, dayPlans: validPlans }, scanResult)
+        const overallPercent = Math.round(((i + 1) / totalDays) * 100)
         emit({
-          currentDayIndex: index,
+          currentDayIndex: i,
           currentStep: 5,
           stepPercent: Math.max(currentProgress.stepPercent ?? 0, overallPercent),
-          message: `Hoàn tất ngày ${plan.dateCode} (${index + 1}/${totalDays}). Tiến độ tổng: ${overallPercent}%.`,
+          message: `Hoàn tất ngày ${plan.dateCode} (${i + 1}/${totalDays}). Tiến độ tổng: ${overallPercent}%.`,
         })
-        emitLog('info', `✓ Hoàn tất ngày ${plan.dateCode} (${index + 1}/${totalDays}). Tiến độ tổng: ${overallPercent}%.`)
+        emitLog('info', `✓ Hoàn tất ngày ${plan.dateCode} (${i + 1}/${totalDays}). Tiến độ tổng: ${overallPercent}%.`)
       } catch (err: any) {
-        failedDays.push(plan.dateCode || `plan-${index + 1}`)
-        emitLog('error', `[Autopilot] Lỗi ở ngày ${plan.dateCode || index + 1}: ${err?.message || err}`)
+        failedDays.push(plan.dateCode || `plan-${i + 1}`)
+        emitLog('error', `[Autopilot] Lỗi ở ngày ${plan.dateCode || i + 1}: ${err?.message || err}`)
         if (isCancelling) break
       }
     }
@@ -1934,7 +1737,8 @@ export async function startAutopilot(config: AutopilotConfig): Promise<void> {
         message: `Autopilot hoàn tất nhưng có ${failedDays.length} ngày lỗi: ${failedDays.join(', ')}`,
         error: `Ngày lỗi: ${failedDays.join(', ')}`,
       })
-    } else if (currentProgress.status !== 'error') {
+    } else {
+      // Không có lỗi và không bị cancel → hoàn tất
       emit({
         status: 'completed',
         currentStep: 5,

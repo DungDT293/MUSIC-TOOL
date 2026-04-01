@@ -92,6 +92,8 @@ function MultiCutTab() {
   const [normalizeOutput, setNormalizeOutput] = useState<boolean>(false)
   const [normalizeQuality, setNormalizeQuality] = useState<NormalizeQuality>('preserve')
   const [useGpuEncoding, setUseGpuEncoding] = useState<boolean>(false) // false = CPU, true = GPU
+  const [targetResolution, setTargetResolution] = useState<string>('1920x1080')
+  const [targetFps, setTargetFps] = useState<string>('30')
 
   const [isProcessing, setIsProcessing] = useState(false)
   const [currentRequestId, setCurrentRequestId] = useState<string | null>(null)
@@ -346,6 +348,8 @@ function MultiCutTab() {
         normalizeOutput,
         normalizeQuality: normalizeOutput ? normalizeQuality : undefined,
         useGpuEncoding: normalizeOutput ? useGpuEncoding : undefined, // Only use GPU encoding if normalizeOutput is enabled
+        targetResolution: normalizeOutput ? targetResolution : undefined,
+        targetFps: normalizeOutput ? targetFps : undefined,
       }
 
       console.log('[MultiCut] Starting batch cut with', req.inputFiles.length, 'videos')
@@ -418,7 +422,7 @@ function MultiCutTab() {
           }}
         >
           <div style={{ fontSize: '13px', fontWeight: 'bold', color: '#ff9800', marginBottom: '4px' }}>
-            ⚠️ Lưu ý: Cắt nhiều chỉ khả dụng với video dài hơn 30 giây
+            Lưu ý: Cắt nhiều chỉ khả dụng với video dài hơn 30 giây
           </div>
           <div style={{ fontSize: '12px', color: '#b0b0b0' }}>
             Có {videosTooShort.length} video ngắn hơn 30s trong danh sách. Video quá ngắn có thể không thể cắt thành nhiều đoạn nhỏ hơn do giới hạn keyframes.
@@ -502,7 +506,7 @@ function MultiCutTab() {
             <>
               {videoListItems.length > 200 && (
                 <div style={{ padding: '8px', fontSize: '12px', color: '#ffa726', fontStyle: 'italic', backgroundColor: '#2d2d2d', borderRadius: '4px', marginBottom: '8px' }}>
-                  ⚠️ Đang hiển thị thời lượng cho ~200 video đầu, các video sau vẫn được cắt/ghép bình thường.
+                  Lưu ý: Đang hiển thị thời lượng cho ~200 video đầu, các video sau vẫn được cắt/ghép bình thường.
                 </div>
               )}
               {videoListItems.map((item, idx) => (
@@ -636,25 +640,46 @@ function MultiCutTab() {
         </label>
       </div>
 
-      {/* Chất lượng chuẩn hóa (chỉ khi bật chuẩn hóa) */}
+      {/* Tỉ lệ khung hình + FPS (chỉ khi bật chuẩn hóa) */}
       {normalizeOutput && (
-        <div style={{ marginBottom: '24px', marginLeft: '28px' }}>
-          <label style={{ fontSize: '14px', fontWeight: 500, display: 'block', marginBottom: '6px' }}>Chất lượng chuẩn hóa</label>
-          <select
-            value={normalizeQuality}
-            onChange={(e) => setNormalizeQuality(e.target.value as NormalizeQuality)}
-            disabled={isProcessing}
-            style={{ padding: '6px 10px', borderRadius: '6px', background: '#2d2d2d', color: '#fff', border: '1px solid #555', minWidth: '200px' }}
-          >
-            <option value="preserve">Giữ nguyên (2K → 2K, 1080p → 1080p)</option>
-            <option value="1440p">2K (2560×1440)</option>
-            <option value="1080p">1080p (1920×1080)</option>
-            <option value="720p">720p (1280×720)</option>
-          </select>
-          <div style={{ fontSize: '12px', color: '#b0b0b0', marginTop: '4px' }}>
-            {normalizeQuality === 'preserve'
-              ? 'Giữ resolution nguồn. Ghép không chuẩn hóa có thể dừng hình nếu trộn nhiều resolution.'
-              : 'Đồng nhất mọi đoạn → ghép không chuẩn hóa ổn định.'}
+        <div style={{ marginBottom: '24px', marginLeft: '28px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <span style={{ fontSize: '13px', color: '#ccc', width: '120px' }}>Tỉ lệ khung hình:</span>
+            <select
+              value={targetResolution}
+              onChange={(e) => setTargetResolution(e.target.value)}
+              disabled={isProcessing}
+              style={{ padding: '5px 10px', backgroundColor: '#2d2d2d', color: '#e0e0e0', border: '1px solid #555', borderRadius: '4px', fontSize: '13px', minWidth: '260px' }}
+            >
+              <option value="1920x1080">16:9 — 1920×1080 (Full HD Ngang)</option>
+              <option value="1440x1080">4:3 — 1440×1080 (Cổ điển)</option>
+              <option value="2560x1080">2.35:1 — 2560×1080 (Cinemascope)</option>
+              <option value="2160x1080">2:1 — 2160×1080 (Univisium)</option>
+              <option value="1998x1080">1.85:1 — 1998×1080 (Widescreen)</option>
+              <option value="1080x1920">9:16 — 1080×1920 (Dọc / Reels / Shorts)</option>
+              <option value="1080x1440">3:4 — 1080×1440 (Dọc cổ điển)</option>
+              <option value="1080x1868">5.8-inch — 1080×1868 (Mobile tall)</option>
+              <option value="1080x1080">1:1 — 1080×1080 (Vuông / Instagram)</option>
+              <option value="3840x2160">16:9 — 3840×2160 (4K UHD)</option>
+              <option value="1280x720">16:9 — 1280×720 (HD 720p)</option>
+            </select>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <span style={{ fontSize: '13px', color: '#ccc', width: '120px' }}>FPS:</span>
+            <select
+              value={targetFps}
+              onChange={(e) => setTargetFps(e.target.value)}
+              disabled={isProcessing}
+              style={{ padding: '5px 10px', backgroundColor: '#2d2d2d', color: '#e0e0e0', border: '1px solid #555', borderRadius: '4px', fontSize: '13px', minWidth: '260px' }}
+            >
+              <option value="24">24.00 fps (Cinema)</option>
+              <option value="25">25.00 fps (PAL / Europe)</option>
+              <option value="30000/1001">29.97 fps (NTSC)</option>
+              <option value="30">30.00 fps (YouTube phổ biến)</option>
+              <option value="50">50.00 fps (PAL HFR)</option>
+              <option value="60000/1001">59.94 fps (NTSC HFR)</option>
+              <option value="60">60.00 fps (Gaming / HFR)</option>
+            </select>
           </div>
         </div>
       )}
@@ -699,8 +724,8 @@ function MultiCutTab() {
           }}
         >
           {isProcessing
-            ? `⏳ Đang cắt ${currentProgress ? Math.round(currentProgress.overallPercent ?? 0) : 0}%...`
-            : `🚀 CẮT ${videoListItems.length} VIDEO`}
+            ? `Đang cắt ${currentProgress ? Math.round(currentProgress.overallPercent ?? 0) : 0}%...`
+            : `CẮT ${videoListItems.length} VIDEO`}
         </button>
         {isProcessing && currentRequestId && (
           <button
@@ -716,7 +741,7 @@ function MultiCutTab() {
               fontWeight: 'bold',
             }}
           >
-            ⏹️ Dừng cắt video
+            Dừng cắt video
           </button>
         )}
         {successData && (
@@ -759,7 +784,7 @@ function MultiCutTab() {
               </div>
               {currentProgress.message && (
                 <div style={{ marginBottom: '8px', fontSize: '12px', color: '#ffa726', fontStyle: 'italic' }}>
-                  ⚠️ {currentProgress.message}
+                  {currentProgress.message}
                 </div>
               )}
               <div
@@ -783,7 +808,7 @@ function MultiCutTab() {
             </>
           ) : (
             <div style={{ fontSize: '13px', color: '#b0b0b0' }}>
-              ⏳ Đang khởi tạo cắt video...
+              Đang khởi tạo cắt video...
             </div>
           )}
         </div>
@@ -822,7 +847,7 @@ function MultiCutTab() {
               }}
             >
               <div style={{ fontSize: '14px', fontWeight: 'bold', color: '#ff9800', marginBottom: '8px' }}>
-                ⚠️ Cảnh báo về số lượng đoạn
+                Cảnh báo về số lượng đoạn
               </div>
               <div style={{ fontSize: '12px', color: '#b0b0b0', lineHeight: 1.6 }}>
                 {successData.results

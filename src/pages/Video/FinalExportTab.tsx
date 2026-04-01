@@ -297,7 +297,7 @@ function FinalExportTab() {
       setIsExporting(false)
       const message = payload?.message || payload?.error || 'Đã xảy ra lỗi trong quá trình export.'
       setStatusText(message)
-      if (message.startsWith('❌ CẢNH BÁO: Dung lượng ổ đĩa không đủ')) {
+      if (message.startsWith('CẢNH BÁO: Dung lượng ổ đĩa không đủ')) {
         setDiskSpaceError(message)
         setErrorMessage(null)
       } else {
@@ -677,14 +677,14 @@ function FinalExportTab() {
       if (audioItems.length !== videoItems.length) {
         return (
           <div style={{ color: '#ffaa66' }}>
-            ⚠️ Số lượng không khớp: {audioItems.length} audio vs {videoItems.length} video. 
+            Cảnh báo: Số lượng không khớp: {audioItems.length} audio vs {videoItems.length} video.
             Tab 6 yêu cầu số lượng bằng nhau để ghép 1-1.
           </div>
         )
       }
       return (
         <div style={{ color: '#9fcf9f' }}>
-          ✓ Số lượng khớp: {audioItems.length} audio + {videoItems.length} video → {audioItems.length} videos (1-1 mapping)
+          OK: Số lượng khớp: {audioItems.length} audio + {videoItems.length} video → {audioItems.length} videos (1-1 mapping)
         </div>
       )
     }
@@ -719,7 +719,7 @@ function FinalExportTab() {
     // Khi video source là folder thì backend loop clips — không cần match 1-1
     const videoIsFolder = videoSource?.type === 'folder'
     if (!videoIsFolder && audioItems.length !== videoItems.length) {
-      return `⚠️ Cảnh báo: Số lượng audio (${audioItems.length}) và video (${videoItems.length}) không khớp. Tab 6 yêu cầu số lượng bằng nhau để ghép 1-1.`
+      return `Cảnh báo: Số lượng audio (${audioItems.length}) và video (${videoItems.length}) không khớp. Tab 6 yêu cầu số lượng bằng nhau để ghép 1-1.`
     }
 
     if (audioItems.length === 1) {
@@ -1249,7 +1249,7 @@ function FinalExportTab() {
       {/* Export Presets Panel (Sprint 3.1) */}
       <div style={{ ...cardStyle, marginTop: '8px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px' }}>
-          <h3 style={{ margin: 0, fontSize: '15px' }}>💾 Export Presets</h3>
+          <h3 style={{ margin: 0, fontSize: '15px' }}>Export Presets</h3>
           <button
             onClick={() => { setShowPresets(p => !p); if (!showPresets) loadPresets(); }}
             style={{ ...buttonStyle, padding: '4px 12px', fontSize: '12px', backgroundColor: '#374151' }}
@@ -1275,7 +1275,7 @@ function FinalExportTab() {
             style={{ ...buttonStyle, padding: '6px 14px', fontSize: '12px', backgroundColor: '#1e4d2b' }}
             disabled={isExporting}
           >
-            💾 Lưu preset hiện tại
+            Lưu preset hiện tại
           </button>
         </div>
 
@@ -1322,7 +1322,7 @@ function FinalExportTab() {
             color: '#ff9b9b',
           }}
         >
-          ⚠️ {errorMessage}
+          {errorMessage}
         </div>
       )}
 
@@ -1359,7 +1359,7 @@ function FinalExportTab() {
               marginBottom: '12px',
             }}
           >
-            ⏹️ Hủy xuất video
+            Hủy xuất video
           </button>
         ) : (
           <button
@@ -1415,7 +1415,7 @@ function FinalExportTab() {
           }}
         >
           <div style={{ marginBottom: '8px', fontWeight: 600 }}>
-            🎉 Đã xuất thành công {exportOutputs.length} video
+            Đã xuất thành công {exportOutputs.length} video
           </div>
           <div style={{ marginBottom: '8px', color: '#cfeee0', fontSize: '13px' }}>
             Mỗi video đã được cắt/loop để khớp chính xác với file audio tương ứng.

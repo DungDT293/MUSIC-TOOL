@@ -112,3 +112,68 @@ export function getRecentHistory(): ExportHistoryEntry[] {
   }
   return all.sort((a, b) => b.exportedAt - a.exportedAt)
 }
+
+/**
+ * Xóa các lịch sử theo danh sách id.
+ * Trả về số lượng đã xóa.
+ */
+export function deleteHistoryEntries(ids: string[]): { deleted: number } {
+  if (!ids || ids.length === 0) return { deleted: 0 }
+  const idSet = new Set(ids)
+  const current = loadHistory()
+  const filtered = current.filter((e) => !idSet.has(e.id))
+  const deleted = current.length - filtered.length
+  try {
+    ensureHistoryDir()
+    fs.writeFileSync(HISTORY_FILE, JSON.stringify(filtered, null, 2), 'utf-8')
+  } catch (err) {
+    console.warn('[exportHistory] Failed to write after delete:', err)
+  }
+  return { deleted }
+}
+
+/**
+ * Xuất danh sách track của các playlist thuộc ngày đã chọn ra thư mục.
+ * Mỗi ngày → 1 file JSON.
+ * @param dates mảng chuỗi ngày (toLocaleDateString() format)
+ * @param outputDir thư mục xuất, mặc định là HISTORY_DIR
+ */
+export function downloadPlaylistHistory(dates: string[], outputDir?: string): { success: boolean; savedFiles: string[] } {
+  const all = getRecentHistory()
+  const targetDir = outputDir || HISTORY_DIR
+
+  try {
+    if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true })
+  } catch (err) {
+    console.warn('[exportHistory] Cannot create output dir:', err)
+    return { success: false, savedFiles: [] }
+  }
+
+  const savedFiles: string[] = []
+  for (const dateStr of dates) {
+    const entries = all.filter((e) => new Date(e.exportedAt).toLocaleDateString() === dateStr)
+    if (entries.length === 0) continue
+
+    // Tạo tên file an toàn từ dateStr (vd: "3/31/2026" → "2026-03-31")
+    let safeName: string
+    try {
+      const d = new Date(dateStr)
+      const y = d.getFullYear()
+      const m = String(d.getMonth() + 1).padStart(2, '0')
+      const day = String(d.getDate()).padStart(2, '0')
+      safeName = `${y}-${m}-${day}`
+    } catch {
+      safeName = dateStr.replace(/[/\\:*?"<>|]/g, '-')
+    }
+
+    const outFile = path.join(targetDir, `playlist_history_${safeName}.json`)
+    try {
+      fs.writeFileSync(outFile, JSON.stringify(entries, null, 2), 'utf-8')
+      savedFiles.push(outFile)
+    } catch (err) {
+      console.warn(`[exportHistory] Cannot write ${outFile}:`, err)
+    }
+  }
+
+  return { success: savedFiles.length > 0, savedFiles }
+}

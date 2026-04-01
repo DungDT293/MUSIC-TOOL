@@ -94,7 +94,7 @@ const ENGINE_OPTIONS: EngineOption[] = [
   { value: 'butterchurn', label: 'MilkDrop', icon: '🌀', desc: 'Hiệu ứng psychedelic cổ điển', color: '#4b0082' },
   { value: 'audiomotion', label: 'Spectrum Pro', icon: '📈', desc: 'Phân tích phổ âm chuyên nghiệp', color: '#004d40' },
   { value: 'wavejs', label: 'Wave.js', icon: '〰️', desc: 'Nhiều kiểu sóng đa dạng', color: '#1a3a5c' },
-  { value: 'vanta', label: 'Vanta 3D', icon: '🌊', desc: 'Nền 3D phản hồi theo nhịp', color: '#3a1a1a' },
+  { value: 'vanta', label: 'Vanta 3D', icon: '~', desc: 'Nền 3D phản hồi theo nhịp', color: '#3a1a1a' },
 ]
 
 const AUDIOMOTION_MODES = [
@@ -136,11 +136,11 @@ const WAVEJS_ANIMATIONS = [
 ]
 
 const VANTA_EFFECTS = [
-  { value: 'waves', label: '🌊 Sóng biển' },
+  { value: 'waves', label: 'Sóng biển' },
   { value: 'birds', label: '🐦 Đàn chim' },
   { value: 'fog', label: '🌫️ Sương mù' },
   { value: 'net', label: '🕸️ Lưới 3D' },
-  { value: 'rings', label: '⭕ Vòng tròn' },
+  { value: 'rings', label: 'Vòng tròn' },
   { value: 'dots', label: '· Chấm' },
   { value: 'globe', label: '🌐 Quả cầu' },
   { value: 'cells', label: '🔬 Tế bào' },
@@ -192,7 +192,7 @@ export default function EnginesPanel() {
             [
               { value: 'dark' as const, label: '⬛ Đen' },
               { value: 'blur' as const, label: '🌫 Blur' },
-              { value: 'gradient' as const, label: '🌈 Gradient' },
+              { value: 'gradient' as const, label: 'Gradient' },
             ] as const
           ).map((opt) => {
             const active = bgMode === opt.value
@@ -262,7 +262,7 @@ export default function EnginesPanel() {
                   </div>
                 </div>
                 {active && (
-                  <span style={{ fontSize: 10, color: '#4d9fff', flexShrink: 0, fontWeight: 700 }}>✓</span>
+                  <span style={{ fontSize: 10, color: '#4d9fff', flexShrink: 0, fontWeight: 700 }}>v</span>
                 )}
               </button>
             )
@@ -335,7 +335,7 @@ export default function EnginesPanel() {
               marginBottom: 6,
             }}
           >
-            🎲 Random Preset
+            Random Preset
           </button>
           <div style={{ display: 'flex', gap: 4 }}>
             <button
@@ -347,7 +347,7 @@ export default function EnginesPanel() {
                 border: '1px solid rgba(255,255,255,0.12)', borderRadius: 5, cursor: 'pointer',
               }}
             >
-              ◀ Trước
+              &lt; Trước
             </button>
             <button
               type="button"
@@ -358,7 +358,7 @@ export default function EnginesPanel() {
                 border: '1px solid rgba(255,255,255,0.12)', borderRadius: 5, cursor: 'pointer',
               }}
             >
-              Sau ▶
+              Sau &gt;
             </button>
           </div>
         </div>

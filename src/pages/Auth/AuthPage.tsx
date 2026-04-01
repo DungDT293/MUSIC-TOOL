@@ -270,7 +270,7 @@ const AuthPage: React.FC<AuthPageProps> = ({ onLoggedIn }) => {
           setKeyLocked(true)
         } else if ((result as any).action === 'SUSPICIOUS') {
           setError(
-            `⚠️ Cảnh báo: Phát hiện can thiệp hệ thống (${(result as any).tamperCount || 0} lần). ${
+            `Cảnh báo: Phát hiện can thiệp hệ thống (${(result as any).tamperCount || 0} lần). ${
               result.message || 'Key chỉ hoạt động trên máy đã đăng ký.'
             }`
           )
@@ -351,7 +351,7 @@ const AuthPage: React.FC<AuthPageProps> = ({ onLoggedIn }) => {
           )
         } else if (response.action === 'SUSPICIOUS') {
           setError(
-            `⚠️ Cảnh báo: Phát hiện can thiệp hệ thống (${response.tamperCount || 0} lần). ${
+            `Cảnh báo: Phát hiện can thiệp hệ thống (${response.tamperCount || 0} lần). ${
               response.error || response.message || 'Đăng nhập thất bại.'
             }`
           )
@@ -674,7 +674,7 @@ const AuthPage: React.FC<AuthPageProps> = ({ onLoggedIn }) => {
           {authState.status === 'pending' && !needsKeyInput && (
             <>
               <h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 8, color: '#22c55e' }}>
-                ✅ Đăng ký thành công!
+                Đăng ký thành công!
               </h2>
               <p style={{ fontSize: 14, color: '#cbd5f5', marginBottom: 16, lineHeight: 1.5 }}>
                 Tài khoản và mã máy của bạn đã được gửi cho admin. Vui lòng chờ phê duyệt để sử dụng
@@ -774,7 +774,7 @@ const AuthPage: React.FC<AuthPageProps> = ({ onLoggedIn }) => {
 
               {keyLocked && (
                 <div style={{ marginBottom: 12, fontSize: 13, color: '#f87171' }}>
-                  ⚠️ Key đã bị khóa sau 5 lần thử sai. Vui lòng liên hệ admin để mở khóa.
+                  Key đã bị khóa sau 5 lần thử sai. Vui lòng liên hệ admin để mở khóa.
                 </div>
               )}
 

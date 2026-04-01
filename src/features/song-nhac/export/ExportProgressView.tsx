@@ -89,9 +89,9 @@ export default function ExportProgressView({
       {/* Status line */}
       <div style={{ color: 'rgba(255,255,255,0.85)', marginBottom: 6, fontWeight: 500 }}>
         {isPreparing
-          ? '🔄 Đang chuẩn bị export (decode audio)…'
+          ? 'Đang chuẩn bị export (decode audio)…'
           : isFinalizing
-            ? '⏳ Đang hoàn tất video (mux audio + faststart)…'
+            ? 'Đang hoàn tất video (mux audio + faststart)…'
             : `Exporting… ${done} / ${totalFrames} frames`}
       </div>
       {/* Progress bar */}

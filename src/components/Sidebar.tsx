@@ -26,7 +26,7 @@ const allMenuItems: (MenuItem & { hidden?: boolean })[] = [
   { path: '/video/cut-merge', number: '5', label: 'Cắt/Ghép video' },
   { path: '/video/final-export', number: '6', label: 'Xuất video hoàn chỉnh' },
   { path: '/video/youtube-downloader', number: '7', label: 'YouTube Downloader' },
-  { path: '/video/seo', number: '8', label: 'SEO thô video' },
+  { path: '/music/enhance', number: '8', label: 'Nâng cấp âm thanh' },
   { path: '/autopilot', number: '9', label: 'Autopilot', hidden: HIDE_FEATURE_AUTOPILOT },
   { path: '/music/song-nhac', number: '10', label: 'Sóng nhạc' },
   { path: '/settings', number: '11', label: 'Cài đặt' },

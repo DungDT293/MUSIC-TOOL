@@ -54,7 +54,6 @@ export function DiskSpaceErrorModal({ error, onClose }: DiskSpaceErrorModalProps
             borderBottom: '2px solid #333',
           }}
         >
-          <span style={{ fontSize: '40px' }}>⚠️</span>
           <h2
             style={{
               margin: 0,

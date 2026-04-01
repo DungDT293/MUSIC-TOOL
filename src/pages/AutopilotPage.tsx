@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
-import type { SubtitleOptions } from '../../shared/videoFinalExportChannels'
 
 export type DayPresetId = 'tomorrowland' | 'partymix' | 'custom'
 
@@ -16,12 +15,16 @@ export interface DayPlanDetailOverrides {
   customTitles: string[]
   generateTracklist: boolean
   normalizeVideoInput: boolean
+  /** Chuẩn hóa tỉ lệ khung hình + FPS khi ghép video (thêm dải đen nếu cần) */
+  unifyVideoFormat?: boolean
+  /** Tỉ lệ khung hình / độ phân giải mục tiêu khi unifyVideoFormat = true */
+  targetResolution?: string
+  /** FPS mục tiêu khi unifyVideoFormat = true */
+  targetFps?: string
   /** Cách chọn bài ưu tiên: 'auto' = giống hiện tại, 'manual' = user tự chọn giống tab 2 */
   prioritySelectionMode?: 'auto' | 'manual'
   /** Danh sách track id ưu tiên (chọn tay) dùng khi prioritySelectionMode === 'manual' */
   priorityPinnedTrackIds?: string[]
-  /** Cấu hình subtitle (phụ đề nhạc) cho video xuất ra */
-  subtitle?: SubtitleOptions
 }
 
 export interface DayPlanUI {
@@ -358,30 +361,10 @@ export function DayPlanDetailDialog({
     topDj: overrides.topDj ?? 'Tiësto',
     useCustomTitles: overrides.useCustomTitles ?? false,
     customTitles: overrides.customTitles ?? [],
-    subtitle: overrides.subtitle ?? {
-      enabled: false,
-      text: '',
-      autoLyrics: false,
-      useWhisper: false,
-      whisperLanguage: 'auto',
-      subtitleStyle: 'simple',
-      subtitleFormat: 'ass',
-      position: 'bottom',
-      fontSize: 48,
-      fontColor: '#ffffff',
-      highlightColor: '#ffff00',
-      backgroundColor: '#000000',
-      backgroundOpacity: 0.7,
-      fontFamily: 'Arial',
-    },
   })
   // Lưu giá trị thô của textarea để cho phép gõ dấu cách tự do
   const [customTitlesRaw, setCustomTitlesRaw] = useState<string>(
     (overrides.customTitles ?? []).join('\n')
-  )
-  // Lưu giá trị thô của fontSize để cho phép xóa hết và nhập lại
-  const [fontSizeRaw, setFontSizeRaw] = useState<string>(
-    String(overrides.subtitle?.fontSize ?? 48)
   )
 
   const [priorityTracks, setPriorityTracks] = useState<PriorityTrack[] | null>(null)
@@ -398,25 +381,8 @@ export function DayPlanDetailDialog({
       topDj: overrides.topDj ?? 'Tiësto',
       useCustomTitles: overrides.useCustomTitles ?? false,
       customTitles: newCustomTitles,
-      subtitle: overrides.subtitle ?? {
-        enabled: false,
-        text: '',
-        autoLyrics: false,
-        useWhisper: false,
-        whisperLanguage: 'auto',
-        subtitleStyle: 'simple',
-        subtitleFormat: 'ass',
-        position: 'bottom',
-        fontSize: 48,
-        fontColor: '#ffffff',
-        highlightColor: '#ffff00',
-        backgroundColor: '#000000',
-        backgroundOpacity: 0.7,
-        fontFamily: 'Arial',
-      },
     })
     setCustomTitlesRaw(newCustomTitles.join('\n'))
-    setFontSizeRaw(String(overrides.subtitle?.fontSize ?? 48))
     setPriorityTracks(null)
     setPriorityError(null)
   }, [effectivePlanId, overrides])
@@ -495,11 +461,7 @@ export function DayPlanDetailDialog({
           .map((t) => t.trim())
           .filter(Boolean)
       : []
-    
-    // Parse fontSize từ raw value khi save
-    const fontSizeValue = fontSizeRaw !== '' ? parseInt(fontSizeRaw, 10) : 48
-    const finalFontSize = !isNaN(fontSizeValue) && fontSizeValue >= 24 && fontSizeValue <= 120 ? fontSizeValue : 48
-    
+
     const normalized: DayPlanDetailOverrides = {
       ...local,
       priorityTracksPerPlaylist: typeof local.priorityTracksPerPlaylist === 'number'
@@ -512,13 +474,11 @@ export function DayPlanDetailDialog({
       useCustomTitles: !!local.useCustomTitles,
       customTitles: customTitlesProcessed,
       generateTracklist: !!local.generateTracklist,
-      normalizeVideoInput: !!local.normalizeVideoInput,
-      subtitle: local.subtitle
-        ? {
-            ...local.subtitle,
-            fontSize: finalFontSize,
-          }
-        : undefined,
+      // unifyVideoFormat implies re-encode (cannot copy-stream with vf filter)
+      normalizeVideoInput: !!local.normalizeVideoInput || !!local.unifyVideoFormat,
+      unifyVideoFormat: !!local.unifyVideoFormat,
+      targetResolution: local.unifyVideoFormat ? (local.targetResolution || '1920x1080') : undefined,
+      targetFps: local.unifyVideoFormat ? (local.targetFps || '30') : undefined,
     }
     onSave(normalized)
     onClose()
@@ -871,7 +831,7 @@ export function DayPlanDetailDialog({
                         }))
                       }
                     />
-                    <span>Dùng icon &quot;🔥&quot;</span>
+                    <span>Dùng màu đỏ</span>
                   </label>
                 </div>
               </div>
@@ -961,6 +921,7 @@ export function DayPlanDetailDialog({
             <input
               type="checkbox"
               checked={local.normalizeVideoInput}
+              disabled={!!local.unifyVideoFormat}
               onChange={(e) =>
                 setLocal((prev) => ({
                   ...prev,
@@ -968,480 +929,70 @@ export function DayPlanDetailDialog({
                 }))
               }
             />
-            <span>Chuẩn hoá video đầu vào (re-encode + kiểm tra sâu, chậm hơn)</span>
+            <span style={{ color: local.unifyVideoFormat ? '#6b7280' : undefined }}>
+              Chuẩn hoá video đầu vào (re-encode + kiểm tra sâu, chậm hơn)
+              {local.unifyVideoFormat && (
+                <span style={{ fontSize: '11px', color: '#60a5fa', marginLeft: '6px' }}>
+                  (tự động bật khi chuẩn hóa tỉ lệ khung hình)
+                </span>
+              )}
+            </span>
           </label>
 
-          {/* Subtitle Options */}
-          <div style={{ marginTop: '8px', padding: '12px', background: '#1f2937', borderRadius: '6px', border: '1px solid #374151' }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600, marginBottom: '12px' }}>
+          <label style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: '8px' }}>
             <input
               type="checkbox"
-                checked={local.subtitle?.enabled ?? false}
+              checked={!!local.unifyVideoFormat}
               onChange={(e) =>
                 setLocal((prev) => ({
                   ...prev,
-                    subtitle: {
-                      ...(prev.subtitle ?? createDefaultOverrides().subtitle!),
-                      enabled: e.target.checked,
-                    },
+                  unifyVideoFormat: e.target.checked,
                 }))
               }
             />
-              <span>Thêm phụ đề nhạc vào video</span>
+            <span>Chuẩn hóa tỉ lệ khung hình / FPS khi ghép video (letterbox/pillarbox)</span>
           </label>
 
-            {local.subtitle?.enabled && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '10px' }}>
-                <div>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px', cursor: 'pointer' }}>
-                    <input
-                      type="checkbox"
-                      checked={local.subtitle?.autoLyrics ?? false}
-                      onChange={(e) =>
-                        setLocal((prev) => ({
-                          ...prev,
-                          subtitle: {
-                            ...(prev.subtitle ?? createDefaultOverrides().subtitle!),
-                            autoLyrics: e.target.checked,
-                            text: e.target.checked ? '' : prev.subtitle?.text ?? '',
-                          },
-                        }))
-                      }
-                      style={{ cursor: 'pointer' }}
-                    />
-                    <span style={{ fontSize: '13px', color: '#e5e7eb', fontWeight: 500 }}>
-                      Tự động dùng lời bài hát từ metadata (ID3 tags)
-                    </span>
-                  </label>
-                  <div style={{ marginLeft: '24px', marginBottom: '8px', fontSize: '11px', color: '#9ca3af' }}>
-                    Nếu file audio có lyrics trong ID3 tags (USLT), sẽ tự động dùng làm subtitle.
-                  </div>
-        </div>
-
-                {!local.subtitle?.autoLyrics && (
-                  <div>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px', cursor: 'pointer' }}>
-                      <input
-                        type="checkbox"
-                        checked={local.subtitle?.useWhisper ?? false}
-                        onChange={(e) =>
-                          setLocal((prev) => ({
-                            ...prev,
-                            subtitle: {
-                              ...(prev.subtitle ?? createDefaultOverrides().subtitle!),
-                              useWhisper: e.target.checked,
-                            },
-                          }))
-                        }
-                        style={{ cursor: 'pointer' }}
-                      />
-                      <span style={{ fontSize: '13px', color: '#e5e7eb', fontWeight: 500 }}>
-                        Tự động nhận diện lời bài hát bằng Whisper
-                      </span>
-                    </label>
-                    <div style={{ marginLeft: '24px', marginBottom: '8px', fontSize: '11px', color: '#9ca3af' }}>
-                      Sử dụng Whisper để tự động nhận diện lời bài hát từ audio.
-                    </div>
-
-                    {local.subtitle?.useWhisper && (
-                      <div style={{ marginLeft: '24px', marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                        <div>
-                          <label style={{ display: 'block', marginBottom: '4px', fontSize: '12px', color: '#e5e7eb' }}>
-                            Ngôn ngữ Whisper:
-                          </label>
-                          <select
-                            value={local.subtitle?.whisperLanguage ?? 'auto'}
-                            onChange={(e) =>
-                              setLocal((prev) => ({
-                                ...prev,
-                                subtitle: {
-                                  ...(prev.subtitle ?? createDefaultOverrides().subtitle!),
-                                  whisperLanguage: e.target.value,
-                                },
-                              }))
-                            }
-                            style={{
-                              width: '100%',
-                              padding: '6px 10px',
-                              background: '#111827',
-                              border: '1px solid #374151',
-                              borderRadius: '4px',
-                              color: '#e5e7eb',
-                              fontSize: '12px',
-                            }}
-                          >
-                            <option value="auto">Tự động phát hiện</option>
-                            <option value="vi">Tiếng Việt</option>
-                            <option value="en">English</option>
-                            <option value="zh">中文</option>
-                            <option value="ja">日本語</option>
-                            <option value="ko">한국어</option>
-                            <option value="th">ไทย</option>
-                          </select>
-                        </div>
-
-                        <div>
-                          <label style={{ display: 'block', marginBottom: '4px', fontSize: '12px', color: '#e5e7eb' }}>
-                            Kiểu phụ đề:
-                          </label>
-                          <select
-                            value={local.subtitle?.subtitleStyle ?? 'simple'}
-                            onChange={(e) =>
-                              setLocal((prev) => ({
-                                ...prev,
-                                subtitle: {
-                                  ...(prev.subtitle ?? createDefaultOverrides().subtitle!),
-                                  subtitleStyle: e.target.value as 'simple' | 'karaoke' | 'word-by-word' | 'dynamic',
-                                },
-                              }))
-                            }
-                            style={{
-                              width: '100%',
-                              padding: '6px 10px',
-                              background: '#111827',
-                              border: '1px solid #374151',
-                              borderRadius: '4px',
-                              color: '#e5e7eb',
-                              fontSize: '12px',
-                            }}
-                          >
-                            <option value="simple">Đơn giản (text tĩnh)</option>
-                            <option value="karaoke">Karaoke (thanh màu chạy)</option>
-                            <option value="word-by-word">Word-by-word (chữ nhảy - TikTok/Reels style)</option>
-                            <option value="dynamic">Dynamic Captions (Alex Hormozi style)</option>
-                          </select>
-                        </div>
-
-                        {(local.subtitle?.subtitleStyle === 'karaoke' ||
-                          local.subtitle?.subtitleStyle === 'word-by-word' ||
-                          local.subtitle?.subtitleStyle === 'dynamic') && (
-                          <div>
-                            <label style={{ display: 'block', marginBottom: '4px', fontSize: '12px', color: '#e5e7eb' }}>
-                              Màu highlight (karaoke):
-                            </label>
-                            <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                              <input
-                                type="color"
-                                value={local.subtitle?.highlightColor ?? '#ffff00'}
-                                onChange={(e) =>
-                                  setLocal((prev) => ({
-                                    ...prev,
-                                    subtitle: {
-                                      ...(prev.subtitle ?? createDefaultOverrides().subtitle!),
-                                      highlightColor: e.target.value,
-                                    },
-                                  }))
-                                }
-                                style={{ width: '40px', height: '28px', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
-                              />
-                              <input
-                                type="text"
-                                value={local.subtitle?.highlightColor ?? '#ffff00'}
-                                onChange={(e) =>
-                                  setLocal((prev) => ({
-                                    ...prev,
-                                    subtitle: {
-                                      ...(prev.subtitle ?? createDefaultOverrides().subtitle!),
-                                      highlightColor: e.target.value,
-                                    },
-                                  }))
-                                }
-                                style={{
-                                  flex: 1,
-                                  padding: '6px 10px',
-                                  background: '#111827',
-                                  border: '1px solid #374151',
-                                  borderRadius: '4px',
-                                  color: '#e5e7eb',
-                                  fontSize: '12px',
-                                }}
-                              />
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {!local.subtitle?.autoLyrics && (
-                  <div>
-                    <label style={{ display: 'block', marginBottom: '4px', fontSize: '13px', color: '#e5e7eb' }}>
-                      Nội dung phụ đề (tùy chọn):
-                    </label>
-                    <input
-                      type="text"
-                      value={local.subtitle?.text ?? ''}
-                      onChange={(e) =>
-                        setLocal((prev) => ({
-                          ...prev,
-                          subtitle: {
-                            ...(prev.subtitle ?? createDefaultOverrides().subtitle!),
-                            text: e.target.value,
-                          },
-                        }))
-                      }
-                      placeholder="Để trống = tự động dùng tên bài hát từ metadata"
-                      style={{
-                        width: '100%',
-                        padding: '6px 10px',
-                        background: '#111827',
-                        border: '1px solid #374151',
-                        borderRadius: '4px',
-                        color: '#e5e7eb',
-                        fontSize: '13px',
-                      }}
-                    />
-                    <div style={{ marginTop: '4px', fontSize: '11px', color: '#9ca3af' }}>
-                      Placeholders: {'{title}'} (tên bài), {'{artist}'} (ca sĩ). Để trống sẽ tự động dùng tên bài hát.
-                    </div>
-                  </div>
-                )}
-
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-                  <div>
-                    <label style={{ display: 'block', marginBottom: '4px', fontSize: '13px', color: '#e5e7eb' }}>
-                      Vị trí:
-                    </label>
-                    <select
-                      value={local.subtitle?.position ?? 'bottom'}
-                      onChange={(e) =>
-                        setLocal((prev) => ({
-                          ...prev,
-                          subtitle: {
-                            ...(prev.subtitle ?? createDefaultOverrides().subtitle!),
-                            position: e.target.value as 'top' | 'bottom' | 'center',
-                          },
-                        }))
-                      }
-                      style={{
-                        width: '100%',
-                        padding: '6px 10px',
-                        background: '#111827',
-                        border: '1px solid #374151',
-                        borderRadius: '4px',
-                        color: '#e5e7eb',
-                        fontSize: '13px',
-                      }}
-                    >
-                      <option value="top">Trên</option>
-                      <option value="center">Giữa</option>
-                      <option value="bottom">Dưới</option>
-                    </select>
-                  </div>
-
-                  <div>
-                    <label style={{ display: 'block', marginBottom: '4px', fontSize: '13px', color: '#e5e7eb' }}>
-                      Cỡ chữ:
-                    </label>
-                    <input
-                      type="number"
-                      min="24"
-                      max="120"
-                      value={fontSizeRaw}
-                      onChange={(e) => {
-                        const rawValue = e.target.value
-                        // Cho phép xóa hết và nhập lại
-                        setFontSizeRaw(rawValue)
-                        // Chỉ update local state nếu là số hợp lệ
-                        if (rawValue !== '') {
-                          const numValue = parseInt(rawValue, 10)
-                          if (!isNaN(numValue) && numValue >= 24 && numValue <= 120) {
-                            setLocal((prev) => ({
-                              ...prev,
-                              subtitle: {
-                                ...(prev.subtitle ?? createDefaultOverrides().subtitle!),
-                                fontSize: numValue,
-                              },
-                            }))
-                          }
-                        }
-                      }}
-                      onBlur={(e) => {
-                        // Khi blur, nếu empty hoặc invalid, reset về giá trị hiện tại hoặc default
-                        const rawValue = e.target.value
-                        if (rawValue === '' || isNaN(parseInt(rawValue, 10))) {
-                          const currentValue = local.subtitle?.fontSize ?? 48
-                          setFontSizeRaw(String(currentValue))
-                          setLocal((prev) => ({
-                            ...prev,
-                            subtitle: {
-                              ...(prev.subtitle ?? createDefaultOverrides().subtitle!),
-                              fontSize: currentValue,
-                            },
-                          }))
-                        } else {
-                          // Đảm bảo fontSizeRaw khớp với giá trị đã parse
-                          const numValue = parseInt(rawValue, 10)
-                          if (!isNaN(numValue) && numValue >= 24 && numValue <= 120) {
-                            setFontSizeRaw(String(numValue))
-                          }
-                        }
-                      }}
-                      style={{
-                        width: '100%',
-                        padding: '6px 10px',
-                        background: '#111827',
-                        border: '1px solid #374151',
-                        borderRadius: '4px',
-                        color: '#e5e7eb',
-                        fontSize: '13px',
-                      }}
-                    />
-                  </div>
-                </div>
-
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginTop: '10px' }}>
-                  <div>
-                    <label style={{ display: 'block', marginBottom: '4px', fontSize: '13px', color: '#e5e7eb' }}>
-                      Màu chữ:
-                    </label>
-                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                      <input
-                        type="color"
-                        value={local.subtitle?.fontColor ?? '#ffffff'}
-                        onChange={(e) =>
-                          setLocal((prev) => ({
-                            ...prev,
-                            subtitle: {
-                              ...(prev.subtitle ?? createDefaultOverrides().subtitle!),
-                              fontColor: e.target.value,
-                            },
-                          }))
-                        }
-                        style={{ width: '40px', height: '32px', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
-                      />
-                      <input
-                        type="text"
-                        value={local.subtitle?.fontColor ?? '#ffffff'}
-                        onChange={(e) =>
-                          setLocal((prev) => ({
-                            ...prev,
-                            subtitle: {
-                              ...(prev.subtitle ?? createDefaultOverrides().subtitle!),
-                              fontColor: e.target.value,
-                            },
-                          }))
-                        }
-                        style={{
-                          flex: 1,
-                          padding: '6px 10px',
-                          background: '#111827',
-                          border: '1px solid #374151',
-                          borderRadius: '4px',
-                          color: '#e5e7eb',
-                          fontSize: '13px',
-                        }}
-                      />
-                    </div>
-                  </div>
-
-                  <div>
-                    <label style={{ display: 'block', marginBottom: '4px', fontSize: '13px', color: '#e5e7eb' }}>
-                      Màu nền:
-                    </label>
-                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                      <input
-                        type="color"
-                        value={local.subtitle?.backgroundColor ?? '#000000'}
-                        onChange={(e) =>
-                          setLocal((prev) => ({
-                            ...prev,
-                            subtitle: {
-                              ...(prev.subtitle ?? createDefaultOverrides().subtitle!),
-                              backgroundColor: e.target.value,
-                            },
-                          }))
-                        }
-                        style={{ width: '40px', height: '32px', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
-                      />
-                      <input
-                        type="text"
-                        value={local.subtitle?.backgroundColor ?? '#000000'}
-                        onChange={(e) =>
-                          setLocal((prev) => ({
-                            ...prev,
-                            subtitle: {
-                              ...(prev.subtitle ?? createDefaultOverrides().subtitle!),
-                              backgroundColor: e.target.value,
-                            },
-                          }))
-                        }
-                        style={{
-                          flex: 1,
-                          padding: '6px 10px',
-                          background: '#111827',
-                          border: '1px solid #374151',
-                          borderRadius: '4px',
-                          color: '#e5e7eb',
-                          fontSize: '13px',
-                        }}
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginTop: '10px' }}>
-                  <div>
-                    <label style={{ display: 'block', marginBottom: '4px', fontSize: '13px', color: '#e5e7eb' }}>
-                      Độ mờ nền: {Math.round((local.subtitle?.backgroundOpacity ?? 0.7) * 100)}%
-                    </label>
-                    <input
-                      type="range"
-                      min="0"
-                      max="1"
-                      step="0.1"
-                      value={local.subtitle?.backgroundOpacity ?? 0.7}
-                      onChange={(e) =>
-                        setLocal((prev) => ({
-                          ...prev,
-                          subtitle: {
-                            ...(prev.subtitle ?? createDefaultOverrides().subtitle!),
-                            backgroundOpacity: parseFloat(e.target.value),
-                          },
-                        }))
-                      }
-                      style={{ width: '100%' }}
-                    />
-                  </div>
-
-                  <div>
-                    <label style={{ display: 'block', marginBottom: '4px', fontSize: '13px', color: '#e5e7eb' }}>
-                      Font chữ:
-                    </label>
-                    <select
-                      value={local.subtitle?.fontFamily ?? 'Arial'}
-                      onChange={(e) =>
-                        setLocal((prev) => ({
-                          ...prev,
-                          subtitle: {
-                            ...(prev.subtitle ?? createDefaultOverrides().subtitle!),
-                            fontFamily: e.target.value,
-                          },
-                        }))
-                      }
-                      style={{
-                        width: '100%',
-                        padding: '6px 10px',
-                        background: '#111827',
-                        border: '1px solid #374151',
-                        borderRadius: '4px',
-                        color: '#e5e7eb',
-                        fontSize: '13px',
-                      }}
-                    >
-                      <option value="Arial">Arial</option>
-                      <option value="Roboto">Roboto</option>
-                      <option value="Times New Roman">Times New Roman</option>
-                      <option value="Courier New">Courier New</option>
-                      <option value="Verdana">Verdana</option>
-                      <option value="Helvetica">Helvetica</option>
-                    </select>
-                  </div>
-                </div>
+          {local.unifyVideoFormat && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', paddingLeft: '24px' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <span style={{ fontSize: '12px', color: '#9ca3af' }}>Tỉ lệ khung hình / Độ phân giải mục tiêu</span>
+                <select
+                  value={local.targetResolution || '1920x1080'}
+                  onChange={(e) => setLocal((prev) => ({ ...prev, targetResolution: e.target.value }))}
+                  style={{ padding: '4px 8px', backgroundColor: '#1f2937', color: '#f9fafb', border: '1px solid #374151', borderRadius: '4px', fontSize: '12px' }}
+                >
+                  <option value="1920x1080">16:9 — 1920×1080 (Full HD Ngang)</option>
+                  <option value="1440x1080">4:3 — 1440×1080 (Cổ điển)</option>
+                  <option value="2560x1080">2.35:1 — 2560×1080 (Cinemascope)</option>
+                  <option value="2160x1080">2:1 — 2160×1080 (Univisium)</option>
+                  <option value="1998x1080">1.85:1 — 1998×1080 (Widescreen)</option>
+                  <option value="1080x1920">9:16 — 1080×1920 (Dọc / Reels / Shorts)</option>
+                  <option value="1080x1440">3:4 — 1080×1440 (Dọc cổ điển)</option>
+                  <option value="1080x1868">5.8-inch — 1080×1868 (Mobile tall)</option>
+                  <option value="1080x1080">1:1 — 1080×1080 (Vuông / Instagram)</option>
+                  <option value="3840x2160">16:9 — 3840×2160 (4K UHD)</option>
+                  <option value="1280x720">16:9 — 1280×720 (HD 720p)</option>
+                </select>
               </div>
-            )}
-          </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <span style={{ fontSize: '12px', color: '#9ca3af' }}>FPS mục tiêu</span>
+                <select
+                  value={local.targetFps || '30'}
+                  onChange={(e) => setLocal((prev) => ({ ...prev, targetFps: e.target.value }))}
+                  style={{ padding: '4px 8px', backgroundColor: '#1f2937', color: '#f9fafb', border: '1px solid #374151', borderRadius: '4px', fontSize: '12px' }}
+                >
+                  <option value="24">24.00 fps (Cinema)</option>
+                  <option value="25">25.00 fps (PAL / Europe)</option>
+                  <option value="30000/1001">29.97 fps (NTSC)</option>
+                  <option value="30">30.00 fps (YouTube phổ biến)</option>
+                  <option value="50">50.00 fps (PAL HFR)</option>
+                  <option value="60000/1001">59.94 fps (NTSC HFR)</option>
+                  <option value="60">60.00 fps (Gaming / HFR)</option>
+                </select>
+              </div>
+            </div>
+          )}
         </div>
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '16px', flexShrink: 0 }}>
@@ -2047,6 +1598,9 @@ function AutopilotControlSection({
         {runProgress.message && (
           <span style={{ fontSize: '12px', color: '#e5e7eb' }}>{runProgress.message}</span>
         )}
+        {runProgress.error && (
+          <span style={{ fontSize: '12px', color: '#f87171', fontWeight: 'bold' }}>{runProgress.error}</span>
+        )}
       </div>
 
       <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
@@ -2174,24 +1728,11 @@ export function createDefaultOverrides(): DayPlanDetailOverrides {
     customTitles: [],
     generateTracklist: false,
     normalizeVideoInput: false,
+    unifyVideoFormat: false,
+    targetResolution: '1920x1080',
+    targetFps: '30',
     prioritySelectionMode: 'auto',
     priorityPinnedTrackIds: [],
-    subtitle: {
-      enabled: false,
-      text: '',
-      autoLyrics: false,
-      useWhisper: false,
-      whisperLanguage: 'auto',
-      subtitleStyle: 'simple',
-      subtitleFormat: 'ass',
-      position: 'bottom',
-      fontSize: 48,
-      fontColor: '#ffffff',
-      highlightColor: '#ffff00',
-      backgroundColor: '#000000',
-      backgroundOpacity: 0.7,
-      fontFamily: 'Arial',
-    },
   }
 }
 
@@ -2768,18 +2309,21 @@ function AutopilotComingSoon() {
 }
 
 import BatchModeTab from './Autopilot/BatchModeTab'
+import PoolMonitorTab from './Autopilot/PoolMonitorTab'
 
-type AutopilotTabMode = 'plan' | 'batch'
+type AutopilotTabMode = 'plan' | 'batch' | 'pool'
 
 export default function AutopilotPage() {
   const [mode, setMode] = useState<AutopilotTabMode>('plan')
   // Track if each tab was ever mounted (lazy-mount)
   const [planMounted, setPlanMounted] = useState(true)
   const [batchMounted, setBatchMounted] = useState(false)
+  const [poolMounted, setPoolMounted] = useState(false)
 
   // Lazy-mount: mount tab khi lần đầu chọn, giữ nguyên khi chuyển tab
   if (mode === 'batch' && !batchMounted) setBatchMounted(true)
   if (mode === 'plan' && !planMounted) setPlanMounted(true)
+  if (mode === 'pool' && !poolMounted) setPoolMounted(true)
 
   const tabStyle = (tab: AutopilotTabMode): React.CSSProperties => ({
     padding: '10px 24px',
@@ -2802,6 +2346,9 @@ export default function AutopilotPage() {
         <button type="button" onClick={() => setMode('batch')} style={tabStyle('batch')}>
           Batch Mode
         </button>
+        <button type="button" onClick={() => setMode('pool')} style={tabStyle('pool')}>
+          Pool Monitor
+        </button>
       </div>
       <div style={{ flex: 1, overflow: 'auto' }}>
         {/* display:none giữ state khi chuyển tab, lazy-mount tránh render không cần thiết */}
@@ -2813,6 +2360,11 @@ export default function AutopilotPage() {
         {batchMounted && (
           <div style={{ display: mode === 'batch' ? 'block' : 'none', height: '100%', padding: '12px' }}>
             <BatchModeTab />
+          </div>
+        )}
+        {poolMounted && (
+          <div style={{ display: mode === 'pool' ? 'block' : 'none', height: '100%' }}>
+            <PoolMonitorTab />
           </div>
         )}
       </div>

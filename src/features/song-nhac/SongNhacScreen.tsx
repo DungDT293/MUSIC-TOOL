@@ -141,7 +141,7 @@ export default function SongNhacScreen() {
       {/* Tab bar */}
       <div style={{ display: 'flex', flexShrink: 0, borderBottom: '1px solid rgba(255,255,255,0.08)', background: 'rgba(0,0,0,0.2)' }}>
         <button type="button" style={tabBtnStyle(leftTab === 'layers')} onClick={() => setLeftTab('layers')}>
-          🎞 Layers
+          Layers
         </button>
         <button type="button" style={tabBtnStyle(leftTab === 'background')} onClick={() => setLeftTab('background')}>
           🌌 Nền & Engine
@@ -206,7 +206,7 @@ export default function SongNhacScreen() {
                   color: 'rgba(255,220,140,0.95)',
                 }}
               >
-                <span style={{ flex: 1 }}>⚠️ {playError}</span>
+                <span style={{ flex: 1 }}>{playError}</span>
                 <button
                   type="button"
                   onClick={() => setPlayError(null)}

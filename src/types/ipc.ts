@@ -244,6 +244,37 @@ export interface PlaylistDefinition {
   createdAt: number
 }
 
+export interface MusicPoolTrackStat {
+  id: string
+  lastUsedAt: number | null
+  useCount: number
+  addedAt: number
+  tier: 0 | 1 | 2
+  daysSinceUsed: number | null
+}
+
+export interface MusicPoolStats {
+  total: number
+  tier0: number
+  tier1: number
+  tier2: number
+  updatedAt: number | null
+  tracks: MusicPoolTrackStat[]
+}
+
+export interface BuildPlaylistWarning {
+  type: 'priority_ratio_not_met' | 'track_reuse_needed' | 'insufficient_tracks'
+  playlistIndex?: number
+  message: string
+  actualRatioPct?: number
+  targetRatioPct?: number
+}
+
+export interface BuildPlaylistsResult {
+  playlists: PlaylistDefinition[]
+  warnings: BuildPlaylistWarning[]
+}
+
 export interface BuildPlaylistsOptions {
   tracks: ScannedTrack[]
   pinnedTrackIds: string[]
@@ -271,6 +302,120 @@ export interface ExportPlaylistResult {
   durationSec?: number
   error?: string
   requestId?: string
+}
+
+// ── Audio Enhancement (Nâng cấp âm thanh) ─────────────────────────────────
+
+export interface EQSettings {
+  enabled: boolean
+  highpassHz: number     // 20..1000, default 20
+  lowpassHz: number      // 8000..22050, default 22050
+  bassGainDb: number     // -12..+12, lowshelf 110Hz
+  band1Gain: number      // -12..+12, peaking 200Hz
+  midGainDb: number      // -12..+12, peaking 1000Hz
+  band2Gain: number      // -12..+12, peaking 4000Hz
+  trebleGainDb: number   // -12..+12, highshelf 10000Hz
+}
+
+export interface CompressorSettings {
+  enabled: boolean
+  thresholdDb: number   // -40..0, default -18
+  ratio: number         // 1..20, default 4
+  attackMs: number      // 0.1..100, default 5
+  releaseMs: number     // 10..1000, default 50
+  makeupGainDb: number  // 0..12, default 2
+  knee: number          // 1..8, default 2.83
+  mix: number           // 0..1, default 1 (parallel compression)
+}
+
+export interface LoudnormSettings {
+  enabled: boolean
+  integratedLufs: number  // -23..-6, default -14
+  truePeakDbtp: number    // -3..0, default -1
+  lra: number             // 1..20, default 11
+}
+
+export interface StereoSettings {
+  enabled: boolean
+  amount: number  // 0..3: 0=mono, 1=original, 2=wide, 3=extra-wide
+}
+
+export interface NoiseGateSettings {
+  enabled: boolean
+  thresholdDb: number   // -80..-5, default -40
+  ratio: number         // 2..20, default 6
+  attackMs: number      // 0.1..50, default 5
+  releaseMs: number     // 10..2000, default 200
+  rangeDb: number       // -60..0, default -24
+}
+
+export interface LimiterSettings {
+  enabled: boolean
+  thresholdDbtp: number  // -3..0, default -0.5
+  attackMs: number       // 0.1..20, default 1
+  releaseMs: number      // 10..500, default 50
+}
+
+export interface ExciterSettings {
+  enabled: boolean
+  freq: number           // 2000..12000, default 7500
+  amount: number         // 1..50, default 20
+  drive: number          // 1..10, default 5
+  blend: number          // -10..10, default 2
+}
+
+export interface NoiseReductionSettings {
+  enabled: boolean
+  noiseReducDb: number   // 0..80, default 15
+  noiseFloorDb: number   // -90..-20, default -50
+}
+
+export interface EnhanceAudioRequest {
+  files: string[]
+  outputDir?: string
+  outputFormat?: 'mp3' | 'aac' | 'wav' | 'keep'
+  bitrateKbps?: number
+  overwrite?: boolean
+  eq?: EQSettings
+  compressor?: CompressorSettings
+  loudnorm?: LoudnormSettings
+  stereo?: StereoSettings
+  noiseGate?: NoiseGateSettings
+  limiter?: LimiterSettings
+  exciter?: ExciterSettings
+  noiseReduction?: NoiseReductionSettings
+}
+
+export interface EnhanceAudioProgress {
+  currentFile: string
+  currentIndex: number
+  totalFiles: number
+  percent: number
+  status: 'processing' | 'completed' | 'error' | 'cancelled'
+  error?: string
+}
+
+export interface EnhanceAudioResult {
+  success: boolean
+  processed: number
+  failed: number
+  errors: Array<{ file: string; error: string }>
+  outputFiles: string[]
+}
+
+export interface LoudnormPreviewResult {
+  success: boolean
+  previewPath?: string
+  error?: string
+}
+
+export interface LoudnormPreviewRequest {
+  inputFile: string
+  integratedLufs: number
+  truePeakDbtp: number
+  lra: number
+  durationSec?: number  // default 30
+  startSec?: number     // default 0
 }
 
 export interface CrossfadeTrackIssue {
@@ -784,8 +929,10 @@ export interface IPCAPI {
   selectManyVideos: () => Promise<string[] | null>
   scanMusicFolders: (payload: { priorityFolder: string | null; randomFolder: string | null }) => Promise<ScanMusicResult>
   getLastScanResult: () => Promise<ScanMusicResult | null>
-  createPlaylists: (options: BuildPlaylistsOptions) => Promise<PlaylistDefinition[]>
+  createPlaylists: (options: BuildPlaylistsOptions) => Promise<BuildPlaylistsResult>
   listPlaylists: () => Promise<PlaylistDefinition[]>
+  getMusicPoolStats: (trackIds: string[]) => Promise<MusicPoolStats>
+  clearMusicPool: () => Promise<{ success: boolean }>
   exportPlaylist: (req: ExportPlaylistRequest) => Promise<ExportPlaylistResult>
   cutVideoSegment?: (req: CutVideoRequest) => Promise<CutVideoResult> // DEPRECATED - use videoCutSingleSimple instead
   selectVideoFile: () => Promise<string | null>
@@ -826,6 +973,8 @@ export interface IPCAPI {
     outputDir: string
     useGpu?: boolean
     requestId?: string
+    targetResolution?: string
+    targetFps?: string
   }) => Promise<{
     requestId: string
     outputPaths: string[]
@@ -840,6 +989,8 @@ export interface IPCAPI {
     outputDir: string
     useGpu?: boolean
     requestId?: string
+    targetResolution?: string
+    targetFps?: string
   }) => Promise<{
     requestId: string
     outputPaths: string[]

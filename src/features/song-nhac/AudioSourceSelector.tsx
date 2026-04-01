@@ -354,15 +354,15 @@ export default function AudioSourceSelector() {
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-              <span style={{ color: 'rgba(255,255,255,0.9)' }}>🎵 {displayName ?? '—'}</span>
+              <span style={{ color: 'rgba(255,255,255,0.9)' }}>{displayName ?? '—'}</span>
               {durationSec != null && durationSec > 0 ? (
                 <span style={{ color: 'rgba(255,255,255,0.6)' }}>⏱️ {formatDuration(durationSec)}</span>
               ) : (
                 <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: 10 }} title="Đang tải và phân tích audio...">
-                  ⏳ Đang tải...
+                  Đang tải...
                 </span>
               )}
-              <span style={{ color: 'rgba(255,255,255,0.5)' }}>📁 Nguồn: {sourceKind === 'app' ? 'Trong app' : 'Từ máy'}</span>
+              <span style={{ color: 'rgba(255,255,255,0.5)' }}>Nguồn: {sourceKind === 'app' ? 'Trong app' : 'Từ máy'}</span>
               <button
                 type="button"
                 onClick={handleClear}

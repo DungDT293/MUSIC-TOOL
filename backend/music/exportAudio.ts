@@ -988,7 +988,7 @@ export async function exportPlaylistToFile(
             name: t.fileName,
             path: t.path,
             durationSec: t.duration,
-            startSec: t.cumulativeDuration ?? 0,
+            startSec: (t.cumulativeDuration ?? t.duration) - t.duration,
           })),
         })
       } catch (err) {

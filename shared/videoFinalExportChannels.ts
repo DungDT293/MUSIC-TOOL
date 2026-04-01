@@ -143,6 +143,12 @@ export interface FinalExportRequestPayload {
   tracklistAuto?: boolean // Tự sinh tracklist từ history audio (Tab 4) nếu có
   forceReencode?: boolean // Bật chế độ re-encode để tránh lỗi khung hình, chậm hơn
   normalizeAudio?: boolean // Chuẩn hoá âm lượng (re-encode audio với loudnorm)
+  /** Chuẩn hóa tỉ lệ khung hình + FPS khi ghép video (letterbox/pillarbox) */
+  unifyFormat?: boolean
+  /** Tỉ lệ khung hình / độ phân giải mục tiêu khi unifyFormat = true, ví dụ '1920x1080' */
+  targetResolution?: string
+  /** FPS mục tiêu khi unifyFormat = true, ví dụ '30', '30000/1001' */
+  targetFps?: string
   subtitle?: SubtitleOptions // Subtitle options cho video output
   
   // ✅ V2.2: Quality preset system

@@ -137,7 +137,7 @@ export default function SettingsPage() {
         fontFamily: 'system-ui, -apple-system, sans-serif',
       }}
     >
-      <h1 style={{ fontSize: '32px', fontWeight: '600', marginBottom: '32px' }}>⚙️ Cài Đặt</h1>
+      <h1 style={{ fontSize: '32px', fontWeight: '600', marginBottom: '32px' }}>Cài Đặt</h1>
 
       {/* About Section */}
       <section
@@ -196,7 +196,7 @@ export default function SettingsPage() {
           padding: '24px',
         }}
       >
-        <h2 style={{ fontSize: '20px', fontWeight: '600', marginBottom: '16px' }}>🔄 Cập Nhật</h2>
+        <h2 style={{ fontSize: '20px', fontWeight: '600', marginBottom: '16px' }}>Cập Nhật</h2>
         
         {/* Channel Selection */}
         <div style={{ marginBottom: '24px', paddingBottom: '24px', borderBottom: '1px solid #334155' }}>
@@ -239,7 +239,7 @@ export default function SettingsPage() {
           </div>
           <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '8px' }}>
             {updateChannel === 'beta' 
-              ? '⚠️ Kênh Beta có thể chứa các tính năng thử nghiệm và có thể không ổn định.'
+              ? 'Lưu ý: Kênh Beta có thể chứa các tính năng thử nghiệm và có thể không ổn định.'
               : 'Kênh Stable cung cấp các bản cập nhật đã được kiểm tra và ổn định.'}
           </div>
           {policy && updateChannel === 'beta' && policy.beta_latest_version && (

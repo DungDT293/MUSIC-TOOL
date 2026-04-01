@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { useLocation } from 'react-router-dom'
 import { PlaylistDefinition, PlaylistTrack } from '../../types/ipc'
 
 function formatDuration(seconds: number | undefined | null): string {
@@ -32,8 +33,9 @@ function PreviewPlaylistPage() {
   const [loadError, setLoadError] = useState<string | null>(null)
 
   const audioRef = useRef<HTMLAudioElement | null>(null)
+  const location = useLocation()
 
-  // Load playlists từ backend
+  // Load playlists mỗi lần user mở tab này (keep-alive: page không unmount)
   useEffect(() => {
     let mounted = true
 
@@ -42,8 +44,14 @@ function PreviewPlaylistPage() {
       .then((data) => {
         if (!mounted) return
         setPlaylists(data || [])
-        if (data && data.length > 0 && !selectedPlaylistId) {
-          setSelectedPlaylistId(data[0].id)
+        // Chỉ auto-select nếu chưa có selection hoặc selection không còn trong list mới
+        if (data && data.length > 0) {
+          setSelectedPlaylistId(prev => {
+            if (!prev || !data.find(p => p.id === prev)) return data[0].id
+            return prev
+          })
+        } else {
+          setSelectedPlaylistId(null)
         }
       })
       .catch((err) => {
@@ -54,7 +62,7 @@ function PreviewPlaylistPage() {
     return () => {
       mounted = false
     }
-  }, [])
+  }, [location.pathname])
 
   const selectedPlaylist = playlists.find((p) => p.id === selectedPlaylistId) || null
 
@@ -72,24 +80,37 @@ function PreviewPlaylistPage() {
     setAudioError(null)
   }, [selectedPlaylistId])
 
-  // Helper: convert file path to file:// URL (IPC main process)
+  // Helper: convert file path → blob URL (avoids CSP file:// restriction)
+  const blobUrlCache = useRef<Map<string, string>>(new Map())
+
   async function getFileUrl(filePath: string): Promise<string> {
     try {
       if (!filePath) return ''
 
-      if (window.api && typeof window.api.toFileUrl === 'function') {
-        const viaPreload = await window.api.toFileUrl(filePath)
-        if (viaPreload && viaPreload.startsWith('file:')) {
-          console.log('[PreviewPlaylist] getFileUrl using IPC', { filePath, url: viaPreload })
-          return viaPreload
+      // Return cached blob URL if available
+      if (blobUrlCache.current.has(filePath)) {
+        return blobUrlCache.current.get(filePath)!
+      }
+
+      // Try blob URL via IPC readFileAsBase64 (works with CSP)
+      const api = (window as any).api
+      if (api?.readFileAsBase64) {
+        const res = await api.readFileAsBase64(filePath)
+        if (res?.ok && res.base64) {
+          const binary = atob(res.base64)
+          const bytes = new Uint8Array(binary.length)
+          for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+          const blob = new Blob([bytes], { type: res.mime ?? 'audio/mpeg' })
+          const blobUrl = URL.createObjectURL(blob)
+          blobUrlCache.current.set(filePath, blobUrl)
+          return blobUrl
         }
       }
 
+      // Fallback: file:// URL (may fail in dev due to CSP)
       const normalized = filePath.replace(/\\/g, '/')
-      const encoded = encodeURI(normalized)
-      const url = `file:///${encoded}`
-      console.log('[PreviewPlaylist] getFileUrl using fallback', { filePath, url })
-      return url
+      const encoded = normalized.split('/').map(seg => encodeURIComponent(seg)).join('/')
+      return `file:///${encoded.replace(/^\/+/, '')}`
     } catch (err) {
       console.error('[PreviewPlaylist] getFileUrl error', filePath, err)
       return ''
@@ -262,7 +283,7 @@ function PreviewPlaylistPage() {
     <div style={{ padding: '20px', display: 'flex', gap: '20px', height: 'calc(100vh - 100px)' }}>
       {loadError && (
         <div style={{ position: 'absolute', top: 10, left: 10, right: 10, background: '#5c1e1e', color: '#f88', padding: '10px 16px', borderRadius: 6, zIndex: 100 }}>
-          ⚠️ {loadError}
+          {loadError}
         </div>
       )}
       {/* Cột trái: Danh sách playlist */}
@@ -452,7 +473,7 @@ function PreviewPlaylistPage() {
                     opacity: !selectedPlaylist || currentIndex === 0 ? 0.5 : 1,
                   }}
                 >
-                  « Trước
+                  Trước
                 </button>
                 <button
                   onClick={handleTogglePlay}
@@ -469,7 +490,7 @@ function PreviewPlaylistPage() {
                     minWidth: '80px',
                   }}
                 >
-                  {isPlaying ? '❚❚ Tạm dừng' : '▶ Phát'}
+                  {isPlaying ? 'Tạm dừng' : 'Phát'}
                 </button>
                 <button
                   onClick={handleNext}
@@ -494,7 +515,7 @@ function PreviewPlaylistPage() {
                         : 1,
                   }}
                 >
-                  » Sau
+                  Sau
                 </button>
               </div>
             </div>

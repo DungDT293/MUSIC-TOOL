@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
+import { useLocation } from 'react-router-dom'
 import {
   PlaylistDefinition,
   ExportPlaylistRequest,
@@ -73,6 +74,7 @@ function ExportAudioPage() {
     totalSec: number
     percent: number
   } | null>(null)
+  const location = useLocation()
   const [currentExportIndex, setCurrentExportIndex] = useState<number>(0)
   const [totalExportCount, setTotalExportCount] = useState<number>(0)
   const [batchStartTime, setBatchStartTime] = useState<number | null>(null)
@@ -158,7 +160,7 @@ const filteredHistory = useMemo(() => {
     }
   }
 
-  // Load playlists
+  // Load playlists mỗi lần user mở tab này (keep-alive: page không unmount)
   useEffect(() => {
     let mounted = true
 
@@ -167,7 +169,12 @@ const filteredHistory = useMemo(() => {
       .then((data) => {
         if (!mounted) return
         setPlaylists(data || [])
-        setSelectedPlaylistIds([]) // default: chưa chọn gì
+        // Giữ selection hiện tại nếu vẫn còn trong list mới
+        setSelectedPlaylistIds(prev => {
+          if (!prev.length) return []
+          const ids = new Set((data || []).map((p: PlaylistDefinition) => p.id))
+          return prev.filter(id => ids.has(id))
+        })
       })
       .catch((err) => {
         console.error('[ExportAudio] listPlaylists error', err)
@@ -177,7 +184,7 @@ const filteredHistory = useMemo(() => {
     return () => {
       mounted = false
     }
-  }, [])
+  }, [location.pathname])
 
   // Restore state từ running job khi component mount lại (sau khi chuyển tab)
   useEffect(() => {
@@ -674,7 +681,7 @@ const filteredHistory = useMemo(() => {
           } else {
             const msg = res.error || 'Không rõ lỗi'
             // Nếu là lỗi dung lượng ổ đĩa → hiển thị modal chi tiết
-            if (msg.startsWith('❌ CẢNH BÁO: Dung lượng ổ đĩa không đủ')) {
+            if (msg.startsWith('CẢNH BÁO: Dung lượng ổ đĩa không đủ')) {
               setDiskSpaceError(msg)
             } else {
               errors.push(`${pl.name}: ${msg}`)
@@ -687,7 +694,7 @@ const filteredHistory = useMemo(() => {
           }
           console.error('[ExportAudio] exportPlaylist error', err)
           const msg = err?.message || 'Lỗi IPC/exportPlaylist'
-          if (msg.startsWith('❌ CẢNH BÁO: Dung lượng ổ đĩa không đủ')) {
+          if (msg.startsWith('CẢNH BÁO: Dung lượng ổ đĩa không đủ')) {
             setDiskSpaceError(msg)
           } else {
             errors.push(`${pl.name}: ${msg}`)
@@ -1014,7 +1021,7 @@ const filteredHistory = useMemo(() => {
                   if (result.totalWithIssues > 0) {
                     setErrorMessage(`Phát hiện ${result.totalWithIssues}/${result.totalChecked} playlist có track lỗi. Xem chi tiết bên dưới.`)
                   } else {
-                    setSuccessMessage(`✓ Tất cả ${result.totalChecked} playlist đều OK cho crossfade.`)
+                    setSuccessMessage(`Tất cả ${result.totalChecked} playlist đều OK cho crossfade.`)
                   }
                 } catch (err: any) {
                   console.error('[ExportAudio] Validate error:', err)
@@ -1054,14 +1061,14 @@ const filteredHistory = useMemo(() => {
               if (result.issues.length === 0) {
                 return (
                   <div key={result.playlistId} style={{ marginBottom: '8px', fontSize: '13px', color: '#155724' }}>
-                    ✓ <strong>{result.playlistName}</strong>: OK
+                    <strong>{result.playlistName}</strong>: OK
                   </div>
                 )
               }
               return (
                 <div key={result.playlistId} style={{ marginBottom: '12px', fontSize: '13px' }}>
                   <div style={{ fontWeight: 'bold', color: '#856404', marginBottom: '4px' }}>
-                    ⚠️ <strong>{result.playlistName}</strong> ({result.issues.length} track lỗi):
+                    <strong>{result.playlistName}</strong> ({result.issues.length} track lỗi):
                   </div>
                   <ul style={{ margin: '4px 0', paddingLeft: '20px', color: '#856404' }}>
                     {result.issues.map((issue, idx) => (
@@ -1132,7 +1139,7 @@ const filteredHistory = useMemo(() => {
                 marginLeft: '12px',
               }}
             >
-              ⏹️ Dừng xuất nhạc
+              Dừng xuất nhạc
             </button>
           )}
         </div>
