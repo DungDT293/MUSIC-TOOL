@@ -384,15 +384,19 @@ export function registerAuthHandlers() {
           message: newState.message,
           remember: true,
         })
+        // Return server response directly so frontend can check valid + device_token
+        return { ...res, message: 'Kích hoạt thành công.' }
       } else {
         const msg = res.message || (res.locked ? 'Key đã bị khóa.' : 'Mã kích hoạt không hợp lệ.')
         setAuthState({ ...base, status: 'error', message: msg })
+        return { valid: false, message: msg, locked: res.locked, attempts: res.attempts, action: res.action, tamperCount: res.tamperCount }
       }
     } catch (err: any) {
       console.error('[auth:validateKey] error', err)
-      setAuthState({ ...base, status: 'error', message: getFriendlyAuthError(err, 'Không thể kích hoạt.') })
+      const msg = getFriendlyAuthError(err, 'Không thể kích hoạt.')
+      setAuthState({ ...base, status: 'error', message: msg })
+      return { valid: false, message: msg }
     }
-    return authState
   })
 
   ipcMain.handle('auth:validateToken', async () => {
