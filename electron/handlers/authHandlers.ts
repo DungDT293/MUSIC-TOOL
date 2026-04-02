@@ -132,8 +132,18 @@ export function registerAuthHandlers() {
     }
 
     try {
+      // Server V2 trả { ok: true/false, device_token, refresh_token, error, action }
+      // Server V1 trả { status: 'CHO_PHEP'|'allowed'|... , message, token, ... }
       type LoginResponse = {
-        status: string
+        // V2 format
+        ok?: boolean
+        device_token?: string
+        refresh_token?: string
+        expires_at?: number
+        error?: string
+        action?: string
+        // V1 format (legacy fallback)
+        status?: string
         message?: string
         token?: string
         refreshToken?: string
@@ -149,7 +159,14 @@ export function registerAuthHandlers() {
         version: APP_VERSION,
       })
 
-      if (res.status === 'CHO_PHEP' || res.status === 'allowed') {
+      // Normalize: server V2 dùng ok=true, V1 dùng status='CHO_PHEP'/'allowed'
+      const isSuccess = res.ok === true || res.status === 'CHO_PHEP' || res.status === 'allowed'
+      const isPending = res.status === 'PENDING' || res.status === 'pending'
+      const isBlocked = res.status === 'BI_CHAN' || res.status === 'blocked'
+        || res.action === 'BLOCKED'
+      const errorMsg = res.error || res.message
+
+      if (isSuccess) {
         // Đăng nhập thành công → reset rate limit
         loginRateLimiter.reset(rateKey)
         const newState = {
@@ -158,7 +175,7 @@ export function registerAuthHandlers() {
           password: payload.password,
           machineId: base.machineId,
           activationKey: res.activationKey,
-          message: res.message || 'Đăng nhập thành công.',
+          message: errorMsg || 'Đăng nhập thành công.',
           latestVersion: res.latestVersion,
           downloadUrl: res.downloadUrl,
         }
@@ -174,15 +191,16 @@ export function registerAuthHandlers() {
             message: newState.message,
             latestVersion: newState.latestVersion,
             downloadUrl: newState.downloadUrl,
-            token: res.token,
-            refreshToken: res.refreshToken,
+            // V2: device_token / refresh_token, V1: token / refreshToken
+            token: res.device_token || res.token,
+            refreshToken: res.refresh_token || res.refreshToken,
             remember: true,
           })
         } else {
           // remember=false → xóa .enc cũ để không auto-login lần sau
           clearEncryptedAuthState()
         }
-      } else if (res.status === 'PENDING' || res.status === 'pending') {
+      } else if (isPending) {
         // PENDING = chưa được duyệt, KHÔNG phải sai password → reset rate limit
         loginRateLimiter.reset(rateKey)
         setAuthState({
@@ -190,24 +208,24 @@ export function registerAuthHandlers() {
           username: payload.username,
           password: payload.password,
           machineId: base.machineId,
-          message: res.message || 'Tài khoản đang chờ admin phê duyệt.',
+          message: errorMsg || 'Tài khoản đang chờ admin phê duyệt.',
         })
-      } else if (res.status === 'BI_CHAN' || res.status === 'blocked') {
-        // BI_CHAN = bị khóa bởi admin, KHÔNG phải sai password → reset rate limit
+      } else if (isBlocked) {
+        // Bị khóa bởi admin hoặc tamper detection → reset rate limit
         loginRateLimiter.reset(rateKey)
         clearEncryptedAuthState()
         setAuthState({
           status: 'blocked',
           username: payload.username,
           machineId: base.machineId,
-          message: res.message || 'Tài khoản đã bị khóa.',
+          message: errorMsg || 'Tài khoản đã bị khóa.',
         })
       } else {
-        // Trường hợp khác (sai password, lỗi khác) → rate limit đã được tính bởi check() ở trên
+        // Trường hợp khác (sai password, lỗi khác)
         setAuthState({
           status: 'error',
           machineId: base.machineId,
-          message: res.message || 'Đăng nhập thất bại.',
+          message: errorMsg || 'Đăng nhập thất bại.',
         })
       }
     } catch (err: any) {
@@ -219,7 +237,12 @@ export function registerAuthHandlers() {
         message: getFriendlyAuthError(err, 'Đăng nhập thất bại.'),
       })
     }
-    return authState
+    // Trả về object có ok field để frontend kiểm tra
+    const finalState = authState
+    return {
+      ...finalState,
+      ok: finalState?.status === 'allowed',
+    }
   })
 
   ipcMain.handle('auth:refresh', async () => {
@@ -227,8 +250,18 @@ export function registerAuthHandlers() {
     if (!base.username || !base.password) return base
 
     try {
+      // Server V2 trả { ok: true/false, device_token, refresh_token, error }
+      // Server V1 trả { status: 'CHO_PHEP'|... , message, token, ... }
       type RefreshResponse = {
-        status: string
+        // V2 format
+        ok?: boolean
+        device_token?: string
+        refresh_token?: string
+        expires_at?: number
+        error?: string
+        action?: string
+        // V1 format (legacy)
+        status?: string
         message?: string
         token?: string
         refreshToken?: string
@@ -243,12 +276,19 @@ export function registerAuthHandlers() {
         version: APP_VERSION,
       })
 
-      if (res.status === 'CHO_PHEP' || res.status === 'allowed') {
+      // Normalize: server V2 dùng ok=true, V1 dùng status='CHO_PHEP'/'allowed'
+      const isSuccess = res.ok === true || res.status === 'CHO_PHEP' || res.status === 'allowed'
+      const isPending = res.status === 'PENDING' || res.status === 'pending'
+      const isBlocked = res.status === 'BI_CHAN' || res.status === 'blocked'
+        || res.action === 'BLOCKED'
+      const errorMsg = res.error || res.message
+
+      if (isSuccess) {
         const newState = {
           ...base,
           status: 'allowed' as const,
           activationKey: res.activationKey ?? base.activationKey,
-          message: res.message || 'Đã làm mới phiên đăng nhập.',
+          message: errorMsg || 'Đã làm mới phiên đăng nhập.',
           latestVersion: res.latestVersion ?? base.latestVersion,
           downloadUrl: res.downloadUrl ?? base.downloadUrl,
           refreshCount: (base.refreshCount ?? 0) + 1,
@@ -259,27 +299,40 @@ export function registerAuthHandlers() {
         if (stored?.remember) {
           await writeEncryptedAuthState({
             ...newState,
-            token: res.token,
-            refreshToken: res.refreshToken,
+            token: res.device_token || res.token,
+            refreshToken: res.refresh_token || res.refreshToken,
             remember: true,
           })
         }
-      } else if (res.status === 'PENDING' || res.status === 'pending') {
-        setAuthState({ ...base, status: 'pending', message: res.message || 'Tài khoản đang chờ phê duyệt.' })
-      } else if (res.status === 'BI_CHAN' || res.status === 'blocked') {
+      } else if (isPending) {
+        setAuthState({ ...base, status: 'pending', message: errorMsg || 'Tài khoản đang chờ phê duyệt.' })
+      } else if (isBlocked) {
         // Bị block → clear .enc để không tự động login nữa
         clearEncryptedAuthState()
-        setAuthState({ ...base, status: 'blocked', message: res.message || 'Tài khoản đã bị khóa.' })
+        setAuthState({ ...base, status: 'blocked', message: errorMsg || 'Tài khoản đã bị khóa.' })
       } else {
-        setAuthState({ ...base, status: 'error', message: res.message || 'Làm mới thất bại.' })
+        // Server trả response không mong đợi (ok=false, sai password, v.v.)
+        // Nếu đang allowed → giữ nguyên, không phá hủy phiên hợp lệ
+        if (base.status === 'allowed') {
+          console.warn('[auth:refresh] Server returned non-success, keeping allowed state:', errorMsg)
+        } else {
+          setAuthState({ ...base, status: 'error', message: errorMsg || 'Làm mới thất bại.' })
+        }
       }
     } catch (err: any) {
       console.error('[auth:refresh] error', err)
-      setAuthState({
-        ...base,
-        status: 'error',
-        message: getFriendlyAuthError(err, 'Không thể làm mới phiên đăng nhập.'),
-      })
+      // Lỗi mạng / timeout — KHÔNG ghi đè trạng thái allowed hiện tại
+      // Chỉ set error nếu trước đó chưa đăng nhập thành công
+      if (base.status === 'allowed') {
+        console.warn('[auth:refresh] Network error during refresh, keeping current allowed state')
+        // Giữ nguyên state, chỉ trả về base (vẫn allowed)
+      } else {
+        setAuthState({
+          ...base,
+          status: 'error',
+          message: getFriendlyAuthError(err, 'Không thể làm mới phiên đăng nhập.'),
+        })
+      }
     }
     return authState
   })
