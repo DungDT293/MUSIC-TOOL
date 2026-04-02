@@ -7,6 +7,8 @@ import { useState } from 'react'
 import { useSongNhacRuntimeStore } from '../store/songNhacRuntimeStore'
 import type { VisualizerLayoutId } from '../store/songNhacRuntimeStore'
 import type { EngineType } from '../runtime/engine/types'
+import { THREEJS_PRESET_LIST } from '../runtime/engine/threejs/threejsPresets'
+import type { ThreeJsPresetId } from '../runtime/engine/threejs/threejsPresets'
 
 /* ── Shared style helpers ── */
 const sec: React.CSSProperties = {
@@ -180,6 +182,8 @@ export default function EnginesPanel() {
   const setWavejsAnimation = useSongNhacRuntimeStore((s) => s.setWavejsAnimation)
   const vantaEffect = useSongNhacRuntimeStore((s) => s.vantaEffect)
   const setVantaEffect = useSongNhacRuntimeStore((s) => s.setVantaEffect)
+  const threejsPreset = useSongNhacRuntimeStore((s) => s.threejsPreset)
+  const setThreejsPreset = useSongNhacRuntimeStore((s) => s.setThreejsPreset)
 
   return (
     <div style={{ fontSize: 12, color: '#e8e8e8', paddingBottom: 12 }}>
@@ -276,6 +280,54 @@ export default function EnginesPanel() {
       {bgEngine === 'threejs' && (
         <div style={sec}>
           <SectionLabel>Three.js — Cài đặt</SectionLabel>
+
+          {/* ── Preset selector ── */}
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.55)', marginBottom: 6 }}>Visual Style</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              {THREEJS_PRESET_LIST.map((p) => {
+                const active = threejsPreset === p.id
+                return (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => setThreejsPreset(p.id)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 10,
+                      padding: '8px 10px',
+                      borderRadius: 6,
+                      border: `1px solid ${active ? 'rgba(77,159,255,0.6)' : 'rgba(255,255,255,0.08)'}`,
+                      background: active
+                        ? 'linear-gradient(135deg, rgba(77,159,255,0.18) 0%, rgba(120,80,200,0.12) 100%)'
+                        : 'rgba(255,255,255,0.03)',
+                      cursor: 'pointer',
+                      textAlign: 'left',
+                      transition: 'all 0.15s',
+                    }}
+                  >
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{
+                        fontSize: 11,
+                        fontWeight: active ? 700 : 500,
+                        color: active ? '#fff' : 'rgba(255,255,255,0.75)',
+                      }}>
+                        {p.label}
+                      </div>
+                      <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.35)', marginTop: 1 }}>
+                        {p.description}
+                      </div>
+                    </div>
+                    {active && (
+                      <span style={{ fontSize: 10, color: '#4d9fff', flexShrink: 0, fontWeight: 700 }}>v</span>
+                    )}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+
           <div style={{ marginBottom: 8 }}>
             <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.55)', marginBottom: 4 }}>Layout</div>
             <select

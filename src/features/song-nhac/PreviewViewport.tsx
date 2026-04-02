@@ -151,6 +151,7 @@ export default function PreviewViewport({ onTimelineCompute, audioRef: externalA
   const audiomotionGradient = useSongNhacRuntimeStore((s) => s.audiomotionGradient)
   const audiomotionRadial = useSongNhacRuntimeStore((s) => s.audiomotionRadial)
   const audiomotionLedBars = useSongNhacRuntimeStore((s) => s.audiomotionLedBars)
+  const threejsPreset = useSongNhacRuntimeStore((s) => s.threejsPreset)
   const [canvasSize, setCanvasSize] = useState<{
     w: number
     h: number
@@ -297,6 +298,11 @@ export default function PreviewViewport({ onTimelineCompute, audioRef: externalA
   useEffect(() => {
     runtimeRef.current?.setBloomParams(bloomStrength, bloomRadius, bloomThreshold)
   }, [bloomStrength, bloomRadius, bloomThreshold])
+
+  // ThreeJS preset → runtime.setThreejsPreset
+  useEffect(() => {
+    runtimeRef.current?.setThreejsPreset(threejsPreset)
+  }, [threejsPreset])
 
   // Background engine switching → runtime.setBgEngine
   useEffect(() => {

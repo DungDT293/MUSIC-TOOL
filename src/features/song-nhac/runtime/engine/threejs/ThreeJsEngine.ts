@@ -22,6 +22,7 @@ import type { EffectComposer as EffectComposerType } from 'three/examples/jsm/po
 import type { UnrealBloomPass as UnrealBloomPassType } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
 import { AudioSmoother } from './audioSmoothing'
 import type { Size, EngineRenderFrame } from '../types'
+import { THREEJS_PRESETS, DEFAULT_THREEJS_PRESET, type ThreeJsPresetId, type ThreeJsPreset } from './threejsPresets'
 
 // Cache to avoid re-importing
 let _THREE: typeof THREEType | null = null
@@ -87,7 +88,7 @@ varying vec3 vWorldPos;
 varying vec3 vNormal;
 varying float vHeight;
 
-// IQ's cosine palette — more vibrant version
+// IQ's cosine palette — vibrant version
 vec3 cosinePalette(float t, vec3 a, vec3 b, vec3 c, vec3 d) {
   return a + b * cos(6.28318 * (c * t + d));
 }
@@ -96,10 +97,10 @@ void main() {
   float t = vInstanceId / uBarCount;
   float freq = texture2D(uFreqTexture, vec2(t, 0.0)).r;
 
-  // Dynamic hue shift driven by time + bass
-  float hueShift = uTime * 0.04 + uBass * 0.15;
+  // Dynamic hue shift driven by time + bass + mid
+  float hueShift = uTime * 0.05 + uBass * 0.2 + uMid * 0.08;
 
-  // Two-palette blend for richer colors
+  // Three-palette blend for ultra-rich colors
   vec3 palette1 = cosinePalette(
     t + hueShift,
     vec3(0.5, 0.5, 0.5),
@@ -116,26 +117,51 @@ void main() {
     vec3(0.50, 0.20, 0.25)
   );
 
-  // Blend palettes based on frequency intensity
+  vec3 palette3 = cosinePalette(
+    t + hueShift + 0.66,
+    vec3(0.5, 0.5, 0.5),
+    vec3(0.5, 0.5, 0.5),
+    vec3(1.0, 0.7, 0.4),
+    vec3(0.80, 0.90, 0.30)
+  );
+
+  // Triple-blend based on frequency + treble + mid
   vec3 color = mix(palette1, palette2, freq * 0.6 + uTreble * 0.3);
+  color = mix(color, palette3, uMid * 0.3 + freq * 0.2);
 
-  // Height-based gradient: bottom darker, top brighter
+  // Height gradient: bottom deep, top brilliant glow
   float heightFactor = smoothstep(0.0, 1.0, vWorldPos.y / max(vHeight, 0.01));
-  color *= 0.5 + heightFactor * 0.8;
+  color *= 0.4 + heightFactor * 1.0;
 
-  // Simple Fresnel-like rim lighting for 3D feel
-  float rim = 1.0 - abs(dot(normalize(vNormal), vec3(0.0, 0.0, 1.0)));
-  rim = pow(rim, 2.0);
-  color += rim * 0.4 * color;
+  // Top cap glow: bright emissive tip at the very top of tall bars
+  float topGlow = smoothstep(0.85, 1.0, heightFactor) * freq;
+  color += topGlow * vec3(1.0, 0.95, 0.85) * 2.0;
 
-  // Emissive boost driven by audio
-  float brightness = 0.7 + freq * 1.0;
-  float emissive = 1.0 + uBass * 2.0 + freq * 1.8;
+  // Enhanced Fresnel rim lighting with view-dependent iridescence
+  vec3 viewDir = normalize(vec3(sin(uTime * 0.1) * 0.3, 0.2, 1.0));
+  float rim = 1.0 - abs(dot(normalize(vNormal), viewDir));
+  rim = pow(rim, 2.5);
+  vec3 rimColor = cosinePalette(t + uTime * 0.03, vec3(0.5), vec3(0.5), vec3(1.0, 0.8, 0.6), vec3(0.0, 0.33, 0.67));
+  color += rim * 0.6 * rimColor;
+
+  // Emissive boost — wider dynamic range
+  float brightness = 0.6 + freq * 1.2;
+  float emissive = 1.0 + uBass * 2.5 + freq * 2.0 + uPeak * 0.8;
   color *= brightness * emissive;
 
-  // Subtle sparkle at peaks
-  float sparkle = step(0.85, freq) * sin(uTime * 15.0 + vInstanceId * 7.3) * 0.3;
-  color += sparkle;
+  // Bass pulse: expansion flash on bass hits
+  float bassPulse = smoothstep(0.4, 0.8, uBass) * sin(uTime * 8.0 + t * 3.14) * 0.15;
+  color += bassPulse * color;
+
+  // Multi-frequency sparkle at peaks
+  float sparkle1 = step(0.82, freq) * sin(uTime * 15.0 + vInstanceId * 7.3) * 0.25;
+  float sparkle2 = step(0.90, freq) * sin(uTime * 23.0 + vInstanceId * 13.7) * 0.35;
+  float sparkle3 = step(0.95, freq) * cos(uTime * 31.0 + vInstanceId * 3.1) * 0.5;
+  color += sparkle1 + sparkle2 + sparkle3;
+
+  // Inner glow: bars emit soft light based on their energy
+  float innerGlow = freq * freq * 0.3;
+  color += innerGlow * palette1;
 
   gl_FragColor = vec4(color, 1.0);
 }
@@ -165,29 +191,42 @@ void main() {
   // Distance from center for fade
   float dist = length(vUv - 0.5) * 2.0;
 
-  // Base dark color with subtle grid pattern
-  float gridX = smoothstep(0.97, 1.0, abs(sin(vWorldPos.x * 3.14159 * 2.0)));
-  float gridZ = smoothstep(0.97, 1.0, abs(sin(vWorldPos.z * 3.14159 * 2.0)));
-  float grid = max(gridX, gridZ) * 0.06;
+  // Enhanced grid pattern with bass-reactive brightness
+  float gridX = smoothstep(0.96, 1.0, abs(sin(vWorldPos.x * 3.14159 * 2.0)));
+  float gridZ = smoothstep(0.96, 1.0, abs(sin(vWorldPos.z * 3.14159 * 2.0)));
+  float grid = max(gridX, gridZ) * (0.07 + uBass * 0.04);
 
   // Audio-reactive subtle pulse
-  float pulse = 0.02 + uBass * 0.04;
+  float pulse = 0.02 + uBass * 0.05;
 
   // Color: dark with slight blue tint
   vec3 color = vec3(0.02, 0.025, 0.05) + grid + pulse;
 
+  // Expanding energy ripple rings from center
+  float ringDist = length(vWorldPos.xz);
+  float ringPhase1 = fract(uTime * 0.35) * 22.0;
+  float ringPhase2 = fract(uTime * 0.35 + 0.5) * 22.0;
+  float ring1 = smoothstep(0.25, 0.0, abs(ringDist - ringPhase1)) * smoothstep(22.0, 10.0, ringPhase1);
+  float ring2 = smoothstep(0.25, 0.0, abs(ringDist - ringPhase2)) * smoothstep(22.0, 10.0, ringPhase2);
+  color += vec3(0.15, 0.25, 0.5) * (ring1 + ring2) * 0.08 * (0.5 + uBass * 0.8);
+
+  // Subtle caustic patterns
+  float caustic = sin(vWorldPos.x * 3.5 + uTime * 0.9) * cos(vWorldPos.z * 3.0 - uTime * 0.7);
+  caustic = max(0.0, caustic) * 0.025 * (0.4 + uBass * 0.3);
+  color += vec3(0.1, 0.15, 0.35) * caustic;
+
   // Radial fade to black at edges
-  float alpha = smoothstep(1.0, 0.2, dist) * 0.7;
+  float alpha = smoothstep(1.0, 0.15, dist) * 0.75;
 
   // Extra glow near center when bass hits
-  float centerGlow = (1.0 - dist) * uBass * 0.1;
-  color += vec3(0.05, 0.08, 0.15) * centerGlow;
+  float centerGlow = (1.0 - dist) * uBass * 0.12;
+  color += vec3(0.06, 0.1, 0.2) * centerGlow;
 
   gl_FragColor = vec4(color, alpha);
 }
 `
 
-// Particle shader
+// Particle shader — enhanced with pulsing glow and soft falloff
 const particleVertShader = /* glsl */ `
 attribute float aSize;
 attribute float aLife;
@@ -205,9 +244,10 @@ void main() {
 
   vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
 
-  // Size varies by life and bass
-  float size = aSize * (0.6 + aLife * 0.4) * (1.0 + uBass * 0.5);
-  gl_PointSize = size * (300.0 / -mvPosition.z);
+  // Size varies by life, bass, and subtle breathing pulse
+  float breathe = 1.0 + sin(uTime * 3.0 + aSize * 5.0) * 0.15;
+  float size = aSize * (0.5 + aLife * 0.5) * (1.0 + uBass * 0.8) * breathe;
+  gl_PointSize = size * (350.0 / -mvPosition.z);
 
   gl_Position = projectionMatrix * mvPosition;
 }
@@ -218,13 +258,20 @@ varying float vLife;
 varying vec3 vColor;
 
 void main() {
-  // Circular soft particle
+  // Soft radial gradient with bright core
   vec2 center = gl_PointCoord - 0.5;
   float dist = length(center);
   if (dist > 0.5) discard;
 
-  float alpha = smoothstep(0.5, 0.1, dist) * vLife * 0.7;
-  vec3 color = vColor * (1.0 + vLife * 0.5);
+  // Multi-layer alpha: bright core + soft outer halo
+  float core = smoothstep(0.5, 0.0, dist);
+  float halo = smoothstep(0.5, 0.15, dist);
+  float alpha = (core * 0.5 + halo * 0.4) * vLife;
+
+  // Color with life-based brightness boost and warm core
+  vec3 color = vColor * (1.0 + vLife * 0.8);
+  // Bright white core for star-like appearance
+  color += vec3(0.3, 0.3, 0.2) * core * core * vLife;
 
   gl_FragColor = vec4(color, alpha);
 }
@@ -235,7 +282,7 @@ void main() {
 const DEFAULT_BAR_COUNT = 128
 const BAR_MAX_HEIGHT = 6.0
 const RADIUS = 5.0
-const PARTICLE_COUNT = 200
+const PARTICLE_COUNT = 350
 const CAMERA_ORBIT_RADIUS = 14
 const CAMERA_HEIGHT = 5.5
 const CAMERA_ORBIT_SPEED = 0.08  // radians per second
@@ -246,6 +293,7 @@ export interface ThreeJsEngineConfig {
   bloomRadius?: number
   bloomThreshold?: number
   layout?: 'circular' | 'horizontal' | 'mirror'
+  preset?: ThreeJsPresetId
 }
 
 interface Particle {
@@ -298,6 +346,7 @@ export class ThreeJsEngine {
   private cameraAngle = 0
   private lastBass = 0
   private lastPeak = 0
+  private currentPreset: ThreeJsPreset
 
   constructor(config: ThreeJsEngineConfig = {}) {
     this.config = config
@@ -306,6 +355,7 @@ export class ThreeJsEngine {
     this.barHeights = new Float32Array(this.barCount).fill(0.01)
     this.smoother = new AudioSmoother(this.barCount, 0.35, 0.08)
     this.freqTextureData = new Uint8Array(this.barCount)
+    this.currentPreset = THREEJS_PRESETS[config.preset ?? DEFAULT_THREEJS_PRESET]
   }
 
   /**
@@ -332,28 +382,28 @@ export class ThreeJsEngine {
     this.renderer.setPixelRatio(1)
     this.renderer.outputColorSpace = THREE.SRGBColorSpace
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping
-    this.renderer.toneMappingExposure = 1.1
-    this.renderer.setClearColor(0x050510, 1)
+    this.renderer.toneMappingExposure = this.currentPreset.toneMappingExposure
+    this.renderer.setClearColor(this.currentPreset.clearColor, 1)
     this.renderer.shadowMap.enabled = false
 
     // ═══ Scene ═══
     this.scene = new THREE.Scene()
 
-    // Subtle fog for depth
-    this.scene.fog = new THREE.FogExp2(0x050510, 0.025)
+    // Subtle fog for depth (preset-driven)
+    this.scene.fog = new THREE.FogExp2(this.currentPreset.fogColor, this.currentPreset.fogDensity)
 
     // ═══ Camera — PerspectiveCamera for true 3D ═══
     const aspect = size.width / size.height
     this.camera = new THREE.PerspectiveCamera(45, aspect, 0.1, 100)
-    this.camera.position.set(0, CAMERA_HEIGHT, CAMERA_ORBIT_RADIUS)
+    this.camera.position.set(0, this.currentPreset.cameraHeightBase, CAMERA_ORBIT_RADIUS)
     this.camera.lookAt(0, 1.5, 0)
 
-    // ═══ Ambient light — very subtle ═══
-    const ambientLight = new THREE.AmbientLight(0x111122, 0.3)
+    // ═══ Ambient light (preset-driven) ═══
+    const ambientLight = new THREE.AmbientLight(this.currentPreset.ambientLightColor, this.currentPreset.ambientLightIntensity)
     this.scene.add(ambientLight)
 
-    // ═══ Point light from above (creates highlight on cylinders) ═══
-    const pointLight = new THREE.PointLight(0x4488ff, 1.5, 30)
+    // ═══ Point light from above (preset-driven) ═══
+    const pointLight = new THREE.PointLight(this.currentPreset.pointLightColor, this.currentPreset.pointLightIntensity, 30)
     pointLight.position.set(0, 10, 0)
     this.scene.add(pointLight)
 
@@ -372,7 +422,7 @@ export class ThreeJsEngine {
     // Shift pivot to bottom so bars grow upward from Y=0
     barGeo.translate(0, 0.5, 0)
 
-    // ═══ Bar Material (custom GLSL shader) ═══
+    // ═══ Bar Material (preset-driven GLSL shader) ═══
     const barMat = new THREE.ShaderMaterial({
       uniforms: {
         uBarCount: { value: this.barCount },
@@ -384,7 +434,7 @@ export class ThreeJsEngine {
         uFreqTexture: { value: this.freqTexture },
       },
       vertexShader: barVertShader,
-      fragmentShader: barFragShader,
+      fragmentShader: this.currentPreset.barFragShader,
       transparent: false,
       depthTest: true,
       depthWrite: true,
@@ -408,17 +458,18 @@ export class ThreeJsEngine {
         uFreqTexture: { value: this.freqTexture },
       },
       vertexShader: barVertShader,
-      fragmentShader: barFragShader,
+      fragmentShader: this.currentPreset.barFragShader,  // will be overridden below
       transparent: true,
       depthTest: true,
       depthWrite: false,
       side: THREE.FrontSide,
     })
-    // Override fragment to add opacity fade
-    reflectionMat.fragmentShader = barFragShader.replace(
+    // Override fragment to add opacity fade (preset-driven reflection)
+    const p = this.currentPreset
+    reflectionMat.fragmentShader = this.currentPreset.barFragShader.replace(
       'gl_FragColor = vec4(color, 1.0);',
-      `float reflFade = smoothstep(0.0, -2.5, vWorldPos.y) * 0.35;
-       gl_FragColor = vec4(color * 0.5, reflFade);`
+      `float reflFade = smoothstep(0.0, ${p.reflectionFadeRange.toFixed(1)}, vWorldPos.y) * ${p.reflectionOpacity.toFixed(2)};
+       gl_FragColor = vec4(color * ${p.reflectionColorMul.toFixed(1)}, reflFade);`
     )
 
     this.reflectionMesh = new THREE.InstancedMesh(barGeo, reflectionMat, this.barCount)
@@ -435,7 +486,7 @@ export class ThreeJsEngine {
         uPeak: { value: 0 },
       },
       vertexShader: groundVertShader,
-      fragmentShader: groundFragShader,
+      fragmentShader: this.currentPreset.groundFragShader,
       transparent: true,
       depthWrite: false,
       side: THREE.DoubleSide,
@@ -460,9 +511,9 @@ export class ThreeJsEngine {
 
     this.bloomPass = new UnrealBloomPass(
       new THREE.Vector2(size.width, size.height),
-      this.config.bloomStrength ?? 1.5,
-      this.config.bloomRadius ?? 0.4,
-      this.config.bloomThreshold ?? 0.1
+      this.config.bloomStrength ?? this.currentPreset.bloomStrength,
+      this.config.bloomRadius ?? this.currentPreset.bloomRadius,
+      this.config.bloomThreshold ?? this.currentPreset.bloomThreshold
     )
     this.composer.addPass(this.bloomPass)
 
@@ -511,20 +562,25 @@ export class ThreeJsEngine {
 
   private createParticle(): Particle {
     const spread = this.layout === 'circular' ? RADIUS * 2 : 10
+    const speedMul = this.currentPreset.particleSpeedMultiplier
+    const sizeMul = this.currentPreset.particleSizeMultiplier
+    // Pick a random color from preset palette
+    const palette = this.currentPreset.particleColors
+    const pColor = palette[Math.floor(Math.random() * palette.length)]!
     return {
       x: (Math.random() - 0.5) * spread * 2,
       y: Math.random() * 8 + 0.5,
       z: (Math.random() - 0.5) * spread * 2,
-      vx: (Math.random() - 0.5) * 0.02,
-      vy: Math.random() * 0.03 + 0.01,
-      vz: (Math.random() - 0.5) * 0.02,
+      vx: (Math.random() - 0.5) * 0.02 * speedMul,
+      vy: (Math.random() * 0.03 + 0.01) * speedMul,
+      vz: (Math.random() - 0.5) * 0.02 * speedMul,
       life: Math.random(),
       maxLife: 2 + Math.random() * 4,
-      size: 0.5 + Math.random() * 1.5,
+      size: (0.5 + Math.random() * 1.5) * sizeMul,
       color: [
-        0.3 + Math.random() * 0.7,
-        0.3 + Math.random() * 0.5,
-        0.5 + Math.random() * 0.5,
+        pColor[0] * (0.8 + Math.random() * 0.2),
+        pColor[1] * (0.8 + Math.random() * 0.2),
+        pColor[2] * (0.8 + Math.random() * 0.2),
       ],
     }
   }
@@ -546,26 +602,44 @@ export class ThreeJsEngine {
   }
 
   private updateParticles(dt: number, bass: number, peak: number): void {
+    const speedMul = this.currentPreset.particleSpeedMultiplier
+
     for (let i = 0; i < PARTICLE_COUNT; i++) {
       const p = this.particles[i]!
 
-      // Move
-      p.x += p.vx + Math.sin(p.y * 0.3 + p.x * 0.2) * 0.005
-      p.y += p.vy * (1 + bass * 2)
-      p.z += p.vz + Math.cos(p.y * 0.2 + p.z * 0.3) * 0.005
+      // Orbital motion: particles slowly orbit around center
+      const dist = Math.sqrt(p.x * p.x + p.z * p.z)
+      const orbitSpeed = 0.003 * speedMul / Math.max(dist, 1)
+      const angle = Math.atan2(p.z, p.x) + orbitSpeed
+      const targetX = Math.cos(angle) * dist
+      const targetZ = Math.sin(angle) * dist
+
+      // Blend orbital + linear drift + organic wobble
+      p.x = targetX + p.vx * speedMul + Math.sin(p.y * 0.3 + p.x * 0.2) * 0.006
+      p.y += p.vy * (1 + bass * 2.5) * speedMul
+      p.z = targetZ + p.vz * speedMul + Math.cos(p.y * 0.2 + p.z * 0.3) * 0.006
+
+      // Bass-reactive size pulsing
+      p.size += (bass - 0.3) * 0.02
 
       // Age
       p.life -= dt / p.maxLife
 
       // Respawn when dead or too high
-      if (p.life <= 0 || p.y > 12) {
+      if (p.life <= 0 || p.y > 14) {
         const newP = this.createParticle()
         newP.y = 0.1 + Math.random() * 0.5
         newP.life = 1.0
-        // Boost spawn rate on bass hits
-        if (bass > 0.5) {
-          newP.vy *= 2
-          newP.size *= 1.5
+        // Boost spawn on bass hits: bigger, faster, more colorful
+        if (bass > 0.4) {
+          newP.vy *= 1.5 + bass * 1.5
+          newP.size *= 1.2 + bass * 0.8
+          // Spawn near bar positions for connection effect
+          if (this.layout === 'circular' && Math.random() > 0.5) {
+            const barAngle = Math.random() * Math.PI * 2
+            newP.x = Math.cos(barAngle) * RADIUS * (0.8 + Math.random() * 0.4)
+            newP.z = Math.sin(barAngle) * RADIUS * (0.8 + Math.random() * 0.4)
+          }
         }
         this.particles[i] = newP
       }
@@ -677,20 +751,52 @@ export class ThreeJsEngine {
     // 6. Update particles
     this.updateParticles(dt, bands.bass, bands.peak)
 
-    // 7. Camera orbit animation
-    this.cameraAngle += CAMERA_ORBIT_SPEED * dt
-    const orbitRadius = CAMERA_ORBIT_RADIUS + Math.sin(timeSec * 0.15) * 2
-    const cameraHeight = CAMERA_HEIGHT + Math.sin(timeSec * 0.1) * 1.0 + bands.bass * 1.5
-    this.camera.position.x = Math.sin(this.cameraAngle) * orbitRadius
-    this.camera.position.z = Math.cos(this.cameraAngle) * orbitRadius
-    this.camera.position.y = cameraHeight
-    this.camera.lookAt(0, 1.0 + bands.peak * 0.5, 0)
+    // 7. Camera orbit animation (preset-driven) with bass shake & smooth easing
+    this.cameraAngle += this.currentPreset.cameraOrbitSpeed * dt
 
-    // 8. Drive bloom with audio
+    // Dynamic orbit radius: breathes + contracts slightly on bass hits
+    const breathe = Math.sin(timeSec * 0.15) * 2
+    const bassContract = bands.bass * -1.5  // camera pulls in on bass
+    const orbitRadius = CAMERA_ORBIT_RADIUS + breathe + bassContract
+
+    // Camera height with multi-frequency modulation
+    const heightWave1 = Math.sin(timeSec * 0.1) * 1.0
+    const heightWave2 = Math.sin(timeSec * 0.23) * 0.4  // secondary wobble
+    const cameraHeight = this.currentPreset.cameraHeightBase + heightWave1 + heightWave2 + bands.bass * this.currentPreset.cameraBassLift
+
+    // Base orbit position
+    let camX = Math.sin(this.cameraAngle) * orbitRadius
+    let camZ = Math.cos(this.cameraAngle) * orbitRadius
+    let camY = cameraHeight
+
+    // Bass shake: high-frequency micro-shake on strong bass hits
+    if (bands.bass > 0.3) {
+      const shakeIntensity = (bands.bass - 0.3) * 0.15
+      camX += Math.sin(timeSec * 47) * shakeIntensity
+      camY += Math.cos(timeSec * 53) * shakeIntensity * 0.5
+      camZ += Math.sin(timeSec * 41) * shakeIntensity
+    }
+
+    // Peak impact: subtle zoom-in jolt on peak transients
+    if (bands.peak > 0.7) {
+      const peakJolt = (bands.peak - 0.7) * 0.8
+      camX *= 1 - peakJolt * 0.03
+      camZ *= 1 - peakJolt * 0.03
+    }
+
+    this.camera.position.x = camX
+    this.camera.position.z = camZ
+    this.camera.position.y = camY
+
+    // Dynamic lookAt: gently follows bass energy up/down
+    const lookY = 1.0 + bands.peak * 0.5 + bands.bass * 0.3
+    this.camera.lookAt(0, lookY, 0)
+
+    // 8. Drive bloom with audio (preset-driven reactivity)
     if (this.bloomPass) {
-      const baseStrength = this.config.bloomStrength ?? 1.5
-      const baseRadius = this.config.bloomRadius ?? 0.4
-      this.bloomPass.strength = baseStrength + bands.bass * 2.5 + bands.peak * 1.0
+      const baseStrength = this.config.bloomStrength ?? this.currentPreset.bloomStrength
+      const baseRadius = this.config.bloomRadius ?? this.currentPreset.bloomRadius
+      this.bloomPass.strength = baseStrength + bands.bass * this.currentPreset.bloomBassMultiplier + bands.peak * this.currentPreset.bloomPeakMultiplier
       this.bloomPass.radius = baseRadius + bands.mid * 0.25
     }
 
@@ -837,6 +943,97 @@ export class ThreeJsEngine {
       this.config.bloomThreshold = threshold
       if (this.bloomPass) this.bloomPass.threshold = threshold
     }
+  }
+
+  /**
+   * Switch preset at runtime — rebuilds shaders, updates scene atmosphere,
+   * lighting, fog, bloom defaults, and particle palette.
+   *
+   * This is a "hot swap" — the scene, camera, and renderer stay alive,
+   * only materials/uniforms/colors change.
+   */
+  setPreset(presetId: ThreeJsPresetId): void {
+    const preset = THREEJS_PRESETS[presetId]
+    if (!preset) return
+    this.currentPreset = preset
+
+    if (!this.inited || !this.renderer || !this.scene || !this.camera) return
+
+    // ── Scene atmosphere ──
+    this.renderer.setClearColor(preset.clearColor, 1)
+    this.renderer.toneMappingExposure = preset.toneMappingExposure
+
+    if (this.scene.fog && 'color' in this.scene.fog) {
+      ;(this.scene.fog as any).color.setHex(preset.fogColor)
+      ;(this.scene.fog as any).density = preset.fogDensity
+    }
+
+    // ── Lighting ──
+    this.scene.traverse((child) => {
+      if ((child as any).isAmbientLight) {
+        ;(child as any).color.setHex(preset.ambientLightColor)
+        ;(child as any).intensity = preset.ambientLightIntensity
+      }
+      if ((child as any).isPointLight) {
+        ;(child as any).color.setHex(preset.pointLightColor)
+        ;(child as any).intensity = preset.pointLightIntensity
+      }
+    })
+
+    // ── Bar shader ──
+    if (this.barMesh) {
+      const mat = this.barMesh.material as THREEType.ShaderMaterial
+      mat.fragmentShader = preset.barFragShader
+      mat.needsUpdate = true
+    }
+
+    // ── Reflection shader ──
+    if (this.reflectionMesh) {
+      const rMat = this.reflectionMesh.material as THREEType.ShaderMaterial
+      rMat.fragmentShader = preset.barFragShader.replace(
+        'gl_FragColor = vec4(color, 1.0);',
+        `float reflFade = smoothstep(0.0, ${preset.reflectionFadeRange.toFixed(1)}, vWorldPos.y) * ${preset.reflectionOpacity.toFixed(2)};
+         gl_FragColor = vec4(color * ${preset.reflectionColorMul.toFixed(1)}, reflFade);`
+      )
+      rMat.needsUpdate = true
+    }
+
+    // ── Ground shader ──
+    if (this.groundMesh) {
+      const gMat = this.groundMesh.material as THREEType.ShaderMaterial
+      gMat.fragmentShader = preset.groundFragShader
+      gMat.needsUpdate = true
+    }
+
+    // ── Bloom defaults (unless user has overridden) ──
+    if (this.bloomPass) {
+      if (this.config.bloomStrength === undefined) {
+        this.bloomPass.strength = preset.bloomStrength
+      }
+      if (this.config.bloomRadius === undefined) {
+        this.bloomPass.radius = preset.bloomRadius
+      }
+      if (this.config.bloomThreshold === undefined) {
+        this.bloomPass.threshold = preset.bloomThreshold
+      }
+    }
+
+    // ── Respawn particles with new palette ──
+    for (let i = 0; i < this.particles.length; i++) {
+      const newP = this.createParticle()
+      newP.life = this.particles[i]!.life  // keep current life so transition is smooth
+      this.particles[i] = newP
+    }
+    this.syncParticleBuffers()
+
+    console.log(`[ThreeJsEngine] Switched to preset: ${preset.label}`)
+  }
+
+  /**
+   * Get current preset ID.
+   */
+  getPresetId(): ThreeJsPresetId {
+    return this.currentPreset.id
   }
 
   /**

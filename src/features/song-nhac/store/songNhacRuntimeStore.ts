@@ -7,6 +7,7 @@
 import { create } from 'zustand'
 import type { PreviewQuality } from '../runtime/types'
 import type { EngineType } from '../runtime/engine/types'
+import type { ThreeJsPresetId } from '../runtime/engine/threejs/threejsPresets'
 
 export type AspectRatioId = '16:9' | '4:3' | '1:1' | '9:16' | '4:5' | '2.35:1' | '2:1' | '1.85:1' | '3:4' | '5.8-inch'
 export type VisualizerLayoutId = 'circular' | 'horizontal' | 'mirror'
@@ -71,9 +72,9 @@ interface SongNhacRuntimeState {
   /** 0–1: cường độ sóng (độ dài thanh). */
   waveAroundIntensity: number
   setWaveAroundIntensity: (v: number) => void
-  /** Kiểu sóng quanh ảnh: bars | line | ring | dots | waveform. */
-  waveAroundStyle: 'bars' | 'line' | 'ring' | 'dots' | 'waveform' | 'circlebars' | 'plasma' | 'lightning' | 'galaxy' | 'fire'
-  setWaveAroundStyle: (v: 'bars' | 'line' | 'ring' | 'dots' | 'waveform' | 'circlebars' | 'plasma' | 'lightning' | 'galaxy' | 'fire') => void
+  /** Kiểu sóng quanh ảnh. */
+  waveAroundStyle: 'bars' | 'line' | 'ring' | 'dots' | 'waveform' | 'circlebars' | 'plasma' | 'lightning' | 'galaxy' | 'fire' | 'neonbars' | 'crystalring' | 'nebula'
+  setWaveAroundStyle: (v: 'bars' | 'line' | 'ring' | 'dots' | 'waveform' | 'circlebars' | 'plasma' | 'lightning' | 'galaxy' | 'fire' | 'neonbars' | 'crystalring' | 'nebula') => void
   /** Visualizer layout: circular | horizontal | mirror. */
   visualizerLayout: VisualizerLayoutId
   setVisualizerLayout: (v: VisualizerLayoutId) => void
@@ -116,6 +117,9 @@ interface SongNhacRuntimeState {
   /** Background mode: dark | blur | gradient. */
   bgMode: 'dark' | 'blur' | 'gradient'
   setBgMode: (v: 'dark' | 'blur' | 'gradient') => void
+  /** ThreeJS visual preset. */
+  threejsPreset: ThreeJsPresetId
+  setThreejsPreset: (v: ThreeJsPresetId) => void
 }
 
 const ZOOM_MIN = 0.25
@@ -207,6 +211,8 @@ export const useSongNhacRuntimeStore = create<SongNhacRuntimeState>((set, get) =
   setVantaEffect: (v) => set({ vantaEffect: v }),
   bgMode: 'dark' as 'dark' | 'blur' | 'gradient',
   setBgMode: (v) => set({ bgMode: v }),
+  threejsPreset: 'neon-cyberpunk' as ThreeJsPresetId,
+  setThreejsPreset: (v) => set({ threejsPreset: v }),
   setAutoPlayWhenSelected: (v) => {
     try {
       localStorage.setItem(AUTO_PLAY_KEY, String(v))

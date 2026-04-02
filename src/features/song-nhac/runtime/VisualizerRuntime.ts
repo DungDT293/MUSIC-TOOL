@@ -444,6 +444,10 @@ export class VisualizerRuntime {
     this.threeEngine?.setBloomParams(strength, radius, threshold)
   }
 
+  setThreejsPreset(presetId: string): void {
+    this.threeEngine?.setPreset(presetId as any)
+  }
+
   setQuality(q: PreviewQuality): void {
     this.opts.quality = q
     this.host?.setQuality(q)

@@ -113,7 +113,7 @@ function getTimeOpacity(layer: DrawableLayer, timeSec: number | undefined): numb
 
 const DEFAULT_TRANSFORM = { x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0 }
 
-export type WaveStyleId = 'bars' | 'line' | 'ring' | 'dots' | 'waveform' | 'circlebars' | 'plasma' | 'lightning' | 'galaxy' | 'fire'
+export type WaveStyleId = 'bars' | 'line' | 'ring' | 'dots' | 'waveform' | 'circlebars' | 'plasma' | 'lightning' | 'galaxy' | 'fire' | 'neonbars' | 'crystalring' | 'nebula'
 
 export interface FrequencyBands {
   bass: number   // 0–1 normalised energy
@@ -1208,6 +1208,417 @@ function drawWaveFire(
   ctx.restore()
 }
 
+// ─── NEON BARS — Cyberpunk style bars with inner glow + scan lines ──────────
+
+function drawWaveNeonBars(
+  ctx: CanvasRenderingContext2D,
+  w: number, h: number,
+  amplitude: number,
+  samples: number[],
+  spectrum?: number[],
+  bands?: FrequencyBands,
+  vc?: VisualizerColorOptions,
+  beat?: number
+): void {
+  if (samples.length < 4) return
+  const halfW = w / 2, halfH = h / 2
+  const size = Math.max(w, h)
+  const maxOffset = getMaxOffset(w, h) * amplitude * 1.2
+  const barsPerEdge = Math.max(8, Math.min(60, Math.round((vc?.barCount ?? 112) / 4)))
+  const totalBars = barsPerEdge * 4
+  const spd = vc?.speed ?? 1
+  const shift = speedShift((Date.now() * 0.00015) % 1, spd)
+  const time = Date.now() * 0.001 * spd
+
+  // Neon colors: hot pink, electric cyan, violet
+  const neonPink: [number, number, number] = [255, 20, 120]
+  const neonCyan: [number, number, number] = [0, 255, 230]
+  const neonViolet: [number, number, number] = [160, 40, 255]
+
+  function neonColorAt(t: number, alpha: number): string {
+    const ct = ((t % 1) + 1) % 1
+    let r: number, g: number, b: number
+    if (ct < 0.33) {
+      const f = ct * 3
+      r = neonPink[0] + (neonCyan[0] - neonPink[0]) * f
+      g = neonPink[1] + (neonCyan[1] - neonPink[1]) * f
+      b = neonPink[2] + (neonCyan[2] - neonPink[2]) * f
+    } else if (ct < 0.66) {
+      const f = (ct - 0.33) * 3
+      r = neonCyan[0] + (neonViolet[0] - neonCyan[0]) * f
+      g = neonCyan[1] + (neonViolet[1] - neonCyan[1]) * f
+      b = neonCyan[2] + (neonViolet[2] - neonCyan[2]) * f
+    } else {
+      const f = (ct - 0.66) * 3
+      r = neonViolet[0] + (neonPink[0] - neonViolet[0]) * f
+      g = neonViolet[1] + (neonPink[1] - neonViolet[1]) * f
+      b = neonViolet[2] + (neonPink[2] - neonViolet[2]) * f
+    }
+    return `rgba(${r | 0},${g | 0},${b | 0},${alpha})`
+  }
+
+  const edgeG: [number, number, number, number][] = [
+    [-halfW, -halfH, halfW, -halfH],
+    [halfW, -halfH, halfW, halfH],
+    [halfW, halfH, -halfW, halfH],
+    [-halfW, halfH, -halfW, -halfH],
+  ]
+
+  ctx.save()
+  ctx.lineCap = 'butt'
+
+  for (let edge = 0; edge < 4; edge++) {
+    const isHoriz = edge === 0 || edge === 2
+    const edgeLen = isHoriz ? w : h
+    const spacing = edgeLen / (barsPerEdge + 1)
+    const barW = Math.max(size * 0.004, spacing * 0.55)
+    const eShift = (shift + edge * 0.25) % 1
+
+    for (let j = 0; j < barsPerEdge; j++) {
+      const mj = j < barsPerEdge / 2 ? j : barsPerEdge - 1 - j
+      const gi = edge * barsPerEdge + mj
+      const raw = spectrum && spectrum.length > 0
+        ? getSpectrumAt(spectrum, gi, totalBars)
+        : getSampleAt(samples, Math.floor(gi * WAVE_SEGMENTS / totalBars))
+      const t = Math.pow(raw, 1.2)
+      if (t < 0.03) continue
+
+      const len = Math.max(size * 0.005, t * maxOffset)
+      const pos = (j + 1) * spacing
+      const colorT = ((gi / totalBars) + eShift) % 1
+
+      let sx: number, sy: number, ex: number, ey: number
+      if (edge === 0) { sx = -halfW + pos; sy = -halfH; ex = sx; ey = sy - len }
+      else if (edge === 1) { sx = halfW; sy = -halfH + pos; ex = sx + len; ey = sy }
+      else if (edge === 2) { sx = -halfW + pos; sy = halfH; ex = sx; ey = sy + len }
+      else { sx = -halfW; sy = -halfH + pos; ex = sx - len; ey = sy }
+
+      // Scan line flicker effect
+      const scanLine = Math.sin(j * 0.5 + time * 3) * 0.5 + 0.5
+      const scanAlpha = 0.7 + scanLine * 0.3
+
+      // Pass 1: Wide outer glow
+      ctx.lineWidth = barW * 3
+      ctx.strokeStyle = neonColorAt(colorT, 0.15 * t * scanAlpha)
+      ctx.beginPath()
+      ctx.moveTo(sx, sy)
+      ctx.lineTo(ex, ey)
+      ctx.stroke()
+
+      // Pass 2: Medium glow
+      ctx.lineWidth = barW * 1.8
+      ctx.strokeStyle = neonColorAt(colorT, 0.4 * t * scanAlpha)
+      ctx.beginPath()
+      ctx.moveTo(sx, sy)
+      ctx.lineTo(ex, ey)
+      ctx.stroke()
+
+      // Pass 3: Sharp bright core
+      ctx.lineWidth = barW * 0.8
+      ctx.strokeStyle = neonColorAt(colorT, 0.95 * scanAlpha)
+      ctx.beginPath()
+      ctx.moveTo(sx, sy)
+      ctx.lineTo(ex, ey)
+      ctx.stroke()
+
+      // Pass 4: White hot center on high peaks
+      if (t > 0.6) {
+        ctx.lineWidth = barW * 0.3
+        ctx.strokeStyle = `rgba(255,255,255,${(t - 0.6) * 2.5 * scanAlpha})`
+        ctx.beginPath()
+        ctx.moveTo(sx, sy)
+        ctx.lineTo(ex, ey)
+        ctx.stroke()
+      }
+    }
+  }
+
+  ctx.restore()
+}
+
+// ─── CRYSTAL RING — Glass/ice ring with rainbow refraction ──────────────────
+
+function drawWaveCrystalRing(
+  ctx: CanvasRenderingContext2D,
+  w: number, h: number,
+  amplitude: number,
+  samples: number[],
+  spectrum?: number[],
+  bands?: FrequencyBands,
+  vc?: VisualizerColorOptions,
+  beat?: number
+): void {
+  if (samples.length < 4) return
+  const size = Math.max(w, h)
+  const baseR = Math.sqrt(w * w + h * h) / 2 + size * 0.005
+  const maxOff = getMaxOffset(w, h) * amplitude * 1.1
+  const spd = vc?.speed ?? 1
+  const time = Date.now() * 0.001 * spd
+  const shift = (time * 0.02) % 1
+  const ringSegs = 64
+
+  // Crystal/rainbow refraction colors
+  const crystalColors: [number, number, number][] = [
+    [180, 220, 255],   // ice blue
+    [220, 200, 255],   // lavender
+    [255, 200, 220],   // rose quartz
+    [200, 255, 240],   // mint
+    [255, 240, 200],   // champagne
+    [200, 220, 255],   // periwinkle
+    [255, 220, 240],   // pink diamond
+  ]
+
+  function crystalColor(t: number, alpha: number): string {
+    const ct = ((t % 1) + 1) % 1
+    const s = ct * (crystalColors.length - 1)
+    const i = Math.min(Math.floor(s), crystalColors.length - 2)
+    const f = s - i
+    const a = crystalColors[i]!
+    const b = crystalColors[i + 1]!
+    return `rgba(${a[0] + (b[0] - a[0]) * f | 0},${a[1] + (b[1] - a[1]) * f | 0},${a[2] + (b[2] - a[2]) * f | 0},${alpha})`
+  }
+
+  ctx.save()
+
+  // Ring 1: Outer crystal ring (main audio reactive)
+  const outerPts: [number, number][] = []
+  const innerPts: [number, number][] = []
+  for (let i = 0; i < ringSegs; i++) {
+    const mi = i < ringSegs / 2 ? i : ringSegs - 1 - i
+    const rawT = spectrum && spectrum.length > 0
+      ? getSpectrumAt(spectrum, mi, ringSegs / 2)
+      : getSampleAt(samples, Math.floor((mi / (ringSegs / 2)) * WAVE_SEGMENTS))
+    const t = Math.pow(rawT, 1.1)
+    const angle = (i / ringSegs) * Math.PI * 2 - Math.PI / 2
+
+    // Crystal facet effect: slight angular jumps
+    const facetAngle = Math.floor(angle * 6) / 6
+    const facetBlend = 0.7 + 0.3 * Math.cos((angle - facetAngle) * 18)
+
+    const outerR = baseR + t * maxOff * facetBlend
+    const innerR = baseR + t * maxOff * 0.12
+    const cos = Math.cos(angle), sin = Math.sin(angle)
+    outerPts.push([cos * outerR, sin * outerR])
+    innerPts.push([cos * innerR, sin * innerR])
+  }
+
+  // Filled band: frosted glass effect
+  ctx.beginPath()
+  const n = outerPts.length
+  ctx.moveTo(outerPts[0]![0], outerPts[0]![1])
+  for (let i = 1; i < n; i++) ctx.lineTo(outerPts[i]![0], outerPts[i]![1])
+  const revInner = [...innerPts].reverse()
+  for (let i = 0; i < revInner.length; i++) {
+    ctx.lineTo(revInner[i]![0], revInner[i]![1])
+  }
+  ctx.closePath()
+  // Frosted fill with gradient
+  const frostGrad = ctx.createRadialGradient(0, 0, baseR * 0.8, 0, 0, baseR + maxOff)
+  frostGrad.addColorStop(0, crystalColor(shift, 0.05))
+  frostGrad.addColorStop(0.5, crystalColor(shift + 0.3, 0.08))
+  frostGrad.addColorStop(1, crystalColor(shift + 0.6, 0.03))
+  ctx.fillStyle = frostGrad
+  ctx.fill()
+
+  // Pass 1: Wide soft diffused glow
+  ctx.beginPath()
+  smoothPath(ctx, outerPts, true)
+  ctx.strokeStyle = crystalColor(shift, 0.2)
+  ctx.lineWidth = size * 0.012
+  ctx.lineJoin = 'round'
+  if (vc?.glowEnabled) applyGlow(ctx, shift, vc, beat ?? 0)
+  ctx.stroke()
+  if (vc?.glowEnabled) clearGlow(ctx)
+
+  // Pass 2: Rainbow refraction edge (shifting colors along ring)
+  ctx.beginPath()
+  smoothPath(ctx, outerPts, true)
+  const refractionGrad = ctx.createConicGradient(-Math.PI / 2, 0, 0)
+  for (let s = 0; s <= 1; s += 0.14) {
+    refractionGrad.addColorStop(s, crystalColor(shift + s, 0.7))
+  }
+  ctx.strokeStyle = refractionGrad
+  ctx.lineWidth = size * 0.004
+  ctx.stroke()
+
+  // Pass 3: White diamond sparkle core
+  ctx.beginPath()
+  smoothPath(ctx, outerPts, true)
+  ctx.strokeStyle = `rgba(255, 255, 255, 0.5)`
+  ctx.lineWidth = size * 0.001
+  ctx.stroke()
+
+  // Diamond sparkle particles at peak points
+  const bassE = bands?.bass ?? 0.5
+  ctx.fillStyle = `rgba(255, 255, 255, ${0.4 + bassE * 0.4})`
+  for (let i = 0; i < ringSegs; i += 4) {
+    const mi = i < ringSegs / 2 ? i : ringSegs - 1 - i
+    const rawT = spectrum && spectrum.length > 0
+      ? getSpectrumAt(spectrum, mi, ringSegs / 2)
+      : 0
+    if (rawT < 0.5) continue
+    const [px, py] = outerPts[i]!
+    const sparkleSize = size * 0.005 * rawT
+    // 4-pointed star
+    ctx.beginPath()
+    ctx.moveTo(px, py - sparkleSize)
+    ctx.lineTo(px + sparkleSize * 0.3, py)
+    ctx.lineTo(px, py + sparkleSize)
+    ctx.lineTo(px - sparkleSize * 0.3, py)
+    ctx.closePath()
+    ctx.fill()
+    ctx.beginPath()
+    ctx.moveTo(px - sparkleSize, py)
+    ctx.lineTo(px, py + sparkleSize * 0.3)
+    ctx.lineTo(px + sparkleSize, py)
+    ctx.lineTo(px, py - sparkleSize * 0.3)
+    ctx.closePath()
+    ctx.fill()
+  }
+
+  ctx.restore()
+}
+
+// ─── NEBULA — Cosmic dust clouds with particle trails ───────────────────────
+
+function drawWaveNebula(
+  ctx: CanvasRenderingContext2D,
+  w: number, h: number,
+  amplitude: number,
+  samples: number[],
+  spectrum?: number[],
+  bands?: FrequencyBands,
+  vc?: VisualizerColorOptions,
+  beat?: number
+): void {
+  if (samples.length < 4) return
+  const size = Math.max(w, h)
+  const baseR = Math.sqrt(w * w + h * h) / 2
+  const maxOff = getMaxOffset(w, h) * amplitude * 1.4
+  const spd = vc?.speed ?? 1
+  const time = Date.now() * 0.001 * spd
+  const shift = (time * 0.012) % 1
+
+  // Nebula colors
+  const nebulaColors: [number, number, number][] = [
+    [80, 20, 150],   // deep purple
+    [20, 80, 160],   // space blue
+    [0, 140, 130],   // teal
+    [200, 60, 120],  // magenta
+    [40, 40, 180],   // indigo
+  ]
+
+  function nebulaColor(t: number, alpha: number): string {
+    const ct = ((t % 1) + 1) % 1
+    const s = ct * (nebulaColors.length - 1)
+    const i = Math.min(Math.floor(s), nebulaColors.length - 2)
+    const f = s - i
+    const a = nebulaColors[i]!
+    const b = nebulaColors[i + 1]!
+    return `rgba(${a[0] + (b[0] - a[0]) * f | 0},${a[1] + (b[1] - a[1]) * f | 0},${a[2] + (b[2] - a[2]) * f | 0},${alpha})`
+  }
+
+  ctx.save()
+
+  // Multiple nebula cloud layers (spiral arms)
+  const armCount = 4
+  const dotsPerArm = 35
+  const bassE = bands?.bass ?? 0.5
+
+  for (let arm = 0; arm < armCount; arm++) {
+    const armOff = (arm / armCount) * Math.PI * 2
+    const armShift = (shift + arm / armCount) % 1
+    const rot = time * 0.3
+
+    // Build spiral arm points
+    const pts: { x: number; y: number; t: number; r: number }[] = []
+    for (let i = 0; i < dotsPerArm; i++) {
+      const progress = i / dotsPerArm
+      const specIdx = Math.floor(progress * 63)
+      const rawT = spectrum && spectrum.length > 0
+        ? getSpectrumAt(spectrum, specIdx, 64)
+        : getSampleAt(samples, Math.floor(progress * WAVE_SEGMENTS))
+      const t = Math.pow(rawT, 1.1)
+      const angle = armOff + progress * Math.PI * 3 + rot
+      const spiralR = baseR + progress * maxOff * (0.25 + t * 0.75)
+      pts.push({
+        x: Math.cos(angle) * spiralR,
+        y: Math.sin(angle) * spiralR,
+        t,
+        r: spiralR,
+      })
+    }
+
+    // Pass 1: Wide nebula cloud (soft radial gradients at each point)
+    for (let i = 0; i < pts.length; i += 3) {
+      const p = pts[i]!
+      if (p.t < 0.05) continue
+      const cloudR = size * 0.03 * (0.5 + p.t) * (1 + bassE * 0.5)
+      const grad = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, cloudR)
+      grad.addColorStop(0, nebulaColor(armShift + i * 0.02, 0.15 * p.t))
+      grad.addColorStop(0.5, nebulaColor(armShift + i * 0.02 + 0.1, 0.06 * p.t))
+      grad.addColorStop(1, 'rgba(0,0,0,0)')
+      ctx.fillStyle = grad
+      ctx.beginPath()
+      ctx.arc(p.x, p.y, cloudR, 0, Math.PI * 2)
+      ctx.fill()
+    }
+
+    // Pass 2: Trail line (glowing)
+    ctx.beginPath()
+    ctx.moveTo(pts[0]!.x, pts[0]!.y)
+    for (let i = 1; i < pts.length; i++) {
+      const prev = pts[i - 1]!
+      const curr = pts[i]!
+      ctx.quadraticCurveTo(prev.x, prev.y, (prev.x + curr.x) / 2, (prev.y + curr.y) / 2)
+    }
+    ctx.strokeStyle = nebulaColor(armShift, 0.3)
+    ctx.lineWidth = size * 0.005
+    if (vc?.glowEnabled) applyGlow(ctx, armShift, vc, beat ?? 0)
+    ctx.stroke()
+    if (vc?.glowEnabled) clearGlow(ctx)
+
+    // Pass 3: Bright core trail
+    ctx.beginPath()
+    ctx.moveTo(pts[0]!.x, pts[0]!.y)
+    for (let i = 1; i < pts.length; i++) {
+      const prev = pts[i - 1]!
+      const curr = pts[i]!
+      ctx.quadraticCurveTo(prev.x, prev.y, (prev.x + curr.x) / 2, (prev.y + curr.y) / 2)
+    }
+    ctx.strokeStyle = nebulaColor(armShift, 0.6)
+    ctx.lineWidth = size * 0.0015
+    ctx.stroke()
+
+    // Pass 4: Star particles along arm
+    ctx.fillStyle = `rgba(255, 255, 255, 0.6)`
+    ctx.beginPath()
+    for (let i = 0; i < pts.length; i += 4) {
+      const p = pts[i]!
+      if (p.t < 0.3) continue
+      const dotR = size * 0.003 * p.t
+      ctx.moveTo(p.x + dotR, p.y)
+      ctx.arc(p.x, p.y, dotR, 0, Math.PI * 2)
+    }
+    ctx.fill()
+  }
+
+  // Central nebula glow
+  if (bassE > 0.2) {
+    const glowR = baseR + bassE * maxOff * 0.3
+    const centerGrad = ctx.createRadialGradient(0, 0, 0, 0, 0, glowR)
+    centerGrad.addColorStop(0, nebulaColor(shift, bassE * 0.12))
+    centerGrad.addColorStop(0.5, nebulaColor(shift + 0.3, bassE * 0.05))
+    centerGrad.addColorStop(1, 'rgba(0,0,0,0)')
+    ctx.fillStyle = centerGrad
+    ctx.beginPath()
+    ctx.arc(0, 0, glowR, 0, Math.PI * 2)
+    ctx.fill()
+  }
+
+  ctx.restore()
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 //  DISPATCHER + UTILITIES
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1239,6 +1650,9 @@ function drawWaveAroundRect(
     case 'lightning':  drawWaveLightning(ctx, w, h, amplitude, samples, spectrum, bands, vc, beat); break
     case 'galaxy':     drawWaveGalaxy(ctx, w, h, amplitude, samples, spectrum, bands, vc, beat); break
     case 'fire':       drawWaveFire(ctx, w, h, amplitude, samples, spectrum, bands, vc, beat); break
+    case 'neonbars':   drawWaveNeonBars(ctx, w, h, amplitude, samples, spectrum, bands, vc, beat); break
+    case 'crystalring': drawWaveCrystalRing(ctx, w, h, amplitude, samples, spectrum, bands, vc, beat); break
+    case 'nebula':     drawWaveNebula(ctx, w, h, amplitude, samples, spectrum, bands, vc, beat); break
     default:           drawWaveBars(ctx, w, h, amplitude, samples, spectrum, bands, vc, beat)
   }
 }

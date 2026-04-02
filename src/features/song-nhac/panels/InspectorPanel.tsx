@@ -214,6 +214,9 @@ const WAVE_STYLES: { value: SongNhacWaveStyleId; label: string; icon: string }[]
   { value: 'lightning', label: 'Sét', icon: '/' },
   { value: 'galaxy', label: 'Thiên hà', icon: '🌌' },
   { value: 'fire', label: 'Lửa', icon: '^' },
+  { value: 'neonbars', label: 'Neon 3D', icon: '💡' },
+  { value: 'crystalring', label: 'Pha lê', icon: '💎' },
+  { value: 'nebula', label: 'Tinh vân', icon: '✨' },
 ]
 
 const FONT_FAMILIES = [
