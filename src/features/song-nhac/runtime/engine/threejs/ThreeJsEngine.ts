@@ -1,8 +1,12 @@
 /**
- * Three.js Visualizer Engine — Avee Player-quality rendering.
+ * Three.js Visualizer Engine — Professional 3D Audio Visualizer.
  *
  * Architecture:
+ * - PerspectiveCamera with slow orbit animation for true 3D depth
+ * - CylinderGeometry bars with rounded caps (Avee Player quality)
  * - InstancedMesh for all bars (1 draw call, GPU-instanced)
+ * - Reflective ground plane with fading mirror effect
+ * - Audio-reactive particle system (floating embers)
  * - DataTexture for FFT data upload (zero-copy to GPU)
  * - EffectComposer: RenderPass → UnrealBloomPass → OutputPass
  * - ACESFilmic tone mapping for cinematic HDR look
@@ -12,15 +16,14 @@
  * so it can be swapped in via EngineHost.
  */
 
-// Three.js và postprocessing được lazy-load khi engine thực sự được khởi tạo
-// để tránh bundle ~800KB cho tất cả user dù không chọn ThreeJS engine
+// Three.js and postprocessing lazy-loaded to avoid bundling ~800KB
 import type * as THREEType from 'three'
 import type { EffectComposer as EffectComposerType } from 'three/examples/jsm/postprocessing/EffectComposer.js'
 import type { UnrealBloomPass as UnrealBloomPassType } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
 import { AudioSmoother } from './audioSmoothing'
 import type { Size, EngineRenderFrame } from '../types'
 
-// Cache để tránh re-import nhiều lần
+// Cache to avoid re-importing
 let _THREE: typeof THREEType | null = null
 let _EffectComposer: typeof EffectComposerType | null = null
 
@@ -48,14 +51,24 @@ async function getPostprocessing() {
   }
 }
 
-// Inline GLSL shaders (avoids vite-plugin-glsl compatibility issues with electron-vite)
+// ─── GLSL Shaders ───────────────────────────────────────────────────────────
+
 const barVertShader = /* glsl */ `
 varying float vInstanceId;
 varying vec3 vWorldPos;
+varying vec3 vNormal;
+varying float vHeight;
+
 void main() {
   vInstanceId = float(gl_InstanceID);
+  vNormal = normalize(normalMatrix * normal);
+
   vec4 worldPos = instanceMatrix * vec4(position, 1.0);
   vWorldPos = worldPos.xyz;
+
+  // Extract Y scale from instance matrix (bar height)
+  vHeight = length(vec3(instanceMatrix[1][0], instanceMatrix[1][1], instanceMatrix[1][2]));
+
   gl_Position = projectionMatrix * modelViewMatrix * worldPos;
 }
 `
@@ -67,9 +80,14 @@ uniform float uBass;
 uniform float uMid;
 uniform float uTreble;
 uniform sampler2D uFreqTexture;
+uniform float uPeak;
+
 varying float vInstanceId;
 varying vec3 vWorldPos;
+varying vec3 vNormal;
+varying float vHeight;
 
+// IQ's cosine palette — more vibrant version
 vec3 cosinePalette(float t, vec3 a, vec3 b, vec3 c, vec3 d) {
   return a + b * cos(6.28318 * (c * t + d));
 }
@@ -77,25 +95,150 @@ vec3 cosinePalette(float t, vec3 a, vec3 b, vec3 c, vec3 d) {
 void main() {
   float t = vInstanceId / uBarCount;
   float freq = texture2D(uFreqTexture, vec2(t, 0.0)).r;
-  float hueShift = uTime * 0.03;
-  vec3 color = cosinePalette(
+
+  // Dynamic hue shift driven by time + bass
+  float hueShift = uTime * 0.04 + uBass * 0.15;
+
+  // Two-palette blend for richer colors
+  vec3 palette1 = cosinePalette(
     t + hueShift,
     vec3(0.5, 0.5, 0.5),
     vec3(0.5, 0.5, 0.5),
-    vec3(1.0, 1.0, 1.0),
-    vec3(0.00, 0.33, 0.67)
+    vec3(1.0, 1.0, 0.5),
+    vec3(0.00, 0.10, 0.20)
   );
-  float brightness = 0.6 + freq * 0.8;
-  color *= brightness;
-  float emissive = 1.0 + uBass * 2.5 + freq * 1.5;
-  color *= emissive;
+
+  vec3 palette2 = cosinePalette(
+    t + hueShift + 0.33,
+    vec3(0.5, 0.5, 0.5),
+    vec3(0.5, 0.5, 0.5),
+    vec3(2.0, 1.0, 0.0),
+    vec3(0.50, 0.20, 0.25)
+  );
+
+  // Blend palettes based on frequency intensity
+  vec3 color = mix(palette1, palette2, freq * 0.6 + uTreble * 0.3);
+
+  // Height-based gradient: bottom darker, top brighter
+  float heightFactor = smoothstep(0.0, 1.0, vWorldPos.y / max(vHeight, 0.01));
+  color *= 0.5 + heightFactor * 0.8;
+
+  // Simple Fresnel-like rim lighting for 3D feel
+  float rim = 1.0 - abs(dot(normalize(vNormal), vec3(0.0, 0.0, 1.0)));
+  rim = pow(rim, 2.0);
+  color += rim * 0.4 * color;
+
+  // Emissive boost driven by audio
+  float brightness = 0.7 + freq * 1.0;
+  float emissive = 1.0 + uBass * 2.0 + freq * 1.8;
+  color *= brightness * emissive;
+
+  // Subtle sparkle at peaks
+  float sparkle = step(0.85, freq) * sin(uTime * 15.0 + vInstanceId * 7.3) * 0.3;
+  color += sparkle;
+
   gl_FragColor = vec4(color, 1.0);
 }
 `
 
-const BAR_COUNT = 128
-const BAR_MAX_HEIGHT = 5.0
-const RADIUS = 4.5
+// Reflective ground plane shader
+const groundVertShader = /* glsl */ `
+varying vec2 vUv;
+varying vec3 vWorldPos;
+void main() {
+  vUv = uv;
+  vec4 worldPos = modelMatrix * vec4(position, 1.0);
+  vWorldPos = worldPos.xyz;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}
+`
+
+const groundFragShader = /* glsl */ `
+uniform float uTime;
+uniform float uBass;
+uniform float uPeak;
+
+varying vec2 vUv;
+varying vec3 vWorldPos;
+
+void main() {
+  // Distance from center for fade
+  float dist = length(vUv - 0.5) * 2.0;
+
+  // Base dark color with subtle grid pattern
+  float gridX = smoothstep(0.97, 1.0, abs(sin(vWorldPos.x * 3.14159 * 2.0)));
+  float gridZ = smoothstep(0.97, 1.0, abs(sin(vWorldPos.z * 3.14159 * 2.0)));
+  float grid = max(gridX, gridZ) * 0.06;
+
+  // Audio-reactive subtle pulse
+  float pulse = 0.02 + uBass * 0.04;
+
+  // Color: dark with slight blue tint
+  vec3 color = vec3(0.02, 0.025, 0.05) + grid + pulse;
+
+  // Radial fade to black at edges
+  float alpha = smoothstep(1.0, 0.2, dist) * 0.7;
+
+  // Extra glow near center when bass hits
+  float centerGlow = (1.0 - dist) * uBass * 0.1;
+  color += vec3(0.05, 0.08, 0.15) * centerGlow;
+
+  gl_FragColor = vec4(color, alpha);
+}
+`
+
+// Particle shader
+const particleVertShader = /* glsl */ `
+attribute float aSize;
+attribute float aLife;
+attribute vec3 aColor;
+
+varying float vLife;
+varying vec3 vColor;
+
+uniform float uTime;
+uniform float uBass;
+
+void main() {
+  vLife = aLife;
+  vColor = aColor;
+
+  vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+
+  // Size varies by life and bass
+  float size = aSize * (0.6 + aLife * 0.4) * (1.0 + uBass * 0.5);
+  gl_PointSize = size * (300.0 / -mvPosition.z);
+
+  gl_Position = projectionMatrix * mvPosition;
+}
+`
+
+const particleFragShader = /* glsl */ `
+varying float vLife;
+varying vec3 vColor;
+
+void main() {
+  // Circular soft particle
+  vec2 center = gl_PointCoord - 0.5;
+  float dist = length(center);
+  if (dist > 0.5) discard;
+
+  float alpha = smoothstep(0.5, 0.1, dist) * vLife * 0.7;
+  vec3 color = vColor * (1.0 + vLife * 0.5);
+
+  gl_FragColor = vec4(color, alpha);
+}
+`
+
+// ─── Constants ──────────────────────────────────────────────────────────────
+
+const DEFAULT_BAR_COUNT = 128
+const BAR_MAX_HEIGHT = 6.0
+const RADIUS = 5.0
+const PARTICLE_COUNT = 200
+const CAMERA_ORBIT_RADIUS = 14
+const CAMERA_HEIGHT = 5.5
+const CAMERA_ORBIT_SPEED = 0.08  // radians per second
 
 export interface ThreeJsEngineConfig {
   barCount?: number
@@ -105,18 +248,42 @@ export interface ThreeJsEngineConfig {
   layout?: 'circular' | 'horizontal' | 'mirror'
 }
 
+interface Particle {
+  x: number; y: number; z: number
+  vx: number; vy: number; vz: number
+  life: number; maxLife: number
+  size: number
+  color: [number, number, number]
+}
+
 export class ThreeJsEngine {
   private renderer: THREEType.WebGLRenderer | null = null
   private scene: THREEType.Scene | null = null
-  private camera: THREEType.OrthographicCamera | null = null
+  private camera: THREEType.PerspectiveCamera | null = null
   private composer: EffectComposerType | null = null
   private bloomPass: UnrealBloomPassType | null = null
 
   // Bars
   private barMesh: THREEType.InstancedMesh | null = null
   private barCount: number
-  private dummy: THREEType.Object3D | null = null  // lazy-init khi THREE được load
+  private dummy: THREEType.Object3D | null = null
   private barHeights: Float32Array
+
+  // Reflection (mirror bars below ground)
+  private reflectionMesh: THREEType.InstancedMesh | null = null
+
+  // Ground plane
+  private groundMesh: THREEType.Mesh | null = null
+
+  // Particles
+  private particleGeometry: THREEType.BufferGeometry | null = null
+  private particleMaterial: THREEType.ShaderMaterial | null = null
+  private particlePoints: THREEType.Points | null = null
+  private particles: Particle[] = []
+  private particlePositions: Float32Array | null = null
+  private particleSizes: Float32Array | null = null
+  private particleLives: Float32Array | null = null
+  private particleColors: Float32Array | null = null
 
   // Audio processing
   private smoother: AudioSmoother
@@ -128,10 +295,13 @@ export class ThreeJsEngine {
   private size: Size = { width: 0, height: 0 }
   private inited = false
   private layout: 'circular' | 'horizontal' | 'mirror'
+  private cameraAngle = 0
+  private lastBass = 0
+  private lastPeak = 0
 
   constructor(config: ThreeJsEngineConfig = {}) {
     this.config = config
-    this.barCount = config.barCount ?? BAR_COUNT
+    this.barCount = config.barCount ?? DEFAULT_BAR_COUNT
     this.layout = config.layout ?? 'circular'
     this.barHeights = new Float32Array(this.barCount).fill(0.01)
     this.smoother = new AudioSmoother(this.barCount, 0.35, 0.08)
@@ -146,46 +316,48 @@ export class ThreeJsEngine {
     if (this.inited) return
     this.size = size
 
-    // Lazy-load Three.js và postprocessing (tránh bundle 800KB khi không dùng engine này)
     const { THREE, EffectComposer, RenderPass, UnrealBloomPass, OutputPass } = await getPostprocessing()
 
-    // Khởi tạo dummy Object3D sau khi THREE đã load
     this.dummy = new THREE.Object3D()
 
-    // === Renderer ===
+    // ═══ Renderer ═══
     this.renderer = new THREE.WebGLRenderer({
       canvas,
-      antialias: false,           // SMAA/FXAA handles this in post
-      preserveDrawingBuffer: true, // Required for gl.readPixels (export)
+      antialias: true,
+      preserveDrawingBuffer: true,
       powerPreference: 'high-performance',
       alpha: false,
     })
     this.renderer.setSize(size.width, size.height, false)
-    this.renderer.setPixelRatio(1) // Canvas already DPR-scaled by CanvasHost
+    this.renderer.setPixelRatio(1)
     this.renderer.outputColorSpace = THREE.SRGBColorSpace
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping
-    this.renderer.toneMappingExposure = 1.0
-    this.renderer.setClearColor(0x0d0d14, 1)
+    this.renderer.toneMappingExposure = 1.1
+    this.renderer.setClearColor(0x050510, 1)
+    this.renderer.shadowMap.enabled = false
 
-    // === Scene ===
+    // ═══ Scene ═══
     this.scene = new THREE.Scene()
 
-    // === Camera ===
-    // Orthographic camera for 2D-style visualization
-    const aspect = size.width / size.height
-    const frustumSize = 8
-    this.camera = new THREE.OrthographicCamera(
-      -frustumSize * aspect / 2,
-      frustumSize * aspect / 2,
-      frustumSize / 2,
-      -frustumSize / 2,
-      0.1,
-      100
-    )
-    this.camera.position.set(0, 0, 10)
-    this.camera.lookAt(0, 0, 0)
+    // Subtle fog for depth
+    this.scene.fog = new THREE.FogExp2(0x050510, 0.025)
 
-    // === Frequency DataTexture (1D, Red channel, GPU upload) ===
+    // ═══ Camera — PerspectiveCamera for true 3D ═══
+    const aspect = size.width / size.height
+    this.camera = new THREE.PerspectiveCamera(45, aspect, 0.1, 100)
+    this.camera.position.set(0, CAMERA_HEIGHT, CAMERA_ORBIT_RADIUS)
+    this.camera.lookAt(0, 1.5, 0)
+
+    // ═══ Ambient light — very subtle ═══
+    const ambientLight = new THREE.AmbientLight(0x111122, 0.3)
+    this.scene.add(ambientLight)
+
+    // ═══ Point light from above (creates highlight on cylinders) ═══
+    const pointLight = new THREE.PointLight(0x4488ff, 1.5, 30)
+    pointLight.position.set(0, 10, 0)
+    this.scene.add(pointLight)
+
+    // ═══ Frequency DataTexture ═══
     this.freqTexture = new THREE.DataTexture(
       this.freqTextureData,
       this.barCount,
@@ -195,11 +367,12 @@ export class ThreeJsEngine {
     )
     this.freqTexture.needsUpdate = true
 
-    // === Bar Geometry (pivot at bottom for upward growth) ===
-    const barGeo = new THREE.BoxGeometry(0.08, 1, 0.08)
-    barGeo.translate(0, 0.5, 0) // Pivot shift: grows upward from Y=0
+    // ═══ Bar Geometry — CylinderGeometry with rounded caps ═══
+    const barGeo = new THREE.CylinderGeometry(0.12, 0.14, 1, 8, 1, false)
+    // Shift pivot to bottom so bars grow upward from Y=0
+    barGeo.translate(0, 0.5, 0)
 
-    // === Bar Material (custom shader) ===
+    // ═══ Bar Material (custom GLSL shader) ═══
     const barMat = new THREE.ShaderMaterial({
       uniforms: {
         uBarCount: { value: this.barCount },
@@ -207,25 +380,78 @@ export class ThreeJsEngine {
         uBass: { value: 0 },
         uMid: { value: 0 },
         uTreble: { value: 0 },
+        uPeak: { value: 0 },
         uFreqTexture: { value: this.freqTexture },
       },
       vertexShader: barVertShader,
       fragmentShader: barFragShader,
       transparent: false,
-      depthTest: false,
-      depthWrite: false,
+      depthTest: true,
+      depthWrite: true,
     })
 
-    // === InstancedMesh (1 draw call for all bars!) ===
+    // ═══ Main Bars — InstancedMesh ═══
     this.barMesh = new THREE.InstancedMesh(barGeo, barMat, this.barCount)
     this.barMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
     this.barMesh.frustumCulled = false
     this.scene.add(this.barMesh)
 
-    // Initialize bar positions based on layout
+    // ═══ Reflection Bars — same geometry, semi-transparent, flipped ═══
+    const reflectionMat = new THREE.ShaderMaterial({
+      uniforms: {
+        uBarCount: { value: this.barCount },
+        uTime: { value: 0 },
+        uBass: { value: 0 },
+        uMid: { value: 0 },
+        uTreble: { value: 0 },
+        uPeak: { value: 0 },
+        uFreqTexture: { value: this.freqTexture },
+      },
+      vertexShader: barVertShader,
+      fragmentShader: barFragShader,
+      transparent: true,
+      depthTest: true,
+      depthWrite: false,
+      side: THREE.FrontSide,
+    })
+    // Override fragment to add opacity fade
+    reflectionMat.fragmentShader = barFragShader.replace(
+      'gl_FragColor = vec4(color, 1.0);',
+      `float reflFade = smoothstep(0.0, -2.5, vWorldPos.y) * 0.35;
+       gl_FragColor = vec4(color * 0.5, reflFade);`
+    )
+
+    this.reflectionMesh = new THREE.InstancedMesh(barGeo, reflectionMat, this.barCount)
+    this.reflectionMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+    this.reflectionMesh.frustumCulled = false
+    this.scene.add(this.reflectionMesh)
+
+    // ═══ Ground Plane ═══
+    const groundGeo = new THREE.PlaneGeometry(40, 40)
+    const groundMat = new THREE.ShaderMaterial({
+      uniforms: {
+        uTime: { value: 0 },
+        uBass: { value: 0 },
+        uPeak: { value: 0 },
+      },
+      vertexShader: groundVertShader,
+      fragmentShader: groundFragShader,
+      transparent: true,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    })
+    this.groundMesh = new THREE.Mesh(groundGeo, groundMat)
+    this.groundMesh.rotation.x = -Math.PI / 2
+    this.groundMesh.position.y = -0.01
+    this.scene.add(this.groundMesh)
+
+    // ═══ Particle System ═══
+    this.initParticles(THREE)
+
+    // Initialize bar positions
     this.updateBarPositions()
 
-    // === Post-processing: RenderPass → UnrealBloomPass → OutputPass ===
+    // ═══ Post-processing ═══
     this.composer = new EffectComposer(this.renderer)
     this.composer.setSize(size.width, size.height)
 
@@ -234,9 +460,9 @@ export class ThreeJsEngine {
 
     this.bloomPass = new UnrealBloomPass(
       new THREE.Vector2(size.width, size.height),
-      this.config.bloomStrength ?? 1.5,   // strength
-      this.config.bloomRadius ?? 0.4,     // radius
-      this.config.bloomThreshold ?? 0.1   // threshold (low = everything glows)
+      this.config.bloomStrength ?? 1.5,
+      this.config.bloomRadius ?? 0.4,
+      this.config.bloomThreshold ?? 0.1
     )
     this.composer.addPass(this.bloomPass)
 
@@ -246,13 +472,123 @@ export class ThreeJsEngine {
   }
 
   /**
+   * Initialize particle system.
+   */
+  private initParticles(THREE: typeof THREEType): void {
+    this.particles = []
+    this.particlePositions = new Float32Array(PARTICLE_COUNT * 3)
+    this.particleSizes = new Float32Array(PARTICLE_COUNT)
+    this.particleLives = new Float32Array(PARTICLE_COUNT)
+    this.particleColors = new Float32Array(PARTICLE_COUNT * 3)
+
+    for (let i = 0; i < PARTICLE_COUNT; i++) {
+      this.particles.push(this.createParticle())
+    }
+    this.syncParticleBuffers()
+
+    this.particleGeometry = new THREE.BufferGeometry()
+    this.particleGeometry.setAttribute('position', new THREE.BufferAttribute(this.particlePositions, 3))
+    this.particleGeometry.setAttribute('aSize', new THREE.BufferAttribute(this.particleSizes, 1))
+    this.particleGeometry.setAttribute('aLife', new THREE.BufferAttribute(this.particleLives, 1))
+    this.particleGeometry.setAttribute('aColor', new THREE.BufferAttribute(this.particleColors, 3))
+
+    this.particleMaterial = new THREE.ShaderMaterial({
+      uniforms: {
+        uTime: { value: 0 },
+        uBass: { value: 0 },
+      },
+      vertexShader: particleVertShader,
+      fragmentShader: particleFragShader,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    })
+
+    this.particlePoints = new THREE.Points(this.particleGeometry, this.particleMaterial)
+    this.particlePoints.frustumCulled = false
+    this.scene!.add(this.particlePoints)
+  }
+
+  private createParticle(): Particle {
+    const spread = this.layout === 'circular' ? RADIUS * 2 : 10
+    return {
+      x: (Math.random() - 0.5) * spread * 2,
+      y: Math.random() * 8 + 0.5,
+      z: (Math.random() - 0.5) * spread * 2,
+      vx: (Math.random() - 0.5) * 0.02,
+      vy: Math.random() * 0.03 + 0.01,
+      vz: (Math.random() - 0.5) * 0.02,
+      life: Math.random(),
+      maxLife: 2 + Math.random() * 4,
+      size: 0.5 + Math.random() * 1.5,
+      color: [
+        0.3 + Math.random() * 0.7,
+        0.3 + Math.random() * 0.5,
+        0.5 + Math.random() * 0.5,
+      ],
+    }
+  }
+
+  private syncParticleBuffers(): void {
+    if (!this.particlePositions || !this.particleSizes || !this.particleLives || !this.particleColors) return
+
+    for (let i = 0; i < PARTICLE_COUNT; i++) {
+      const p = this.particles[i]!
+      this.particlePositions[i * 3] = p.x
+      this.particlePositions[i * 3 + 1] = p.y
+      this.particlePositions[i * 3 + 2] = p.z
+      this.particleSizes[i] = p.size
+      this.particleLives[i] = p.life
+      this.particleColors[i * 3] = p.color[0]
+      this.particleColors[i * 3 + 1] = p.color[1]
+      this.particleColors[i * 3 + 2] = p.color[2]
+    }
+  }
+
+  private updateParticles(dt: number, bass: number, peak: number): void {
+    for (let i = 0; i < PARTICLE_COUNT; i++) {
+      const p = this.particles[i]!
+
+      // Move
+      p.x += p.vx + Math.sin(p.y * 0.3 + p.x * 0.2) * 0.005
+      p.y += p.vy * (1 + bass * 2)
+      p.z += p.vz + Math.cos(p.y * 0.2 + p.z * 0.3) * 0.005
+
+      // Age
+      p.life -= dt / p.maxLife
+
+      // Respawn when dead or too high
+      if (p.life <= 0 || p.y > 12) {
+        const newP = this.createParticle()
+        newP.y = 0.1 + Math.random() * 0.5
+        newP.life = 1.0
+        // Boost spawn rate on bass hits
+        if (bass > 0.5) {
+          newP.vy *= 2
+          newP.size *= 1.5
+        }
+        this.particles[i] = newP
+      }
+    }
+
+    this.syncParticleBuffers()
+
+    if (this.particleGeometry) {
+      const posAttr = this.particleGeometry.getAttribute('position') as THREEType.BufferAttribute
+      posAttr.needsUpdate = true
+      const sizeAttr = this.particleGeometry.getAttribute('aSize') as THREEType.BufferAttribute
+      sizeAttr.needsUpdate = true
+      const lifeAttr = this.particleGeometry.getAttribute('aLife') as THREEType.BufferAttribute
+      lifeAttr.needsUpdate = true
+      const colorAttr = this.particleGeometry.getAttribute('aColor') as THREEType.BufferAttribute
+      colorAttr.needsUpdate = true
+    }
+  }
+
+  /**
    * Compatibility wrapper for VisualizerEngine interface.
-   * CanvasHost will call this with a 2D context — we ignore it and use initWithCanvas instead.
    */
   init(ctx: CanvasRenderingContext2D, size: Size): void {
-    // ThreeJsEngine needs a raw canvas, not a 2D context.
-    // initWithCanvas() should be called directly by VisualizerRuntime.
-    // This is a no-op fallback for interface compatibility.
     console.warn('[ThreeJsEngine] init() called with 2D context — use initWithCanvas() instead')
   }
 
@@ -268,13 +604,8 @@ export class ThreeJsEngine {
     this.renderer.setSize(size.width, size.height, false)
     this.composer.setSize(size.width, size.height)
 
-    // Update camera aspect
-    const aspect = size.width / size.height
-    const frustumSize = 8
-    this.camera.left = -frustumSize * aspect / 2
-    this.camera.right = frustumSize * aspect / 2
-    this.camera.top = frustumSize / 2
-    this.camera.bottom = -frustumSize / 2
+    // Update PerspectiveCamera aspect
+    this.camera.aspect = size.width / size.height
     this.camera.updateProjectionMatrix()
 
     // Update bloom pass resolution
@@ -289,39 +620,81 @@ export class ThreeJsEngine {
    * Render one frame. Called every RAF tick.
    */
   render(frame: EngineRenderFrame): void {
-    if (!this.inited || !this.composer || !this.barMesh || !this.freqTexture) return
+    if (!this.inited || !this.composer || !this.barMesh || !this.freqTexture || !this.camera) return
 
-    const { frequencyData } = frame
+    const { frequencyData, timeSec } = frame
+    const dt = 1 / 60  // approximate delta
 
-    // 1. Smooth FFT data (asymmetric attack/decay + log mapping)
+    // 1. Smooth FFT data
     const smoothed = this.smoother.update(frequencyData)
 
-    // 2. Upload smoothed data to GPU texture
+    // 2. Upload smoothed data to GPU
     for (let i = 0; i < this.barCount; i++) {
       this.freqTextureData[i] = Math.round(smoothed[i]! * 255)
     }
     this.freqTexture.needsUpdate = true
 
-    // 3. Get band energies for bloom driving
+    // 3. Band energies
     const bands = this.smoother.getBandEnergies()
+    this.lastBass = bands.bass
+    this.lastPeak = bands.peak
 
-    // 4. Update shader uniforms
+    // 4. Update shader uniforms (main bars)
     const mat = this.barMesh.material as THREEType.ShaderMaterial
-    mat.uniforms.uTime!.value = frame.timeSec
+    mat.uniforms.uTime!.value = timeSec
     mat.uniforms.uBass!.value = bands.bass
     mat.uniforms.uMid!.value = bands.mid
     mat.uniforms.uTreble!.value = bands.treble
+    mat.uniforms.uPeak!.value = bands.peak
 
-    // 5. Update bar heights via InstancedMesh matrices
-    this.updateBarHeights(smoothed)
-
-    // 6. Drive bloom with audio (the Avee Player "pump" effect)
-    if (this.bloomPass) {
-      this.bloomPass.strength = 1.2 + bands.bass * 3.0
-      this.bloomPass.radius = 0.3 + bands.mid * 0.3
+    // 4b. Update reflection material uniforms
+    if (this.reflectionMesh) {
+      const rMat = this.reflectionMesh.material as THREEType.ShaderMaterial
+      rMat.uniforms.uTime!.value = timeSec
+      rMat.uniforms.uBass!.value = bands.bass
+      rMat.uniforms.uMid!.value = bands.mid
+      rMat.uniforms.uTreble!.value = bands.treble
+      rMat.uniforms.uPeak!.value = bands.peak
     }
 
-    // 7. Render through post-processing chain
+    // 4c. Update ground material
+    if (this.groundMesh) {
+      const gMat = this.groundMesh.material as THREEType.ShaderMaterial
+      gMat.uniforms.uTime!.value = timeSec
+      gMat.uniforms.uBass!.value = bands.bass
+      gMat.uniforms.uPeak!.value = bands.peak
+    }
+
+    // 4d. Update particle material
+    if (this.particleMaterial) {
+      this.particleMaterial.uniforms.uTime!.value = timeSec
+      this.particleMaterial.uniforms.uBass!.value = bands.bass
+    }
+
+    // 5. Update bar heights
+    this.updateBarHeights(smoothed)
+
+    // 6. Update particles
+    this.updateParticles(dt, bands.bass, bands.peak)
+
+    // 7. Camera orbit animation
+    this.cameraAngle += CAMERA_ORBIT_SPEED * dt
+    const orbitRadius = CAMERA_ORBIT_RADIUS + Math.sin(timeSec * 0.15) * 2
+    const cameraHeight = CAMERA_HEIGHT + Math.sin(timeSec * 0.1) * 1.0 + bands.bass * 1.5
+    this.camera.position.x = Math.sin(this.cameraAngle) * orbitRadius
+    this.camera.position.z = Math.cos(this.cameraAngle) * orbitRadius
+    this.camera.position.y = cameraHeight
+    this.camera.lookAt(0, 1.0 + bands.peak * 0.5, 0)
+
+    // 8. Drive bloom with audio
+    if (this.bloomPass) {
+      const baseStrength = this.config.bloomStrength ?? 1.5
+      const baseRadius = this.config.bloomRadius ?? 0.4
+      this.bloomPass.strength = baseStrength + bands.bass * 2.5 + bands.peak * 1.0
+      this.bloomPass.radius = baseRadius + bands.mid * 0.25
+    }
+
+    // 9. Render
     this.composer.render()
   }
 
@@ -329,82 +702,121 @@ export class ThreeJsEngine {
    * Update bar instance matrices based on smoothed FFT heights.
    */
   private updateBarHeights(smoothed: Float32Array): void {
-    if (!this.barMesh) return
+    if (!this.barMesh || !this.dummy) return
 
     for (let i = 0; i < this.barCount; i++) {
       const value = smoothed[i]!
-      const targetH = Math.max(0.02, value * BAR_MAX_HEIGHT)
+      const targetH = Math.max(0.03, value * BAR_MAX_HEIGHT)
 
-      // Additional smoothing on the height for extra-smooth motion
-      this.barHeights[i] = this.barHeights[i]! + (targetH - this.barHeights[i]!) * 0.25
+      // Smooth height interpolation
+      this.barHeights[i] = this.barHeights[i]! + (targetH - this.barHeights[i]!) * 0.3
+
+      const h = this.barHeights[i]!
 
       if (this.layout === 'circular') {
         const angle = (i / this.barCount) * Math.PI * 2
         const x = Math.cos(angle) * RADIUS
-        const y = Math.sin(angle) * RADIUS
+        const z = Math.sin(angle) * RADIUS
 
-        this.dummy.position.set(x, y, 0)
-        this.dummy.rotation.set(0, 0, angle - Math.PI / 2) // Point outward
-        this.dummy.scale.set(1, this.barHeights[i]!, 1)
+        this.dummy.position.set(x, 0, z)
+        this.dummy.rotation.set(0, -angle + Math.PI / 2, 0)
+        this.dummy.scale.set(1, h, 1)
       } else if (this.layout === 'mirror') {
-        const totalWidth = this.size.width > 0 ? 7 * (this.size.width / this.size.height) : 7
-        const barSpacing = totalWidth / this.barCount
-        const x = -totalWidth / 2 + i * barSpacing + barSpacing / 2
+        // Mirror: bars from center going left and right
+        const half = Math.floor(this.barCount / 2)
+        const totalWidth = 12
+        const barSpacing = totalWidth / half
+        let x: number
 
-        // Top half
+        if (i < half) {
+          // Left side (mirrored)
+          x = -(i * barSpacing + barSpacing / 2)
+        } else {
+          // Right side
+          x = (i - half) * barSpacing + barSpacing / 2
+        }
+
         this.dummy.position.set(x, 0, 0)
         this.dummy.rotation.set(0, 0, 0)
-        this.dummy.scale.set(1, this.barHeights[i]!, 1)
+        this.dummy.scale.set(1, h, 1)
       } else {
         // Horizontal layout
-        const totalWidth = this.size.width > 0 ? 7 * (this.size.width / this.size.height) : 7
+        const totalWidth = 14
         const barSpacing = totalWidth / this.barCount
         const x = -totalWidth / 2 + i * barSpacing + barSpacing / 2
-        const bottom = -3
 
-        this.dummy.position.set(x, bottom, 0)
+        this.dummy.position.set(x, 0, 0)
         this.dummy.rotation.set(0, 0, 0)
-        this.dummy.scale.set(1, this.barHeights[i]!, 1)
+        this.dummy.scale.set(1, h, 1)
       }
 
       this.dummy.updateMatrix()
       this.barMesh.setMatrixAt(i, this.dummy.matrix)
+
+      // Update reflection (flipped Y, below ground)
+      if (this.reflectionMesh && this.dummy) {
+        const pos = this.dummy.position.clone()
+        pos.y = 0
+        this.dummy.position.copy(pos)
+        this.dummy.scale.set(1, -h * 0.5, 1) // shorter reflection
+        this.dummy.updateMatrix()
+        this.reflectionMesh.setMatrixAt(i, this.dummy.matrix)
+      }
     }
 
     this.barMesh.instanceMatrix.needsUpdate = true
+    if (this.reflectionMesh) {
+      this.reflectionMesh.instanceMatrix.needsUpdate = true
+    }
   }
 
   /**
    * Compute initial bar positions based on layout.
    */
   private updateBarPositions(): void {
-    if (!this.barMesh) return
+    if (!this.barMesh || !this.dummy) return
 
     for (let i = 0; i < this.barCount; i++) {
       if (this.layout === 'circular') {
         const angle = (i / this.barCount) * Math.PI * 2
         const x = Math.cos(angle) * RADIUS
-        const y = Math.sin(angle) * RADIUS
-        this.dummy.position.set(x, y, 0)
-        this.dummy.rotation.set(0, 0, angle - Math.PI / 2)
+        const z = Math.sin(angle) * RADIUS
+        this.dummy.position.set(x, 0, z)
+        this.dummy.rotation.set(0, -angle + Math.PI / 2, 0)
       } else if (this.layout === 'mirror') {
-        const totalWidth = this.size.width > 0 ? 7 * (this.size.width / this.size.height) : 7
+        const half = Math.floor(this.barCount / 2)
+        const totalWidth = 12
+        const barSpacing = totalWidth / half
+        let x: number
+        if (i < half) {
+          x = -(i * barSpacing + barSpacing / 2)
+        } else {
+          x = (i - half) * barSpacing + barSpacing / 2
+        }
+        this.dummy.position.set(x, 0, 0)
+        this.dummy.rotation.set(0, 0, 0)
+      } else {
+        const totalWidth = 14
         const barSpacing = totalWidth / this.barCount
         const x = -totalWidth / 2 + i * barSpacing + barSpacing / 2
         this.dummy.position.set(x, 0, 0)
         this.dummy.rotation.set(0, 0, 0)
-      } else {
-        const totalWidth = this.size.width > 0 ? 7 * (this.size.width / this.size.height) : 7
-        const barSpacing = totalWidth / this.barCount
-        const x = -totalWidth / 2 + i * barSpacing + barSpacing / 2
-        this.dummy.position.set(x, -3, 0)
-        this.dummy.rotation.set(0, 0, 0)
       }
-      this.dummy.scale.set(1, 0.02, 1)
+      this.dummy.scale.set(1, 0.03, 1)
       this.dummy.updateMatrix()
       this.barMesh.setMatrixAt(i, this.dummy.matrix)
+
+      // Reflection initial position
+      if (this.reflectionMesh) {
+        this.dummy.scale.set(1, -0.015, 1)
+        this.dummy.updateMatrix()
+        this.reflectionMesh.setMatrixAt(i, this.dummy.matrix)
+      }
     }
     this.barMesh.instanceMatrix.needsUpdate = true
+    if (this.reflectionMesh) {
+      this.reflectionMesh.instanceMatrix.needsUpdate = true
+    }
   }
 
   /**
@@ -419,10 +831,12 @@ export class ThreeJsEngine {
    * Update bloom parameters at runtime.
    */
   setBloomParams(strength?: number, radius?: number, threshold?: number): void {
-    if (!this.bloomPass) return
     if (strength !== undefined) this.config.bloomStrength = strength
     if (radius !== undefined) this.config.bloomRadius = radius
-    if (threshold !== undefined) this.config.bloomThreshold = threshold
+    if (threshold !== undefined) {
+      this.config.bloomThreshold = threshold
+      if (this.bloomPass) this.bloomPass.threshold = threshold
+    }
   }
 
   /**
@@ -433,26 +847,61 @@ export class ThreeJsEngine {
   }
 
   destroy(): void {
+    // Bars
     if (this.barMesh) {
       this.barMesh.geometry.dispose()
       ;(this.barMesh.material as THREEType.ShaderMaterial).dispose()
       this.barMesh = null
     }
+
+    // Reflection
+    if (this.reflectionMesh) {
+      this.reflectionMesh.geometry.dispose()
+      ;(this.reflectionMesh.material as THREEType.ShaderMaterial).dispose()
+      this.reflectionMesh = null
+    }
+
+    // Ground
+    if (this.groundMesh) {
+      this.groundMesh.geometry.dispose()
+      ;(this.groundMesh.material as THREEType.ShaderMaterial).dispose()
+      this.groundMesh = null
+    }
+
+    // Particles
+    if (this.particlePoints) {
+      this.particleGeometry?.dispose()
+      this.particleMaterial?.dispose()
+      this.particlePoints = null
+      this.particleGeometry = null
+      this.particleMaterial = null
+    }
+
+    // Freq texture
     if (this.freqTexture) {
       this.freqTexture.dispose()
       this.freqTexture = null
     }
+
+    // Composer
     if (this.composer) {
-      // EffectComposer disposes its render targets
       this.composer = null
     }
+
+    // Renderer
     if (this.renderer) {
       this.renderer.dispose()
       this.renderer = null
     }
+
     this.scene = null
     this.camera = null
     this.bloomPass = null
+    this.particles = []
+    this.particlePositions = null
+    this.particleSizes = null
+    this.particleLives = null
+    this.particleColors = null
     this.smoother.reset()
     this.inited = false
   }
