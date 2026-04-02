@@ -349,7 +349,7 @@ export function registerAuthHandlers() {
       }
       const res = await postJson<ValidateKeyResponse>('/api/auth/validate-key', {
         tai_khoan: data.username,
-        key: data.key,
+        key_kich_hoat: data.key,
         ma_may: base.machineId,
         version: APP_VERSION,
       })
