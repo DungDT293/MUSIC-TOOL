@@ -1257,6 +1257,9 @@ function drawWaveNeonBars(
     return `rgba(${r | 0},${g | 0},${b | 0},${alpha})`
   }
 
+  const bassE = bands?.bass ?? 0.5
+  const beatV = beat ?? 0
+
   const edgeG: [number, number, number, number][] = [
     [-halfW, -halfH, halfW, -halfH],
     [halfW, -halfH, halfW, halfH],
@@ -1266,6 +1269,26 @@ function drawWaveNeonBars(
 
   ctx.save()
   ctx.lineCap = 'butt'
+
+  // ═══ Pass 0: Corner glow beacons (bass-reactive neon bloom at each corner) ═══
+  if (bassE > 0.3) {
+    const cornerGlowR = size * 0.06 * (0.3 + bassE * 0.7)
+    const corners: [number, number][] = [
+      [-halfW, -halfH], [halfW, -halfH], [halfW, halfH], [-halfW, halfH],
+    ]
+    for (let c = 0; c < 4; c++) {
+      const [cx, cy] = corners[c]!
+      const cShift = (shift + c * 0.25) % 1
+      const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, cornerGlowR)
+      grad.addColorStop(0, neonColorAt(cShift, 0.35 * bassE))
+      grad.addColorStop(0.5, neonColorAt(cShift + 0.15, 0.12 * bassE))
+      grad.addColorStop(1, 'rgba(0,0,0,0)')
+      ctx.fillStyle = grad
+      ctx.beginPath()
+      ctx.arc(cx, cy, cornerGlowR, 0, Math.PI * 2)
+      ctx.fill()
+    }
+  }
 
   for (let edge = 0; edge < 4; edge++) {
     const isHoriz = edge === 0 || edge === 2
@@ -1297,12 +1320,17 @@ function drawWaveNeonBars(
       const scanLine = Math.sin(j * 0.5 + time * 3) * 0.5 + 0.5
       const scanAlpha = 0.7 + scanLine * 0.3
 
+      // Bass-reactive bar stretch: bars extend further on strong bass
+      const bassStretch = 1 + bassE * 0.35
+      const exB = sx + (ex - sx) * bassStretch
+      const eyB = sy + (ey - sy) * bassStretch
+
       // Pass 1: Wide outer glow
       ctx.lineWidth = barW * 3
       ctx.strokeStyle = neonColorAt(colorT, 0.15 * t * scanAlpha)
       ctx.beginPath()
       ctx.moveTo(sx, sy)
-      ctx.lineTo(ex, ey)
+      ctx.lineTo(exB, eyB)
       ctx.stroke()
 
       // Pass 2: Medium glow
@@ -1310,7 +1338,7 @@ function drawWaveNeonBars(
       ctx.strokeStyle = neonColorAt(colorT, 0.4 * t * scanAlpha)
       ctx.beginPath()
       ctx.moveTo(sx, sy)
-      ctx.lineTo(ex, ey)
+      ctx.lineTo(exB, eyB)
       ctx.stroke()
 
       // Pass 3: Sharp bright core
@@ -1318,7 +1346,7 @@ function drawWaveNeonBars(
       ctx.strokeStyle = neonColorAt(colorT, 0.95 * scanAlpha)
       ctx.beginPath()
       ctx.moveTo(sx, sy)
-      ctx.lineTo(ex, ey)
+      ctx.lineTo(exB, eyB)
       ctx.stroke()
 
       // Pass 4: White hot center on high peaks
@@ -1327,11 +1355,50 @@ function drawWaveNeonBars(
         ctx.strokeStyle = `rgba(255,255,255,${(t - 0.6) * 2.5 * scanAlpha})`
         ctx.beginPath()
         ctx.moveTo(sx, sy)
-        ctx.lineTo(ex, ey)
+        ctx.lineTo(exB, eyB)
+        ctx.stroke()
+      }
+
+      // Pass 5: Tip particle sparkle on very high peaks
+      if (t > 0.75) {
+        const sparkSize = size * 0.004 * t
+        ctx.fillStyle = neonColorAt(colorT, 0.8)
+        ctx.beginPath()
+        ctx.arc(exB, eyB, sparkSize, 0, Math.PI * 2)
+        ctx.fill()
+        // Cross-hair sparkle
+        ctx.strokeStyle = `rgba(255,255,255,${(t - 0.75) * 3})`
+        ctx.lineWidth = 0.5
+        ctx.beginPath()
+        ctx.moveTo(exB - sparkSize * 1.8, eyB)
+        ctx.lineTo(exB + sparkSize * 1.8, eyB)
+        ctx.moveTo(exB, eyB - sparkSize * 1.8)
+        ctx.lineTo(exB, eyB + sparkSize * 1.8)
         ctx.stroke()
       }
     }
   }
+
+  // ═══ Scanning laser line (sweeps around the border) ═══
+  const scanAngle = (time * 0.8) % 4 // 0–4 (one per edge)
+  const scanEdge = Math.floor(scanAngle) % 4
+  const scanPos = (scanAngle - scanEdge)
+  const scanIsHoriz = scanEdge === 0 || scanEdge === 2
+  const scanEdgeLen = scanIsHoriz ? w : h
+  const scanPx = scanPos * scanEdgeLen
+  let scanX: number, scanY: number
+  if (scanEdge === 0) { scanX = -halfW + scanPx; scanY = -halfH }
+  else if (scanEdge === 1) { scanX = halfW; scanY = -halfH + scanPx }
+  else if (scanEdge === 2) { scanX = halfW - scanPx; scanY = halfH }
+  else { scanX = -halfW; scanY = halfH - scanPx }
+  const scanGrad = ctx.createRadialGradient(scanX, scanY, 0, scanX, scanY, size * 0.08)
+  scanGrad.addColorStop(0, neonColorAt(shift, 0.5))
+  scanGrad.addColorStop(0.4, neonColorAt(shift + 0.1, 0.15))
+  scanGrad.addColorStop(1, 'rgba(0,0,0,0)')
+  ctx.fillStyle = scanGrad
+  ctx.beginPath()
+  ctx.arc(scanX, scanY, size * 0.08, 0, Math.PI * 2)
+  ctx.fill()
 
   ctx.restore()
 }
@@ -1476,6 +1543,32 @@ function drawWaveCrystalRing(
     ctx.fill()
   }
 
+  // ═══ Scanning highlight — bright spot orbiting around the ring ═══
+  const scanAngle = time * 1.2
+  const scanI = Math.floor(((scanAngle / (Math.PI * 2)) % 1) * ringSegs) % ringSegs
+  const scanRad = size * 0.025 * (0.8 + bassE * 0.5)
+  const sp = outerPts[scanI]!
+  const scanGrad = ctx.createRadialGradient(sp[0], sp[1], 0, sp[0], sp[1], scanRad)
+  scanGrad.addColorStop(0, 'rgba(255, 255, 255, 0.8)')
+  scanGrad.addColorStop(0.3, crystalColor(shift, 0.5))
+  scanGrad.addColorStop(1, 'rgba(0,0,0,0)')
+  ctx.fillStyle = scanGrad
+  ctx.beginPath()
+  ctx.arc(sp[0], sp[1], scanRad, 0, Math.PI * 2)
+  ctx.fill()
+
+  // ═══ Inner refraction ring (subtle prismatic halo closer to image) ═══
+  const innerRingR = baseR * 0.92
+  ctx.beginPath()
+  ctx.arc(0, 0, innerRingR, 0, Math.PI * 2)
+  const innerGrad = ctx.createConicGradient(-Math.PI / 2 + time * 0.3, 0, 0)
+  for (let s = 0; s <= 1; s += 0.125) {
+    innerGrad.addColorStop(s, crystalColor(shift + s + 0.5, 0.12 + bassE * 0.08))
+  }
+  ctx.strokeStyle = innerGrad
+  ctx.lineWidth = size * 0.002
+  ctx.stroke()
+
   ctx.restore()
 }
 
@@ -1590,31 +1683,99 @@ function drawWaveNebula(
     ctx.lineWidth = size * 0.0015
     ctx.stroke()
 
-    // Pass 4: Star particles along arm
-    ctx.fillStyle = `rgba(255, 255, 255, 0.6)`
-    ctx.beginPath()
-    for (let i = 0; i < pts.length; i += 4) {
+    // Pass 4: Star particles along arm with varied sizes
+    for (let i = 0; i < pts.length; i += 3) {
       const p = pts[i]!
-      if (p.t < 0.3) continue
-      const dotR = size * 0.003 * p.t
-      ctx.moveTo(p.x + dotR, p.y)
+      if (p.t < 0.25) continue
+      const dotR = size * 0.003 * p.t * (0.7 + Math.sin(i * 1.3 + time * 2) * 0.3)
+      // Star glow
+      ctx.fillStyle = nebulaColor(armShift + i * 0.03, 0.15 * p.t)
+      ctx.beginPath()
+      ctx.arc(p.x, p.y, dotR * 3, 0, Math.PI * 2)
+      ctx.fill()
+      // Star core
+      ctx.fillStyle = `rgba(255, 255, 255, ${0.4 + p.t * 0.5})`
+      ctx.beginPath()
       ctx.arc(p.x, p.y, dotR, 0, Math.PI * 2)
+      ctx.fill()
+    }
+
+    // Pass 5: Stardust trail — tiny flickering particles between arm dots
+    ctx.fillStyle = `rgba(255, 255, 255, 0.35)`
+    ctx.beginPath()
+    for (let i = 0; i < pts.length - 1; i += 2) {
+      const p1 = pts[i]!
+      const p2 = pts[i + 1]!
+      if (p1.t < 0.15 && p2.t < 0.15) continue
+      // Mid-point particle with jitter
+      const jx = (p1.x + p2.x) / 2 + Math.sin(time * 5 + i * 2.7) * size * 0.003
+      const jy = (p1.y + p2.y) / 2 + Math.cos(time * 4 + i * 1.9) * size * 0.003
+      const dr = size * 0.0012 * (p1.t + p2.t) / 2
+      ctx.moveTo(jx + dr, jy)
+      ctx.arc(jx, jy, dr, 0, Math.PI * 2)
     }
     ctx.fill()
   }
 
-  // Central nebula glow
+  // ═══ Central supernova glow (multi-layered, bass-reactive) ═══
+  const glowR = baseR + bassE * maxOff * 0.3
+  // Outer nebula mist
+  if (bassE > 0.15) {
+    const outerGlowR = glowR * 1.5
+    const outerGrad = ctx.createRadialGradient(0, 0, glowR * 0.3, 0, 0, outerGlowR)
+    outerGrad.addColorStop(0, nebulaColor(shift + 0.5, bassE * 0.06))
+    outerGrad.addColorStop(0.5, nebulaColor(shift + 0.7, bassE * 0.03))
+    outerGrad.addColorStop(1, 'rgba(0,0,0,0)')
+    ctx.fillStyle = outerGrad
+    ctx.beginPath()
+    ctx.arc(0, 0, outerGlowR, 0, Math.PI * 2)
+    ctx.fill()
+  }
+  // Core glow
   if (bassE > 0.2) {
-    const glowR = baseR + bassE * maxOff * 0.3
     const centerGrad = ctx.createRadialGradient(0, 0, 0, 0, 0, glowR)
-    centerGrad.addColorStop(0, nebulaColor(shift, bassE * 0.12))
-    centerGrad.addColorStop(0.5, nebulaColor(shift + 0.3, bassE * 0.05))
+    centerGrad.addColorStop(0, nebulaColor(shift, bassE * 0.15))
+    centerGrad.addColorStop(0.3, nebulaColor(shift + 0.2, bassE * 0.08))
+    centerGrad.addColorStop(0.6, nebulaColor(shift + 0.5, bassE * 0.03))
     centerGrad.addColorStop(1, 'rgba(0,0,0,0)')
     ctx.fillStyle = centerGrad
     ctx.beginPath()
     ctx.arc(0, 0, glowR, 0, Math.PI * 2)
     ctx.fill()
   }
+  // Supernova flash on strong bass
+  if (bassE > 0.65) {
+    const flashR = glowR * 0.6
+    const flashAlpha = (bassE - 0.65) * 2
+    const flashGrad = ctx.createRadialGradient(0, 0, 0, 0, 0, flashR)
+    flashGrad.addColorStop(0, `rgba(255, 255, 255, ${flashAlpha * 0.3})`)
+    flashGrad.addColorStop(0.4, nebulaColor(shift, flashAlpha * 0.15))
+    flashGrad.addColorStop(1, 'rgba(0,0,0,0)')
+    ctx.fillStyle = flashGrad
+    ctx.beginPath()
+    ctx.arc(0, 0, flashR, 0, Math.PI * 2)
+    ctx.fill()
+  }
+
+  // ═══ Orbiting bright star (like a pulsar) ═══
+  const orbitR = baseR * 1.1
+  const orbitAngle = time * 0.6
+  const starX = Math.cos(orbitAngle) * orbitR
+  const starY = Math.sin(orbitAngle) * orbitR
+  const starSize = size * 0.008 * (0.6 + bassE * 0.8)
+  const starGrad = ctx.createRadialGradient(starX, starY, 0, starX, starY, starSize * 3)
+  starGrad.addColorStop(0, 'rgba(255, 255, 255, 0.7)')
+  starGrad.addColorStop(0.3, nebulaColor(shift, 0.4))
+  starGrad.addColorStop(1, 'rgba(0,0,0,0)')
+  ctx.fillStyle = starGrad
+  ctx.beginPath()
+  ctx.arc(starX, starY, starSize * 3, 0, Math.PI * 2)
+  ctx.fill()
+  // Star core
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.9)'
+  ctx.beginPath()
+  ctx.arc(starX, starY, starSize * 0.5, 0, Math.PI * 2)
+  ctx.fill()
 
   ctx.restore()
 }

@@ -146,6 +146,19 @@ export function drawTimeline(
     ctx.fillRect(x - 1, midY, glowW, h + 2)
   }
 
+  // ═══ 3D depth shadow pass (offset darker copy behind waveform) ═══
+  const shadowOff = Math.max(1, barWidth * 0.5)
+  for (let i = startIdx; i < endIdx; i++) {
+    const t = (i / peaks.length) * duration
+    const x = t * pxPerSec + startPx
+    const peak = peaks[i] ?? 0
+    if (peak < 0.08) continue
+    const h = peak * (height / 2 - 4)
+    ctx.fillStyle = getWaveColor(peak * 0.6, 0.18)
+    ctx.fillRect(x + shadowOff, midY - h + shadowOff, Math.max(1, barWidth - 0.5), h - shadowOff)
+    ctx.fillRect(x + shadowOff, midY + shadowOff, Math.max(1, barWidth - 0.5), h - shadowOff)
+  }
+
   // ═══ Main waveform bars (gradient colored by intensity) ═══
   for (let i = startIdx; i < endIdx; i++) {
     const t = (i / peaks.length) * duration
@@ -242,6 +255,17 @@ export function drawTimeline(
   }
 
   ctx.restore()
+
+  // ═══ Energy intensity strip at top (1px high, PRISM colored by peak energy) ═══
+  const stripH = 3
+  for (let i = startIdx; i < endIdx; i++) {
+    const t = (i / peaks.length) * duration
+    const x = t * pxPerSec + startPx
+    const peak = peaks[i] ?? 0
+    if (peak < 0.01) continue
+    ctx.fillStyle = getWaveColor(peak, 0.5 + peak * 0.5)
+    ctx.fillRect(x, 0, Math.max(1, barWidth), stripH)
+  }
 
   // ═══ Info label ═══
   ctx.fillStyle = LABEL_COLOR
