@@ -113,20 +113,19 @@ async function verifyPassword(password: string, storedHash: string, storedSalt: 
  * Hashed passwords are stored as "hash:salt" format
  */
 function isPasswordHashed(password: string): boolean {
-  // Check if it's in the format "hash:salt" (both base64)
+  // Hashed passwords are stored as "hash:salt" format
+  // hash = base64 of 32 bytes (PBKDF2-SHA256) = 44 chars
+  // salt = base64 of 16 bytes = 24 chars
+  // Total = 44 + 1 + 24 = 69 chars
+  if (!password || password.length !== 69) return false
+
   const parts = password.split(':')
-  if (parts.length !== 2) {
-    return false
-  }
-  
-  // Check if both parts are valid base64
-  try {
-    atob(parts[0])
-    atob(parts[1])
-    return true
-  } catch {
-    return false
-  }
+  if (parts.length !== 2) return false
+  if (parts[0].length !== 44 || parts[1].length !== 24) return false
+
+  // Verify both parts are valid base64
+  const base64Regex = /^[A-Za-z0-9+/]+=*$/
+  return base64Regex.test(parts[0]) && base64Regex.test(parts[1])
 }
 
 interface Env {
@@ -338,9 +337,8 @@ async function handleUpdateVersionPolicy(request: Request, env: Env): Promise<Re
     })
   } catch (err: any) {
     console.error('[handleUpdateVersionPolicy] Error:', err)
-    return json({ 
-      error: 'Lỗi khi cập nhật version policy: ' + (err.message || 'Unknown error'),
-      details: err.message 
+    return json({
+      error: 'Lỗi khi cập nhật version policy.',
     }, 500)
   }
 }
@@ -617,9 +615,8 @@ async function handleRegister(request: Request, env: Env, parsedBody?: any): Pro
     } else if (details.includes('Database not available') || details.includes('DB')) {
       userMessage = 'Server tạm thời không kết nối được cơ sở dữ liệu. Vui lòng thử lại sau.'
     }
-    return json({ 
+    return json({
       error: userMessage,
-      details,
     }, 500)
   }
 }
@@ -647,22 +644,10 @@ async function handleCheck(request: Request, env: Env): Promise<Response> {
   }
 
   // ============================================
-  // TRACK MACHINE ID
+  // EXISTING CHECK LOGIC (xác thực TRƯỚC, tracking SAU)
   // ============================================
-  const now = Date.now()
-  await env.DB.prepare(
-    `INSERT INTO machine_id_tracking (username, machine_id, first_seen, last_seen, request_count)
-     VALUES (?1, ?2, ?3, ?3, 1)
-     ON CONFLICT(username, machine_id) DO UPDATE SET
-       last_seen = ?3,
-       request_count = request_count + 1`
-  )
-    .bind(tai_khoan, ma_may, now)
-    .run()
 
-  // ============================================
-  // UPDATE VERSION
-  // ============================================
+  // Update version nếu có
   if (version) {
     await env.DB.prepare(
       `UPDATE registrations SET version = ?1 WHERE tai_khoan = ?2`
@@ -671,56 +656,6 @@ async function handleCheck(request: Request, env: Env): Promise<Response> {
       .run()
   }
 
-  // ============================================
-  // CHECK MULTIPLE MACHINE IDs
-  // ============================================
-  const machineCount = await env.DB.prepare(
-    'SELECT COUNT(*) as count FROM machine_id_tracking WHERE username = ?'
-  )
-    .bind(tai_khoan)
-    .first<{ count: number }>()
-
-  if (machineCount && machineCount.count > 1) {
-    // Report suspicious activity
-    await handleSecurityReport(
-      new Request(request.url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          event: 'MULTIPLE_MACHINE_IDS',
-          severity: 'high',
-          message: `Account ${tai_khoan} using ${machineCount.count} different machine IDs`,
-          details: {
-            username: tai_khoan,
-            machineCount: machineCount.count,
-            currentMachineId: ma_may,
-          },
-          machineId: ma_may,
-          username: tai_khoan,
-          timestamp: now,
-        }),
-      }),
-      env
-    ).catch(() => {})
-
-    // Auto-block nếu > 3 machineIds
-    if (machineCount.count > 3) {
-      await env.DB.prepare(
-        'UPDATE registrations SET trang_thai = ? WHERE tai_khoan = ?'
-      )
-        .bind('CHAN', tai_khoan)
-        .run()
-
-      return json({
-        allow: false,
-        reason: 'Tài khoản đã bị chặn do sử dụng quá nhiều máy.',
-      })
-    }
-  }
-
-  // ============================================
-  // EXISTING CHECK LOGIC
-  // ============================================
   const row = await env.DB.prepare(
     `SELECT id, tai_khoan, mat_khau, ma_may, key_kich_hoat, trang_thai
      FROM registrations
@@ -750,40 +685,103 @@ async function handleCheck(request: Request, env: Env): Promise<Response> {
     return json({ allow: false, reason: 'Tài khoản đang chờ admin cấp quyền.' })
   }
 
-  // CHO_PHEP
-  // Check if password is hashed (new format) or plaintext (old format)
+  // CHO_PHEP — verify password TRƯỚC
   const isHashed = isPasswordHashed(row.mat_khau)
-  
+
   let passwordValid = false
   if (isHashed) {
-    // New format: verify against hash
     const [storedHash, storedSalt] = row.mat_khau.split(':')
     passwordValid = await verifyPassword(mat_khau, storedHash, storedSalt)
   } else {
-    // Plaintext comparison (không mã hóa mật khẩu user đã đặt)
     passwordValid = row.mat_khau === mat_khau
   }
-  
+
   if (!passwordValid) {
     return json({ allow: false, reason: 'Sai mật khẩu.' })
   }
 
-  // Normalize machine IDs (trim whitespace) before comparison
+  // ============================================
+  // Password đúng → TRACK MACHINE ID (sau khi xác thực)
+  // Chỉ ghi tracking khi password đúng để tránh DoS attack:
+  // attacker spam machineId khác nhau với username nạn nhân → tăng count → auto-block
+  // ============================================
+  const now = Date.now()
+  await env.DB.prepare(
+    `INSERT INTO machine_id_tracking (username, machine_id, first_seen, last_seen, request_count)
+     VALUES (?1, ?2, ?3, ?3, 1)
+     ON CONFLICT(username, machine_id) DO UPDATE SET
+       last_seen = ?3,
+       request_count = request_count + 1`
+  )
+    .bind(tai_khoan, ma_may, now)
+    .run()
+
+  // ============================================
+  // CHECK MULTIPLE MACHINE IDs (sau khi xác thực)
+  // ============================================
+  const machineCount = await env.DB.prepare(
+    'SELECT COUNT(*) as count FROM machine_id_tracking WHERE username = ?'
+  )
+    .bind(tai_khoan)
+    .first<{ count: number }>()
+
+  if (machineCount && machineCount.count > 1) {
+    await handleSecurityReport(
+      new Request(request.url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          event: 'MULTIPLE_MACHINE_IDS',
+          severity: 'medium',
+          message: `Account ${tai_khoan} using ${machineCount.count} different machine IDs`,
+          details: {
+            username: tai_khoan,
+            machineCount: machineCount.count,
+            currentMachineId: ma_may,
+          },
+          machineId: ma_may,
+          username: tai_khoan,
+          timestamp: now,
+        }),
+      }),
+      env
+    ).catch(() => {})
+
+    // Auto-block chỉ khi > 5 machineIds (nâng từ 3 lên 5 để tránh false positive
+    // do VPN/driver changes gây machineId thay đổi)
+    if (machineCount.count > 5) {
+      await env.DB.prepare(
+        'UPDATE registrations SET trang_thai = ? WHERE tai_khoan = ?'
+      )
+        .bind('CHAN', tai_khoan)
+        .run()
+
+      return json({
+        allow: false,
+        reason: 'Tài khoản đã bị chặn do sử dụng quá nhiều máy.',
+      })
+    }
+  }
+
+  // ============================================
+  // MACHINE ID CHECK — cho phép đổi máy nếu password đúng
+  // ============================================
   const normalizedStoredMachineId = (row.ma_may || '').trim()
   const normalizedRequestMachineId = (ma_may || '').trim()
-  
+
   if (normalizedStoredMachineId !== normalizedRequestMachineId) {
-    console.warn('[handleCheck] Machine ID mismatch:', {
+    console.warn('[handleCheck] Machine ID changed — updating:', {
       username: tai_khoan,
-      stored: normalizedStoredMachineId,
-      received: normalizedRequestMachineId,
-      storedLength: normalizedStoredMachineId.length,
-      receivedLength: normalizedRequestMachineId.length,
+      old: normalizedStoredMachineId.substring(0, 16) + '...',
+      new: normalizedRequestMachineId.substring(0, 16) + '...',
     })
-    return json({
-      allow: false,
-      reason: 'Tài khoản này chỉ được phép dùng trên 1 máy.',
-    })
+    // Password đúng + tài khoản đã duyệt → cho phép đổi máy, cập nhật machineId mới
+    // Ngăn chặn tình trạng user bị lock-out khi VPN/driver/Win11 làm machineId thay đổi
+    await env.DB.prepare(
+      'UPDATE registrations SET ma_may = ?1 WHERE tai_khoan = ?2'
+    )
+      .bind(normalizedRequestMachineId, tai_khoan)
+      .run()
   }
 
   return json({
@@ -842,7 +840,7 @@ async function handleVideoExport(request: Request, env: Env): Promise<Response> 
     return json({ ok: true, message: 'Video export tracked successfully' })
   } catch (error: any) {
     console.error('[Video Export] Error tracking export:', error)
-    return json({ error: 'Failed to track video export', details: error.message }, 500)
+    return json({ error: 'Failed to track video export' }, 500)
   }
 }
 
@@ -979,7 +977,7 @@ function serveDashboard(): Response {
     "object-src 'none'; " +
     "base-uri 'self';"
 
-  // Read dashboard.html content
+  // Dashboard HTML (inline template)
   const dashboardHTML = `<!DOCTYPE html>
 <html lang="vi">
 <head>
@@ -1695,6 +1693,17 @@ function serveDashboard(): Response {
     function formatNumber(num) {
       return num.toString().replace(/\\B(?=(\\d{3})+(?!\\d))/g, ',')
     }
+
+    // Escape HTML entities để chống XSS
+    function escapeHtml(str) {
+      if (!str) return ''
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;')
+    }
     
     // Format thời gian tiếng Việt
     function formatDateTime(timestamp) {
@@ -1855,27 +1864,27 @@ function serveDashboard(): Response {
         }
         
         tbody.innerHTML = result.logs.map(log => {
-          const eventTypeText = eventTypeLabels[log.event_type] || log.event_type
-          const severityText = severityLabels[log.severity] || log.severity
-          const severityClass = \`badge-\${log.severity}\`
+          const eventTypeText = eventTypeLabels[log.event_type] || escapeHtml(log.event_type)
+          const severityText = severityLabels[log.severity] || escapeHtml(log.severity)
+          const severityClass = \`badge-\${escapeHtml(log.severity)}\`
           const details = log.details ? JSON.parse(log.details) : null
-          const detailsStr = details ? JSON.stringify(details, null, 2).substring(0, 200) : '-'
-          
+          const detailsStr = details ? escapeHtml(JSON.stringify(details, null, 2).substring(0, 200)) : '-'
+
           // Extract key from details if available (for REGISTER and APPROVE events)
           let keyDisplay = '-'
           if (details && details.key_kich_hoat) {
-            const key = details.key_kich_hoat
+            const key = escapeHtml(details.key_kich_hoat)
             keyDisplay = \`<code style="font-size: 12px; color: #22c55e; cursor: pointer; padding: 4px 8px; background: rgba(34, 197, 94, 0.1); border-radius: 4px; font-weight: 600; font-family: monospace;" onclick="copyTextSafely('\${key}', 'Key')" title="Click để copy">\${key}</code>\`
           }
-          
+
           return \`
             <tr>
               <td>\${formatDateTime(log.timestamp)}</td>
-              <td><strong>\${log.username}</strong></td>
+              <td><strong>\${escapeHtml(log.username)}</strong></td>
               <td>\${eventTypeText}</td>
               <td><span class="badge \${severityClass}">\${severityText}</span></td>
-              <td><code style="font-size: 11px;">\${log.ip_address || '-'}</code></td>
-              <td><code style="font-size: 11px;">\${log.machine_id ? log.machine_id.substring(0, 24) + '...' : '-'}</code></td>
+              <td><code style="font-size: 11px;">\${escapeHtml(log.ip_address) || '-'}</code></td>
+              <td><code style="font-size: 11px;">\${log.machine_id ? escapeHtml(log.machine_id.substring(0, 24)) + '...' : '-'}</code></td>
               <td>\${keyDisplay}</td>
               <td>
                 <code style="font-size: 11px; white-space: pre-wrap; max-width: 300px; overflow: hidden; text-overflow: ellipsis; color: #94a3b8;" title="\${detailsStr}">\${detailsStr}</code>
@@ -2078,9 +2087,7 @@ function serveDashboard(): Response {
         const status = document.getElementById('userStatusFilter').value
         const params = new URLSearchParams({ limit: '100' })
         if (status) params.append('status', status)
-        
-        console.log('Loading users with filter:', status)
-        
+
         const response = await fetch(\`\${API_BASE}/api/admin/users?\${params}\`, {
           headers: { 
             'Authorization': \`Bearer \${ADMIN_TOKEN}\`
@@ -2096,8 +2103,7 @@ function serveDashboard(): Response {
         }
         
         const result = await response.json()
-        console.log('Load users response:', { ok: result.ok, userCount: result.users?.length, firstUser: result.users?.[0] })
-        
+
         if (!result.ok) {
           console.error('API error:', result.error)
           throw new Error(result.error || 'Lỗi không xác định')
@@ -2113,35 +2119,23 @@ function serveDashboard(): Response {
           tbody.innerHTML = '<tr><td colspan="10" class="empty-state">Không tìm thấy người dùng nào</td></tr>'
           return
         }
-        
-        console.log('Rendering', result.users.length, 'users')
-        
-        // Debug: Log first user data BEFORE rendering
-        if (result.users && result.users.length > 0) {
-          const firstUser = result.users[0]
-          console.log('🔍 DEBUG - First user data:', {
-            tai_khoan: firstUser.tai_khoan,
-            mat_khau: firstUser.mat_khau,
-            mat_khauType: typeof firstUser.mat_khau,
-            mat_khauLength: firstUser.mat_khau?.length,
-            hasMatKhau: 'mat_khau' in firstUser,
-            allKeys: Object.keys(firstUser)
-          })
-        }
-        
+
         const renderedHTML = result.users.map((user, index) => {
           try {
-            const statusClass = \`status-\${user.trang_thai.toLowerCase()}\`
-            const statusText = statusLabels[user.trang_thai] || user.trang_thai
+            const safeTaiKhoan = escapeHtml(user.tai_khoan)
+            const safeMaMay = escapeHtml(user.ma_may)
+            const safeVersion = escapeHtml(user.version)
+            const statusClass = \`status-\${escapeHtml(user.trang_thai.toLowerCase())}\`
+            const statusText = statusLabels[user.trang_thai] || escapeHtml(user.trang_thai)
             const lastActive = user.last_active ? formatDateTime(user.last_active) : 'Chưa có'
             const machineIdCell = user.ma_may
-              ? \`<span class="clickable" title="Xem chi tiết" onclick="openUserDetail('\${user.id}')"><code>\${user.ma_may.substring(0, 24)}...</code></span>\`
+              ? \`<span class="clickable" title="Xem chi tiết" onclick="openUserDetail('\${user.id}')"><code>\${safeMaMay.substring(0, 24)}...</code></span>\`
               : '<span style="color: #64748b;">-</span>'
             const activationKey = user.key_kich_hoat
-              ? \`<span class="clickable" title="Xem chi tiết key" onclick="openUserDetail('\${user.id}')"><code style="font-size: 11px;">\${user.key_kich_hoat.substring(0, 20)}...</code></span>\`
+              ? \`<span class="clickable" title="Xem chi tiết key" onclick="openUserDetail('\${user.id}')"><code style="font-size: 11px;">\${escapeHtml(user.key_kich_hoat.substring(0, 20))}...</code></span>\`
               : '<span style="color: #64748b;">-</span>'
             const machineCount = user.machine_count || 0
-            const multipleMachinesWarning = machineCount > 1 ? \`<span style="color: #f97316; font-size: 12px; cursor: pointer;" onclick="showUserMachines('\${user.tai_khoan}')" title="⚠️ Click để xem chi tiết \${machineCount} máy">⚠️ \${machineCount}</span>\` : (machineCount > 0 ? \`<span style="cursor: pointer;" onclick="showUserMachines('\${user.tai_khoan}')" title="Click để xem chi tiết">\${machineCount}</span>\` : '0')
+            const multipleMachinesWarning = machineCount > 1 ? \`<span style="color: #f97316; font-size: 12px; cursor: pointer;" onclick="showUserMachines('\${safeTaiKhoan}')" title="⚠️ Click để xem chi tiết \${machineCount} máy">⚠️ \${machineCount}</span>\` : (machineCount > 0 ? \`<span style="cursor: pointer;" onclick="showUserMachines('\${safeTaiKhoan}')" title="Click để xem chi tiết">\${machineCount}</span>\` : '0')
             
             // Password cell with eye icon - escape HTML attributes
             const passwordId = \`pwd-user-\${user.id}\`
@@ -2149,18 +2143,6 @@ function serveDashboard(): Response {
             const maskedPassword = realPassword ? realPassword.replace(/./g, '*') : '-'
             const disabledAttr = !realPassword ? 'disabled' : ''
             const disabledStyle = !realPassword ? 'opacity: 0.5; cursor: not-allowed;' : ''
-            
-            // Debug: Log for first user
-            if (index === 0) {
-              console.log('🔍 PASSWORD DEBUG:', {
-                tai_khoan: user.tai_khoan,
-                mat_khau_raw: user.mat_khau,
-                mat_khau_type: typeof user.mat_khau,
-                mat_khau_length: user.mat_khau?.length,
-                realPassword_length: realPassword.length,
-                maskedPassword: maskedPassword.substring(0, 20) + '...'
-              })
-            }
             
             const passwordCell = \`
               <div style="display: flex; align-items: center; gap: 4px; width: 100%;">
@@ -2185,10 +2167,6 @@ function serveDashboard(): Response {
               </div>
             \`
             
-            // Debug: Log password cell HTML for first user
-            if (index === 0) {
-              console.log('🔍 PASSWORD CELL HTML:', passwordCell.substring(0, 250))
-            }
           
           // V2: Get key_status
           const keyStatus = user.key_status || 'PENDING'
@@ -2209,29 +2187,25 @@ function serveDashboard(): Response {
             actions += \`<button class="action-btn btn-block" onclick="updateUserStatus('\${user.id}', 'CHAN')" style="padding: 6px 12px; font-size: 12px; white-space: nowrap;">🚫 Chặn</button>\`
             // V2: Key management actions
             if (keyStatus === 'LOCKED') {
-              actions += \`<button class="action-btn btn-unlock" onclick="unlockKey('\${user.tai_khoan}')" title="Mở khóa key" style="padding: 6px 12px; font-size: 12px; white-space: nowrap;">🔓 Mở khóa</button>\`
+              actions += \`<button class="action-btn btn-unlock" onclick="unlockKey('\${safeTaiKhoan}')" title="Mở khóa key" style="padding: 6px 12px; font-size: 12px; white-space: nowrap;">🔓 Mở khóa</button>\`
             }
             if (keyStatus === 'ACTIVE' || keyStatus === 'LOCKED') {
-              actions += \`<button class="action-btn btn-revoke" onclick="revokeKey('\${user.tai_khoan}')" title="Thu hồi key" style="padding: 6px 12px; font-size: 12px; white-space: nowrap;">🔑 Thu hồi</button>\`
+              actions += \`<button class="action-btn btn-revoke" onclick="revokeKey('\${safeTaiKhoan}')" title="Thu hồi key" style="padding: 6px 12px; font-size: 12px; white-space: nowrap;">🔑 Thu hồi</button>\`
             }
-            actions += \`<button class="action-btn btn-rebind" onclick="allowRebind('\${user.tai_khoan}')" title="Cho phép đổi máy" style="padding: 6px 12px; font-size: 12px; white-space: nowrap;">🔄 Đổi máy</button>\`
+            actions += \`<button class="action-btn btn-rebind" onclick="allowRebind('\${safeTaiKhoan}')" title="Cho phép đổi máy" style="padding: 6px 12px; font-size: 12px; white-space: nowrap;">🔄 Đổi máy</button>\`
           } else if (user.trang_thai === 'CHAN') {
             actions += \`<button class="action-btn btn-unblock" onclick="updateUserStatus('\${user.id}', 'CHO_PHEP')" style="padding: 6px 12px; font-size: 12px; white-space: nowrap;">🔓 Bỏ Chặn</button>\`
           }
           actions += \`</div>\`
           
-            // Debug: Log password cell HTML for first user
-            if (index === 0) {
-              console.log('Password cell HTML (first 200 chars):', passwordCell.substring(0, 200))
-            }
             
-            const versionDisplay = user.version && user.version !== '-' 
-              ? \`<span style="display: inline-block; padding: 4px 10px; background: linear-gradient(135deg, #0ea5e9 0%, #0284c7 100%); color: white; border-radius: 6px; font-size: 12px; font-weight: 600; font-family: monospace; box-shadow: 0 2px 4px rgba(14, 165, 233, 0.3);">\${user.version}</span>\`
+            const versionDisplay = user.version && user.version !== '-'
+              ? \`<span style="display: inline-block; padding: 4px 10px; background: linear-gradient(135deg, #0ea5e9 0%, #0284c7 100%); color: white; border-radius: 6px; font-size: 12px; font-weight: 600; font-family: monospace; box-shadow: 0 2px 4px rgba(14, 165, 233, 0.3);">\${safeVersion}</span>\`
               : \`<span style="color: #64748b; font-size: 12px;">-</span>\`
             
             return \`
               <tr>
-                <td><strong>\${user.tai_khoan}</strong></td>
+                <td><strong>\${safeTaiKhoan}</strong></td>
                 <td>\${passwordCell}</td>
                 <td>\${machineIdCell}</td>
                 <td><span class="status-badge \${statusClass}">\${statusText}</span></td>
@@ -2249,11 +2223,6 @@ function serveDashboard(): Response {
           }
         }).join('')
         
-        // Debug: Log first row HTML to verify password cell is rendered
-        const firstRowMatch = renderedHTML.match(/<tr>[\s\S]{1,500}/)
-        if (firstRowMatch) {
-          console.log('🔍 FIRST ROW HTML (first 500 chars):', firstRowMatch[0].substring(0, 500))
-        }
         
         tbody.innerHTML = renderedHTML
       } catch (error) {
@@ -2286,8 +2255,6 @@ function serveDashboard(): Response {
       if (!confirm(\`Bạn chắc chắn muốn thay đổi trạng thái người dùng?\`)) return
       
       try {
-        console.log('Updating user status:', { userId, status })
-        
         const response = await fetch(\`\${API_BASE}/api/admin/users/\${userId}/update\`, {
           method: 'POST',
           headers: { 
@@ -2306,8 +2273,7 @@ function serveDashboard(): Response {
         }
         
         const result = await response.json()
-        console.log('Update status response:', result)
-        
+
         if (!result.ok) {
           const errorMsg = result.error || result.message || 'Cập nhật thất bại'
           console.error('Update status failed:', errorMsg, result)
@@ -2326,7 +2292,6 @@ function serveDashboard(): Response {
         
         // Force reload users list
         await loadUsers()
-        console.log('Users list reloaded after status update')
       } catch (error) {
         console.error('Error updating user status:', error)
         showError(error.message)
@@ -2625,9 +2590,7 @@ function serveDashboard(): Response {
         if (matKhau) {
           body.mat_khau = matKhau
         }
-        
-        console.log('Saving user edit:', { userId, body })
-        
+
         const response = await fetch(\`\${API_BASE}/api/admin/users/\${userId}/edit\`, {
           method: 'POST',
           headers: { 
@@ -2646,11 +2609,10 @@ function serveDashboard(): Response {
         }
         
         const result = await response.json()
-        console.log('Edit user response:', result)
-        
+
         if (!result.ok) {
           const errorMsg = result.error || result.message || 'Cập nhật thất bại'
-          console.error('Edit user failed:', errorMsg, result)
+          console.error('Edit user failed:', errorMsg)
           throw new Error(errorMsg)
         }
         
@@ -2658,7 +2620,6 @@ function serveDashboard(): Response {
         closeEditModal()
         // Force reload users list
         await loadUsers()
-        console.log('Users list reloaded after edit')
       } catch (error) {
         console.error('Error saving user edit:', error)
         showError(error.message)
@@ -2753,7 +2714,12 @@ function serveDashboard(): Response {
     }
     
     function showError(message) {
-      document.getElementById('errorContainer').innerHTML = \`<div class="error">Lỗi: \${message}</div>\`
+      const container = document.getElementById('errorContainer')
+      const div = document.createElement('div')
+      div.className = 'error'
+      div.textContent = 'Lỗi: ' + message
+      container.innerHTML = ''
+      container.appendChild(div)
     }
     
     function clearError() { document.getElementById('errorContainer').innerHTML = '' }
@@ -3060,21 +3026,21 @@ function serveDashboard(): Response {
         }
         
         tbody.innerHTML = result.events.map(event => {
-          const severityClass = \`badge-\${event.severity}\`
-          const severityText = severityLabels[event.severity] || event.severity.toUpperCase()
-          const eventTypeText = eventTypeLabels[event.event_type] || event.event_type
+          const severityClass = \`badge-\${escapeHtml(event.severity)}\`
+          const severityText = severityLabels[event.severity] || escapeHtml(event.severity.toUpperCase())
+          const eventTypeText = eventTypeLabels[event.event_type] || escapeHtml(event.event_type)
           const hasDetails = event.details && event.details !== '{}' && event.details.trim() !== ''
-          const detailsEscaped = hasDetails ? event.details.replace(/"/g, '&quot;').replace(/'/g, "&#39;") : ''
-          
+          const detailsEscaped = hasDetails ? escapeHtml(event.details) : ''
+
           return \`
             <tr>
               <td>\${formatDateTime(event.timestamp)}</td>
               <td>\${eventTypeText}</td>
               <td><span class="badge \${severityClass}">\${severityText}</span></td>
-              <td>\${event.message}</td>
-              <td><code>\${event.machine_id.substring(0, 20)}...</code></td>
-              <td>\${event.username || '-'}</td>
-              <td>\${event.app_version || '-'}</td>
+              <td>\${escapeHtml(event.message)}</td>
+              <td><code>\${escapeHtml((event.machine_id || '').substring(0, 20))}...</code></td>
+              <td>\${escapeHtml(event.username) || '-'}</td>
+              <td>\${escapeHtml(event.app_version) || '-'}</td>
               <td>\${hasDetails ? \`<button class="action-btn btn-edit" onclick="showEventDetails('\${detailsEscaped}')" style="padding: 4px 8px; font-size: 11px;">📋 Xem</button>\` : '-'}</td>
             </tr>
           \`
@@ -3444,9 +3410,7 @@ function serveDashboard(): Response {
         })
         if (status) params.append('status', status)
         if (search) params.append('search', search)
-        
-        console.log('Loading users with filter:', { status, search, page: currentUsersPage, pageSize: currentUsersPageSize })
-        
+
         const response = await fetch(\`\${API_BASE}/api/admin/users?\${params}\`, {
           headers: { 
             'Authorization': \`Bearer \${ADMIN_TOKEN}\`
@@ -3462,8 +3426,7 @@ function serveDashboard(): Response {
         }
         
         const result = await response.json()
-        console.log('Load users response:', { ok: result.ok, userCount: result.users?.length, total: result.total })
-        
+
         if (!result.ok) throw new Error(result.error)
         
         currentUsersTotal = result.total || 0
@@ -3474,23 +3437,25 @@ function serveDashboard(): Response {
           tbody.innerHTML = '<tr><td colspan="10" class="empty-state">Không tìm thấy người dùng nào</td></tr>'
           return
         }
-        
-        console.log('Rendering', result.users.length, 'users')
+
         tbody.innerHTML = result.users.map(user => {
-          const statusClass = \`status-\${user.trang_thai.toLowerCase()}\`
-          const statusText = statusLabels[user.trang_thai] || user.trang_thai
+          const safeTaiKhoan = escapeHtml(user.tai_khoan)
+          const safeMaMay = escapeHtml(user.ma_may)
+          const safeVersion = escapeHtml(user.version)
+          const statusClass = \`status-\${escapeHtml(user.trang_thai.toLowerCase())}\`
+          const statusText = statusLabels[user.trang_thai] || escapeHtml(user.trang_thai)
           const createdDate = new Date(user.thoi_gian_tao).toLocaleString('vi-VN')
           const lastActive = user.last_active ? formatDateTime(user.last_active) : 'Chưa có'
           const machineIdCell = user.ma_may
-            ? \`<span class="clickable" title="Xem chi tiết" onclick="openUserDetail('\${user.id}')"><code>\${user.ma_may.substring(0, 24)}...</code></span>\`
+            ? \`<span class="clickable" title="Xem chi tiết" onclick="openUserDetail('\${user.id}')"><code>\${safeMaMay.substring(0, 24)}...</code></span>\`
             : '<span style="color: #64748b;">-</span>'
           const activationKey = user.key_kich_hoat
-            ? \`<span class="clickable" title="Xem chi tiết key" onclick="openUserDetail('\${user.id}')"><code style="font-size: 11px;">\${user.key_kich_hoat.substring(0, 20)}...</code></span>\`
+            ? \`<span class="clickable" title="Xem chi tiết key" onclick="openUserDetail('\${user.id}')"><code style="font-size: 11px;">\${escapeHtml(user.key_kich_hoat.substring(0, 20))}...</code></span>\`
             : '<span style="color: #64748b;">-</span>'
           const machineCount = user.machine_count || 0
-          const multipleMachinesWarning = machineCount > 1 ? \`<span style="color: #f97316; font-size: 12px; cursor: pointer;" onclick="showUserMachines('\${user.tai_khoan}')" title="⚠️ Click để xem chi tiết \${machineCount} máy">⚠️ \${machineCount}</span>\` : (machineCount > 0 ? \`<span style="cursor: pointer;" onclick="showUserMachines('\${user.tai_khoan}')" title="Click để xem chi tiết">\${machineCount}</span>\` : '0')
+          const multipleMachinesWarning = machineCount > 1 ? \`<span style="color: #f97316; font-size: 12px; cursor: pointer;" onclick="showUserMachines('\${safeTaiKhoan}')" title="⚠️ Click để xem chi tiết \${machineCount} máy">⚠️ \${machineCount}</span>\` : (machineCount > 0 ? \`<span style="cursor: pointer;" onclick="showUserMachines('\${safeTaiKhoan}')" title="Click để xem chi tiết">\${machineCount}</span>\` : '0')
           const isSelected = selectedUserIds.has(user.id)
-          
+
           // V2: Get key_status
           const keyStatus = user.key_status || 'PENDING'
           const keyStatusLabels = {
@@ -3499,8 +3464,8 @@ function serveDashboard(): Response {
             'LOCKED': '🔒 Đã khóa',
             'REVOKED': '🚫 Đã thu hồi'
           }
-          const keyStatusText = keyStatusLabels[keyStatus] || keyStatus
-          
+          const keyStatusText = keyStatusLabels[keyStatus] || escapeHtml(keyStatus)
+
           let actions = \`<button class="action-btn btn-edit" onclick="openEditModal('\${user.id}')">✏️ Sửa</button>\`
           if (user.trang_thai === 'CHO_DUYET') {
             actions += \`<button class="action-btn btn-approve" onclick="updateUserStatus('\${user.id}', 'CHO_PHEP')">✅ Duyệt</button>
@@ -3509,20 +3474,20 @@ function serveDashboard(): Response {
             actions += \`<button class="action-btn btn-block" onclick="updateUserStatus('\${user.id}', 'CHAN')">🚫 Chặn</button>\`
             // V2: Key management actions
             if (keyStatus === 'LOCKED') {
-              actions += \`<button class="action-btn btn-unlock" onclick="unlockKey('\${user.tai_khoan}')" title="Mở khóa key">🔓 Mở khóa</button>\`
+              actions += \`<button class="action-btn btn-unlock" onclick="unlockKey('\${safeTaiKhoan}')" title="Mở khóa key">🔓 Mở khóa</button>\`
             }
             if (keyStatus === 'ACTIVE' || keyStatus === 'LOCKED') {
-              actions += \`<button class="action-btn btn-revoke" onclick="revokeKey('\${user.tai_khoan}')" title="Thu hồi key">🔑 Thu hồi</button>\`
+              actions += \`<button class="action-btn btn-revoke" onclick="revokeKey('\${safeTaiKhoan}')" title="Thu hồi key">🔑 Thu hồi</button>\`
             }
-            actions += \`<button class="action-btn btn-rebind" onclick="allowRebind('\${user.tai_khoan}')" title="Cho phép đổi máy">🔄 Đổi máy</button>\`
+            actions += \`<button class="action-btn btn-rebind" onclick="allowRebind('\${safeTaiKhoan}')" title="Cho phép đổi máy">🔄 Đổi máy</button>\`
           } else if (user.trang_thai === 'CHAN') {
             actions += \`<button class="action-btn btn-unblock" onclick="updateUserStatus('\${user.id}', 'CHO_PHEP')">🔓 Bỏ Chặn</button>\`
           }
-          
+
           return \`
             <tr>
               <td><input type="checkbox" data-user-id="\${user.id}" \${isSelected ? 'checked' : ''} onchange="toggleUserSelection('\${user.id}')"></td>
-              <td><strong>\${user.tai_khoan}</strong></td>
+              <td><strong>\${safeTaiKhoan}</strong></td>
               <td>\${machineIdCell}</td>
               <td><span class="status-badge \${statusClass}">\${statusText}</span></td>
               <td>\${multipleMachinesWarning}</td>
@@ -3530,7 +3495,7 @@ function serveDashboard(): Response {
               <td><span class="status-badge" style="font-size: 11px;">\${keyStatusText}</span></td>
               <td>\${lastActive}</td>
               <td>\${createdDate}</td>
-              <td><code style="font-size: 11px; color: #0ea5e9;">\${user.version || '-'}</code></td>
+              <td><code style="font-size: 11px; color: #0ea5e9;">\${safeVersion || '-'}</code></td>
               <td>\${actions}</td>
             </tr>
           \`
@@ -3590,19 +3555,19 @@ function serveDashboard(): Response {
         }
         
         tbody.innerHTML = result.activities.map(activity => {
-          const actionText = actionTypeLabels[activity.action_type] || activity.action_type
-          const oldValueStr = activity.old_value ? JSON.stringify(activity.old_value, null, 2).substring(0, 100) : '-'
-          const newValueStr = activity.new_value ? JSON.stringify(activity.new_value, null, 2).substring(0, 100) : '-'
-          
+          const actionText = actionTypeLabels[activity.action_type] || escapeHtml(activity.action_type)
+          const oldValueStr = activity.old_value ? escapeHtml(JSON.stringify(activity.old_value, null, 2).substring(0, 100)) : '-'
+          const newValueStr = activity.new_value ? escapeHtml(JSON.stringify(activity.new_value, null, 2).substring(0, 100)) : '-'
+
           return \`
             <tr>
               <td>\${formatDateTime(activity.timestamp)}</td>
               <td><strong>\${actionText}</strong></td>
-              <td>\${activity.target_type}</td>
-              <td>\${activity.target_name || activity.target_id || '-'}</td>
+              <td>\${escapeHtml(activity.target_type)}</td>
+              <td>\${escapeHtml(activity.target_name || activity.target_id) || '-'}</td>
               <td><code style="font-size: 11px;">\${oldValueStr}</code></td>
               <td><code style="font-size: 11px;">\${newValueStr}</code></td>
-              <td>\${activity.admin_ip || '-'}</td>
+              <td>\${escapeHtml(activity.admin_ip) || '-'}</td>
             </tr>
           \`
         }).join('')
@@ -3776,14 +3741,10 @@ function serveDashboard(): Response {
       localStorage.setItem('webhookUrl', webhookUrl)
       localStorage.setItem('alertThreshold', alertThreshold.toString())
       localStorage.setItem('alertFrequency', alertFrequency)
-      
-      // In production, these should be saved to server/database
-      console.log('Alert settings saved:', { emailEnabled, webhookEnabled, alertEmail, webhookUrl, alertThreshold, alertFrequency })
     }
     
     function saveEventTypeAlert(eventType, enabled) {
       localStorage.setItem(\`alert_\${eventType}\`, enabled.toString())
-      console.log(\`Event type alert saved: \${eventType} = \${enabled}\`)
     }
     
     // Version Policy Management

@@ -61,15 +61,18 @@ async function hashPassword(password: string): Promise<{ hash: string; salt: str
 }
 
 function isPasswordHashed(password: string): boolean {
+  // Hashed passwords are stored as "hash:salt" format
+  // hash = base64 of 32 bytes (PBKDF2-SHA256) = 44 chars
+  // salt = base64 of 16 bytes = 24 chars
+  // Total = 44 + 1 + 24 = 69 chars
+  if (!password || password.length !== 69) return false
+
   const parts = password.split(':')
   if (parts.length !== 2) return false
-  try {
-    atob(parts[0])
-    atob(parts[1])
-    return true
-  } catch {
-    return false
-  }
+  if (parts[0].length !== 44 || parts[1].length !== 24) return false
+
+  const base64Regex = /^[A-Za-z0-9+/]+=*$/
+  return base64Regex.test(parts[0]) && base64Regex.test(parts[1])
 }
 
 interface Env {
@@ -820,7 +823,28 @@ export async function handleLogin(request: Request, env: Env): Promise<Response>
       return json({ ok: false, error: 'Key đã bị thu hồi hoặc khóa.' })
     }
 
-    // Check machineId
+    // Verify password FIRST — trước khi check machineId để tránh DoS attack
+    // (attacker chỉ cần biết username → spam sai machineId → auto-block nạn nhân)
+    const isHashed = isPasswordHashed(row.mat_khau)
+    let passwordValid = false
+
+    if (isHashed) {
+      const [storedHash, storedSalt] = row.mat_khau.split(':')
+      passwordValid = await verifyPassword(mat_khau, storedHash, storedSalt)
+    } else {
+      // Plaintext comparison (không mã hóa mật khẩu user đã đặt)
+      passwordValid = row.mat_khau === mat_khau
+    }
+
+    if (!passwordValid) {
+      await writeAuditLog(env.DB, tai_khoan, 'LOGIN', 'warning', ipAddress, ma_may, {
+        success: false,
+        reason: 'Invalid password',
+      })
+      return json({ ok: false, error: 'Tài khoản hoặc mật khẩu không đúng.' })
+    }
+
+    // Check machineId — chỉ sau khi password đã xác thực đúng
     if (row.ma_may !== ma_may) {
       // V2: Report tamper event
       await reportTamperEvent(env.DB, tai_khoan, ma_may, ipAddress, {
@@ -849,31 +873,10 @@ export async function handleLogin(request: Request, env: Env): Promise<Response>
           ok: false,
           action: 'SUSPICIOUS',
           error: 'Cảnh báo: Phát hiện can thiệp hệ thống. Tài khoản này chỉ được phép dùng trên 1 máy.',
-          tamperCount: tamperCheck.tamperCount,
         })
       }
 
       return json({ ok: false, error: 'Tài khoản này chỉ được phép dùng trên 1 máy.' })
-    }
-
-    // Verify password
-    const isHashed = isPasswordHashed(row.mat_khau)
-    let passwordValid = false
-
-    if (isHashed) {
-      const [storedHash, storedSalt] = row.mat_khau.split(':')
-      passwordValid = await verifyPassword(mat_khau, storedHash, storedSalt)
-    } else {
-      // Plaintext comparison (không mã hóa mật khẩu user đã đặt)
-      passwordValid = row.mat_khau === mat_khau
-    }
-
-    if (!passwordValid) {
-      await writeAuditLog(env.DB, tai_khoan, 'LOGIN', 'warning', ipAddress, ma_may, {
-        success: false,
-        reason: 'Invalid password',
-      })
-      return json({ ok: false, error: 'Tài khoản hoặc mật khẩu không đúng.' })
     }
 
     // Generate new tokens

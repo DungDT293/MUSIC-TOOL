@@ -18,10 +18,19 @@ class VideoJobManager {
     this.jobs.set(requestId, proc)
 
     // Auto cleanup khi process kết thúc
+    // IMPORTANT: Chỉ xóa job khỏi Map, KHÔNG xóa cancelledJobs flag ở đây.
+    // cancelledJobs flag phải được giữ lại để app's close handler (trong normalizeVideo,
+    // muteVideoAudio, v.v.) có thể check isCancelled() SAU KHI process đã exit.
+    // Flag sẽ tự bị evict khi vượt MAX_CANCELLED_HISTORY hoặc khi clearCancelled() được gọi.
+    //
+    // IMPORTANT: Chỉ xóa khỏi Map nếu proc hiện tại vẫn là proc đã đăng ký.
+    // Khi cùng requestId được dùng cho nhiều process tuần tự (ví dụ GPU→CPU fallback),
+    // close handler cũ có thể fire SAU KHI process mới đã được register → sẽ xóa nhầm
+    // process mới nếu không guard bằng identity check.
     proc.on('close', () => {
-      this.jobs.delete(requestId)
-      // Cleanup cancelled flag after job finishes — safe to remove now
-      this.cancelledJobs.delete(requestId)
+      if (this.jobs.get(requestId) === proc) {
+        this.jobs.delete(requestId)
+      }
     })
   }
 

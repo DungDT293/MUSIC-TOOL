@@ -48,15 +48,6 @@ function sanitizeFileName(fileName: string): string {
   return fileName.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_').trim()
 }
 
-function computeOverallPercent(totalFiles: number, currentFileIndex: number, currentFilePercent: number): number {
-  if (totalFiles <= 0) return 0
-  const filesDoneBefore = Math.max(0, currentFileIndex - 1)
-  const perFileWeight = 100 / totalFiles
-  const donePercent = filesDoneBefore * perFileWeight
-  const currentContribution = (Math.max(0, Math.min(100, currentFilePercent)) / 100) * perFileWeight
-  return Math.min(100, donePercent + currentContribution)
-}
-
 /**
  * Cắt nhiều video tuần tự dựa trên engine single-cut.
  */
@@ -366,13 +357,13 @@ export async function splitManyVideosSimple(
       completedFiles.add(inputPath)
       perFileProgress.delete(inputPath)
       
-      // Check if cancelled
-      if (error?.message?.includes('hủy') || error?.message?.includes('dừng') || videoJobManager.isCancelled(requestId) || options?.signal?.aborted) {
+      // Check if cancelled — dùng isCancelled/signal thay vì string matching trên error message
+      // (Vietnamese string matching dễ vỡ nếu thay đổi text ở nơi khác)
+      if (videoJobManager.isCancelled(requestId) || options?.signal?.aborted) {
         // Cancel all remaining child jobs
         for (const childId of childRequestIds) {
           videoJobManager.cancelJob(childId)
         }
-        videoJobManager.cancelJob(requestId) // Cleanup parent
         throw new Error('Đã dừng bởi người dùng')
       }
       
@@ -414,8 +405,11 @@ export async function splitManyVideosSimple(
 
   const success = failCount === 0
   
-  // Cleanup parent job
-  videoJobManager.cancelJob(requestId)
+  // Cleanup parent job — chỉ xóa khỏi jobs Map, KHÔNG gọi cancelJob()
+  // cancelJob() sẽ đánh dấu requestId vào cancelledJobs set → poisoning cancelled state
+  // cho các lần check isCancelled() sau đó.
+  // Dùng clearCancelled() nếu cần xóa cancelled flag từ trước đó.
+  videoJobManager.clearCancelled(requestId)
 
   // TODO: Ensure all arrays are always defined to prevent "Cannot read properties of undefined (reading 'length')" in UI
   const result: SplitManySimpleResult = {

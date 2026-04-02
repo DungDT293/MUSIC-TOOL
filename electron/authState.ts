@@ -12,6 +12,7 @@ import {
   readEncryptedAuthState,
   writeEncryptedAuthState,
   migrateFromPlaintext,
+  hasEncryptedAuthFile,
 } from '../backend/auth/encryptedAuthStore'
 
 // =========================
@@ -165,10 +166,17 @@ export async function getOrInitAuthState(): Promise<InternalAuthState> {
         return authState
       }
 
+      // Phân biệt 2 trường hợp:
+      // 1. File .enc tồn tại nhưng decrypt fail (machineId đổi do VPN/cleanup/Win11)
+      //    → status: 'unregistered' với message hướng dẫn đăng NHẬP lại
+      // 2. Chưa có file .enc → thực sự chưa đăng ký lần nào
+      const fileExists = hasEncryptedAuthFile()
       authState = {
         status: 'unregistered',
         machineId: currentMachineId,
-        message: 'Máy này chưa đăng ký tài khoản sử dụng.',
+        message: fileExists
+          ? 'Phiên đăng nhập đã hết hạn hoặc thông tin máy thay đổi. Vui lòng đăng nhập lại.'
+          : 'Máy này chưa đăng ký tài khoản sử dụng.',
       }
       return authState
     } finally {

@@ -164,9 +164,14 @@ async function runConcat(
   const TIMEOUT_MS = 60 * 60 * 1000 // 1 hour
   
   return new Promise<void>((resolve, reject) => {
+    // safeResolve/safeReject guard — tránh double-resolve/reject khi nhiều nguồn (interval, stderr, close, error, timeout) đều fire
+    let settled = false
+    const safeResolve = () => { if (!settled) { settled = true; resolve() } }
+    const safeReject = (err: Error) => { if (!settled) { settled = true; reject(err) } }
+
     // Check cancel trước khi bắt đầu
     if (requestId && videoJobManager.isCancelled(requestId)) {
-      reject(new Error('Đã dừng bởi người dùng'))
+      safeReject(new Error('Đã dừng bởi người dùng'))
       return
     }
     
@@ -217,15 +222,15 @@ async function runConcat(
       try {
         ffmpeg.kill('SIGKILL')
       } catch {}
-      reject(new Error(`FFmpeg concat timed out after ${TIMEOUT_MS / 1000}s`))
+      safeReject(new Error(`FFmpeg concat timed out after ${TIMEOUT_MS / 1000}s`))
     }, TIMEOUT_MS)
-    
+
     let stderr = ''
     let lastProgressTime = 0
     let lastSpeedX: number | null = null
     let dropWarned = false
     const progressStartTime = Date.now()
-    
+
     let cancelledByInterval = false
 
     // Interval check cancellation (mỗi 500ms) để đảm bảo phản hồi nhanh
@@ -249,7 +254,7 @@ async function runConcat(
             }
           }, SIGKILL_DELAY_MS)
         }
-        reject(new Error('Đã dừng bởi người dùng'))
+        safeReject(new Error('Đã dừng bởi người dùng'))
       }
     }, CANCEL_CHECK_INTERVAL_MS)
 
@@ -274,12 +279,17 @@ async function runConcat(
             }
           }, 1000)
         }
-        reject(new Error('Đã dừng bởi người dùng'))
+        safeReject(new Error('Đã dừng bởi người dùng'))
         return
       }
 
       const chunk = data.toString('utf-8')
       stderr += chunk
+      // Cap stderr — chỉ giữ 80 dòng cuối để tránh OOM với video dài
+      const lines = stderr.split('\n')
+      if (lines.length > 80) {
+        stderr = lines.slice(-80).join('\n')
+      }
       
       // Parse progress từ time= và speed=
       if (chunk.includes('time=') && onProgress) {
@@ -358,19 +368,19 @@ async function runConcat(
     ffmpeg.on('error', (error) => {
       clearTimeout(timeoutId)
       clearInterval(cancelCheckInterval)
-      reject(new Error(`FFmpeg concat error: ${error.message}`))
+      safeReject(new Error(`FFmpeg concat error: ${error.message}`))
     })
     
     ffmpeg.on('close', async (code) => {
       clearTimeout(timeoutId)
       clearInterval(cancelCheckInterval)
-      
+
       // Nếu job đã bị cancel, reject
       if (requestId && videoJobManager.isCancelled(requestId)) {
-        reject(new Error('Đã dừng bởi người dùng'))
+        safeReject(new Error('Đã dừng bởi người dùng'))
         return
       }
-      
+
       if (code === 0 && fs.existsSync(outputPath)) {
         const stats = fs.statSync(outputPath)
         if (stats.size === 0) {
@@ -378,13 +388,13 @@ async function runConcat(
             console.log(`[mergeVideosSimple] Retry concat (empty file), attempt ${retryCount + 1}/${MAX_RETRIES}`)
             try {
             await runConcat(concatListPath, outputPath, mute, onProgress, totalDurationSec, retryCount + 1, requestId)
-              resolve()
+              safeResolve()
             } catch (retryError) {
-              reject(new Error(`FFmpeg concat produced empty file after retry: ${retryError}`))
+              safeReject(new Error(`FFmpeg concat produced empty file after retry: ${retryError}`))
             }
             return
           }
-          reject(new Error('FFmpeg concat produced empty file'))
+          safeReject(new Error('FFmpeg concat produced empty file'))
           return
         }
         // Đảm bảo emit progress 100% khi hoàn thành (tránh progress đứng ở ~99%)
@@ -397,20 +407,20 @@ async function runConcat(
             etaSec: 0,
           })
         }
-        resolve()
+        safeResolve()
       } else {
         // C3: Retry on failure
         if (retryCount < MAX_RETRIES) {
           console.log(`[mergeVideosSimple] Retry concat (code ${code}), attempt ${retryCount + 1}/${MAX_RETRIES}`)
           try {
             await runConcat(concatListPath, outputPath, mute, onProgress, totalDurationSec, retryCount + 1, requestId)
-            resolve()
+            safeResolve()
           } catch (retryError) {
-            reject(new Error(`FFmpeg concat failed with code ${code} after retry: ${stderr.slice(0, 500)}`))
+            safeReject(new Error(`FFmpeg concat failed with code ${code} after retry: ${stderr.slice(0, 500)}`))
           }
           return
         }
-        reject(new Error(`FFmpeg concat failed with code ${code}: ${stderr.slice(0, 500)}`))
+        safeReject(new Error(`FFmpeg concat failed with code ${code}: ${stderr.slice(0, 500)}`))
       }
     })
   })
@@ -433,6 +443,11 @@ async function runConcatWithCut(
   const TIMEOUT_MS = 60 * 60 * 1000 // 1 hour
   
   return new Promise<void>((resolve, reject) => {
+    // safeResolve/safeReject guard — tránh double-resolve/reject khi nhiều nguồn (interval, stderr, close, error, timeout) đều fire
+    let settled = false
+    const safeResolve = () => { if (!settled) { settled = true; resolve() } }
+    const safeReject = (err: Error) => { if (!settled) { settled = true; reject(err) } }
+
     // D3: Gộp concat + cut thành 1 lệnh
     // Bug #24 fix: -y must come BEFORE outputPath, not after
     const args = retryCount > 0
@@ -482,9 +497,9 @@ async function runConcatWithCut(
       try {
         ffmpeg.kill('SIGKILL')
       } catch {}
-      reject(new Error(`FFmpeg concat+cut timed out after ${TIMEOUT_MS / 1000}s`))
+      safeReject(new Error(`FFmpeg concat+cut timed out after ${TIMEOUT_MS / 1000}s`))
     }, TIMEOUT_MS)
-    
+
     let stderr = ''
     let lastProgressTime = 0
     let lastSpeedX: number | null = null
@@ -509,10 +524,10 @@ async function runConcatWithCut(
             }
           }, SIGKILL_DELAY_MS)
         }
-        reject(new Error('Đã dừng bởi người dùng'))
+        safeReject(new Error('Đã dừng bởi người dùng'))
       }
     }, CANCEL_CHECK_INTERVAL_MS)
-    
+
     ffmpeg.stderr?.on('data', (data: Buffer) => {
       // Check nếu job đã bị cancel - kill process ngay lập tức
       // Guard: skip nếu interval đã xử lý để tránh double-reject
@@ -534,12 +549,17 @@ async function runConcatWithCut(
             }
           }, 1000)
         }
-        reject(new Error('Đã dừng bởi người dùng'))
+        safeReject(new Error('Đã dừng bởi người dùng'))
         return
       }
 
       const chunk = data.toString('utf-8')
       stderr += chunk
+      // Cap stderr — chỉ giữ 80 dòng cuối để tránh OOM với video dài
+      const lines = stderr.split('\n')
+      if (lines.length > 80) {
+        stderr = lines.slice(-80).join('\n')
+      }
       
       // D3: Progress từ time= - parse chính xác hơn
       if (chunk.includes('time=') && onProgress) {
@@ -600,19 +620,19 @@ async function runConcatWithCut(
     ffmpeg.on('error', (error) => {
       clearTimeout(timeoutId)
       clearInterval(cancelCheckInterval)
-      reject(new Error(`FFmpeg concat+cut error: ${error.message}`))
+      safeReject(new Error(`FFmpeg concat+cut error: ${error.message}`))
     })
-    
+
     ffmpeg.on('close', async (code) => {
       clearTimeout(timeoutId)
       clearInterval(cancelCheckInterval)
-      
+
       // Nếu job đã bị cancel, reject
       if (requestId && videoJobManager.isCancelled(requestId)) {
-        reject(new Error('Đã dừng bởi người dùng'))
+        safeReject(new Error('Đã dừng bởi người dùng'))
         return
       }
-      
+
       if (code === 0 && fs.existsSync(outputPath)) {
         const stats = fs.statSync(outputPath)
         if (stats.size === 0) {
@@ -620,13 +640,13 @@ async function runConcatWithCut(
             console.log(`[mergeVideosSimple] Retry concat+cut (empty file), attempt ${retryCount + 1}/${MAX_RETRIES}`)
             try {
               await runConcatWithCut(concatListPath, outputPath, targetDurationSec, mute, onProgress, retryCount + 1, requestId)
-              resolve()
+              safeResolve()
             } catch (retryError) {
-              reject(new Error(`FFmpeg concat+cut produced empty file after retry: ${retryError}`))
+              safeReject(new Error(`FFmpeg concat+cut produced empty file after retry: ${retryError}`))
             }
             return
           }
-          reject(new Error('FFmpeg concat+cut produced empty file'))
+          safeReject(new Error('FFmpeg concat+cut produced empty file'))
           return
         }
         // Đảm bảo emit progress 100% khi hoàn thành (tránh progress đứng ở ~99%)
@@ -638,20 +658,20 @@ async function runConcatWithCut(
             etaSec: 0,
           })
         }
-        resolve()
+        safeResolve()
       } else {
         // D3: Retry on failure
         if (retryCount < MAX_RETRIES) {
           console.log(`[mergeVideosSimple] Retry concat+cut (code ${code}), attempt ${retryCount + 1}/${MAX_RETRIES}`)
           try {
             await runConcatWithCut(concatListPath, outputPath, targetDurationSec, mute, onProgress, retryCount + 1, requestId)
-            resolve()
+            safeResolve()
           } catch (retryError) {
-            reject(new Error(`FFmpeg concat+cut failed with code ${code} after retry: ${stderr.slice(0, 500)}`))
+            safeReject(new Error(`FFmpeg concat+cut failed with code ${code} after retry: ${stderr.slice(0, 500)}`))
           }
           return
         }
-        reject(new Error(`FFmpeg concat+cut failed with code ${code}: ${stderr.slice(0, 500)}`))
+        safeReject(new Error(`FFmpeg concat+cut failed with code ${code}: ${stderr.slice(0, 500)}`))
       }
     })
   })
@@ -726,9 +746,13 @@ async function runCut(
       safeReject(new Error(`FFmpeg cut timed out after ${TIMEOUT_MS / 1000}s`))
     }, TIMEOUT_MS)
 
+    let cancelledByInterval = false // Guard double-kill/double-reject
+
     // Interval check cancellation (mỗi 500ms) để đảm bảo phản hồi nhanh
     const cancelCheckInterval = setInterval(() => {
       if (requestId && videoJobManager.isCancelled(requestId)) {
+        if (cancelledByInterval) return
+        cancelledByInterval = true
         clearInterval(cancelCheckInterval)
         clearTimeout(timeoutId) // Also clear timeout when cancelling
         console.log(`[runCut] Job ${requestId} cancelled (interval check), killing FFmpeg process`)
@@ -750,7 +774,9 @@ async function runCut(
 
     ffmpeg.stderr?.on('data', (data: Buffer) => {
       // Check nếu job đã bị cancel - kill process ngay lập tức
+      if (cancelledByInterval) return
       if (requestId && videoJobManager.isCancelled(requestId)) {
+        cancelledByInterval = true
         clearInterval(cancelCheckInterval)
         clearTimeout(timeoutId) // Also clear timeout when cancelling
         console.log(`[runCut] Job ${requestId} cancelled, killing FFmpeg process`)
@@ -771,12 +797,12 @@ async function runCut(
       }
 
       const chunk = data.toString('utf-8')
-      // Cap stderrBuffer — chỉ giữ 80 dòng cuối để tránh OOM
+      // Append trước, cap sau — đảm bảo mọi chunk đều bị giới hạn
+      stderr += chunk
       const lines = stderr.split('\n')
       if (lines.length > 80) {
         stderr = lines.slice(-80).join('\n')
       }
-      stderr += chunk
       
       // Parse speed từ chunk
       const speedMatch = chunk.match(/speed=\s*([0-9.]+)x/i)

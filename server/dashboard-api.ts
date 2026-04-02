@@ -61,7 +61,18 @@ async function hashPassword(password: string, salt?: Uint8Array): Promise<{ hash
  * Hashed passwords are stored as "hash:salt" format
  */
 function isPasswordHashed(password: string): boolean {
-  return password.includes(':') && password.split(':').length === 2
+  // Hashed passwords are stored as "hash:salt" format
+  // hash = base64 of 32 bytes (PBKDF2-SHA256) = 44 chars
+  // salt = base64 of 16 bytes = 24 chars
+  // Total = 44 + 1 + 24 = 69 chars
+  if (!password || password.length !== 69) return false
+
+  const parts = password.split(':')
+  if (parts.length !== 2) return false
+  if (parts[0].length !== 44 || parts[1].length !== 24) return false
+
+  const base64Regex = /^[A-Za-z0-9+/]+=*$/
+  return base64Regex.test(parts[0]) && base64Regex.test(parts[1])
 }
 
 interface Env {
@@ -154,6 +165,29 @@ export async function getEvents(request: Request, env: Env): Promise<Response> {
       params.push(username)
     }
 
+    // Count total matching records (without LIMIT/OFFSET)
+    let countQuery = 'SELECT COUNT(*) as total FROM security_events WHERE 1=1'
+    const countParams: any[] = []
+
+    if (severity) {
+      countQuery += ' AND severity = ?'
+      countParams.push(severity)
+    }
+    if (eventType) {
+      countQuery += ' AND event_type = ?'
+      countParams.push(eventType)
+    }
+    if (machineId) {
+      countQuery += ' AND machine_id = ?'
+      countParams.push(machineId)
+    }
+    if (username) {
+      countQuery += ' AND username = ?'
+      countParams.push(username)
+    }
+
+    const countResult = await env.DB.prepare(countQuery).bind(...countParams).first<{ total: number }>()
+
     query += ' ORDER BY timestamp DESC LIMIT ? OFFSET ?'
     params.push(limit, offset)
 
@@ -162,7 +196,9 @@ export async function getEvents(request: Request, env: Env): Promise<Response> {
     return json({
       ok: true,
       events: result.results || [],
-      total: result.results?.length || 0,
+      total: countResult?.total || 0,
+      limit,
+      offset,
     })
   } catch (error: any) {
     console.error('[Dashboard API] Error getting events:', error)
@@ -792,6 +828,9 @@ export async function updateUserStatus(request: Request, env: Env): Promise<Resp
         updateQuery += `, key_kich_hoat = ?2`
         updateParams.push(key_kich_hoat)
       }
+    } else if (status === 'CHAN' && isStatusChanging) {
+      // Khi block user → revoke key_status
+      updateQuery += `, key_status = 'REVOKED'`
     }
     
     updateQuery += ` WHERE id = ?${updateParams.length + 1}`
@@ -1148,8 +1187,6 @@ export async function testToken(request: Request, env: Env): Promise<Response> {
   return json({
     ok: isValid,
     message: isValid ? 'Token hợp lệ!' : 'Token không hợp lệ',
-    hasToken: !!env.ADMIN_TOKEN,
-    tokenLength: env.ADMIN_TOKEN?.length || 0,
   })
 }
 
@@ -1207,14 +1244,14 @@ export async function handleDashboardAPI(request: Request, env: Env): Promise<Re
   if (pathname.startsWith('/api/admin/users/') && request.method === 'GET') {
     const parts = pathname.split('/')
     const lastPart = parts[parts.length - 1]
-    const secondLastPart = parts[parts.length - 2]
-    
+
     // Check if it's /api/admin/users/:username/machines
-    if (secondLastPart === 'users' && lastPart === 'machines') {
-      const username = parts[parts.length - 2] // Get username from path
+    // URL: /api/admin/users/john123/machines → parts = ['', 'api', 'admin', 'users', 'john123', 'machines']
+    if (lastPart === 'machines' && parts.length >= 6) {
+      const username = parts[parts.length - 2] // 'john123'
       return getUserMachines(request, env, username)
     }
-    
+
     // Otherwise it's /api/admin/users/:id
     if (lastPart && lastPart !== 'users') {
       return getUser(request, env)
@@ -1283,7 +1320,7 @@ export async function getUserMachines(request: Request, env: Env, username: stri
       `SELECT machine_id, first_seen, last_seen, request_count
        FROM machine_id_tracking
        WHERE username = ?
-       ORDER BY last_seen DESC`
+       ORDER BY last_seen DESC LIMIT 1000`
     )
       .bind(username)
       .all<{
@@ -1380,7 +1417,7 @@ export async function exportUsers(request: Request, env: Env): Promise<Response>
       params.push(searchPattern, searchPattern)
     }
 
-    query += ' ORDER BY r.thoi_gian_tao DESC'
+    query += ' ORDER BY r.thoi_gian_tao DESC LIMIT 10000'
 
     const result = await env.DB.prepare(query).bind(...params).all<{
       id: string
@@ -1548,8 +1585,23 @@ export async function getLicenses(request: Request, env: Env): Promise<Response>
     const url = new URL(request.url)
     const search = url.searchParams.get('search')
 
+    // Check if key_status column exists
+    let hasKeyStatusColumn = false
+    try {
+      const schemaCheck = await env.DB.prepare(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='registrations'"
+      ).first<{ sql: string }>()
+      if (schemaCheck?.sql) {
+        hasKeyStatusColumn = schemaCheck.sql.includes('key_status')
+      }
+    } catch {
+      hasKeyStatusColumn = true // assume exists, let query fail naturally
+    }
+
     let query = `
-      SELECT id, tai_khoan, mat_khau, ma_may, trang_thai, key_kich_hoat, thoi_gian_tao
+      SELECT id, tai_khoan, mat_khau, ma_may, trang_thai, key_kich_hoat,
+        ${hasKeyStatusColumn ? 'key_status,' : "'PENDING' as key_status,"}
+        thoi_gian_tao
       FROM registrations
       WHERE key_kich_hoat IS NOT NULL
     `
@@ -1561,7 +1613,7 @@ export async function getLicenses(request: Request, env: Env): Promise<Response>
       params.push(searchPattern, searchPattern)
     }
 
-    query += ' ORDER BY thoi_gian_tao DESC'
+    query += ' ORDER BY thoi_gian_tao DESC LIMIT 10000'
 
     const result = await env.DB.prepare(query).bind(...params).all<{
       id: string
@@ -1570,6 +1622,7 @@ export async function getLicenses(request: Request, env: Env): Promise<Response>
       ma_may: string
       trang_thai: string
       key_kich_hoat: string
+      key_status: string | null
       thoi_gian_tao: number
     }>()
 
@@ -1614,9 +1667,9 @@ export async function revokeLicense(request: Request, env: Env): Promise<Respons
       return json({ error: 'User not found' }, 404)
     }
 
-    // Revoke key
-    const result = await env.DB.prepare('UPDATE registrations SET key_kich_hoat = NULL WHERE id = ?')
-      .bind(userId)
+    // Revoke key — clear key and set status to REVOKED
+    const result = await env.DB.prepare('UPDATE registrations SET key_kich_hoat = NULL, key_status = ? WHERE id = ?')
+      .bind('REVOKED', userId)
       .run()
 
     // Log activity
@@ -1628,7 +1681,7 @@ export async function revokeLicense(request: Request, env: Env): Promise<Respons
       userId,
       user.tai_khoan,
       { key_kich_hoat: user.key_kich_hoat },
-      { key_kich_hoat: null },
+      { key_kich_hoat: null, key_status: 'REVOKED' },
       adminInfo.ip,
       adminInfo.session
     )
@@ -1731,24 +1784,28 @@ export async function bulkUpdateUsers(request: Request, env: Env): Promise<Respo
       return json({ error: 'status must be CHO_DUYET, CHO_PHEP, or CHAN' }, 400)
     }
 
-    let key_kich_hoat: string | null = null
-    if (status === 'CHO_PHEP') {
-      // Generate keys for all users being approved
-      key_kich_hoat = crypto.randomUUID()
-    }
-
     // Update all users
-    const placeholders = userIds.map(() => '?').join(',')
-    const params = status === 'CHO_PHEP' 
-      ? [status, key_kich_hoat, 'ACTIVE', ...userIds]
-      : [status, ...userIds]
-
-    // V2: Set key_status='ACTIVE' when bulk approving
-    const query = status === 'CHO_PHEP'
-      ? `UPDATE registrations SET trang_thai = ?, key_kich_hoat = ?, key_status = ? WHERE id IN (${placeholders})`
-      : `UPDATE registrations SET trang_thai = ? WHERE id IN (${placeholders})`
-
-    const result = await env.DB.prepare(query).bind(...params).run()
+    if (status === 'CHO_PHEP') {
+      // Approve: tạo key RIÊNG cho từng user (không dùng chung 1 key)
+      const stmtApprove = env.DB.prepare(
+        `UPDATE registrations SET trang_thai = ?, key_kich_hoat = ?, key_status = 'ACTIVE' WHERE id = ?`
+      )
+      const batch = userIds.map((id) =>
+        stmtApprove.bind(status, crypto.randomUUID(), id)
+      )
+      await env.DB.batch(batch)
+    } else if (status === 'CHAN') {
+      // Block: set key_status to REVOKED
+      const placeholders = userIds.map(() => '?').join(',')
+      await env.DB.prepare(
+        `UPDATE registrations SET trang_thai = ?, key_status = 'REVOKED' WHERE id IN (${placeholders})`
+      ).bind(status, ...userIds).run()
+    } else {
+      const placeholders = userIds.map(() => '?').join(',')
+      await env.DB.prepare(
+        `UPDATE registrations SET trang_thai = ? WHERE id IN (${placeholders})`
+      ).bind(status, ...userIds).run()
+    }
 
     // Log activity
     const adminInfo = getAdminInfo(request)

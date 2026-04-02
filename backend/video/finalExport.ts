@@ -7,7 +7,6 @@ import { randomUUID } from 'node:crypto'
 import { getFfmpegPaths } from '../ffmpeg/config'
 import { probeFile } from '../ffmpeg/probe'
 import { validateInputFiles, type ValidatedInputFile } from './videoUtils'
-import { getVideoFileInfo } from './videoInfo'
 import { videoJobManager } from './videoJobManager'
 import { verifyOutputVideo } from './outputVerification'
 import { runPlaybackTest } from './playbackTest'
@@ -37,19 +36,8 @@ interface AudioFileInfo {
   codecName: string | null
 }
 
-interface PreparedAudioFile {
-  preparedPath: string
-  audioCodec: string | null
-}
-
 interface PreparedVideoClips {
   clips: ValidatedInputFile[]
-}
-
-interface BuiltVideoPlaylist {
-  clips: ValidatedInputFile[]
-  totalDurationSec: number
-  usedFiles: number
 }
 
 export interface FinalExportEmitter {
@@ -273,68 +261,6 @@ async function loadAudioFiles(source: FinalExportRequestPayload['audioSource']):
 
   audioFiles.sort((a, b) => a.path.localeCompare(b.path, undefined, { numeric: true, sensitivity: 'base' }))
   return audioFiles
-}
-
-async function prepareAudioForOutput(
-  audioFile: AudioFileInfo,
-  pairTempDir: string,
-  targetExt: string
-): Promise<PreparedAudioFile> {
-  const normalizedExt = targetExt.toLowerCase()
-  const codec = audioFile.codecName?.toLowerCase() ?? null
-  const needsAac =
-    (normalizedExt === '.mp4' || normalizedExt === '.m4v' || normalizedExt === '.mov') &&
-    codec !== 'aac'
-
-  if (!needsAac) {
-    return {
-      preparedPath: audioFile.path,
-      audioCodec: audioFile.codecName,
-    }
-  }
-
-  await fsp.mkdir(pairTempDir, { recursive: true })
-  const safeName = sanitizeFilename(path.basename(audioFile.path, path.extname(audioFile.path)))
-  const tempPath = path.join(pairTempDir, `${safeName || 'audio'}-${randomUUID()}.m4a`)
-  const { ffmpeg } = getFfmpegPaths()
-
-    await new Promise<void>((resolve, reject) => {
-    let settled = false
-    const safeResolve = () => { if (!settled) { settled = true; resolve() } }
-    const safeReject = (err: Error) => { if (!settled) { settled = true; reject(err) } }
-
-    const child = spawn(ffmpeg, [
-      '-hide_banner',
-      '-loglevel',
-      'error',
-      '-fflags', '+genpts+igndts',       // Fix broken DTS/PTS trong audio source
-      '-i',
-      audioFile.path,
-      '-c:a',
-      'aac',
-      '-b:a',
-      '192k',
-      '-ac',
-      '2',
-      '-avoid_negative_ts', 'make_zero', // Fix negative timestamps (MP3 start_time)
-      '-y',
-      tempPath,
-    ])
-
-    child.on('error', (err) => safeReject(err))
-    // Bug #16 fix: drain stdout/stderr to prevent pipe buffer full → process hang
-    child.stdout?.resume()
-    child.stderr?.resume()
-    child.on('close', (code) => {
-      if (code === 0) safeResolve()
-      else safeReject(new Error(`FFmpeg lỗi khi chuẩn hoá audio ${audioFile.path} (code ${code}).`))
-    })
-  })
-
-  return {
-    preparedPath: tempPath,
-    audioCodec: 'aac',
-  }
 }
 
 async function loadVideoClips(source: FinalExportRequestPayload['videoSource']): Promise<PreparedVideoClips> {
@@ -978,56 +904,12 @@ export async function executeFinalExport(
       }
     }
   } catch (error: any) {
-    emitter.error({
-      requestId,
-      error: error?.message || 'Unknown error',
-      message: error?.message,
-    })
+    // NOTE: Không gọi emitter.error() ở đây — hàm gọi (exportFinalVideo) sẽ catch
+    // và emit error. Gọi ở cả 2 chỗ gây duplicate error event trên UI.
     throw error
   } finally {
     // Cleanup temp dir
     await cleanupTempDir(tempDir)
-  }
-}
-
-function buildVideoPlaylist(
-  clips: ValidatedInputFile[],
-  totalDurationSec: number,
-  shuffle: boolean = false,
-  seed?: string
-): BuiltVideoPlaylist {
-  if (clips.length === 0) {
-    throw new Error('Không có clip video để ghép.')
-  }
-  
-  // Map sang ClipItem
-  const clipItems: ClipItem[] = clips.map(c => ({
-    path: c.path,
-    durationSec: c.durationSec,
-    id: c.path,
-  }))
-  
-  // PHASE 4: Dùng buildPlaylistToFillDuration
-  const playlist = buildPlaylistToFillDuration(clipItems, totalDurationSec, shuffle)
-  
-  // Convert back to ValidatedInputFile[]
-  const picked: ValidatedInputFile[] = playlist.map(c => {
-    const original = clips.find(clip => clip.path === c.path)
-    if (!original) {
-      throw new Error(`Clip not found: ${c.path}`)
-    }
-    return original
-  })
-  
-  const totalDurationSecActual = playlist.reduce((sum, c) => sum + c.durationSec, 0)
-  const usedUniqueClips = new Set(playlist.map(c => c.path)).size
-  
-  console.log(`[finalExport] Built playlist: target=${totalDurationSec.toFixed(2)}s, actual=${totalDurationSecActual.toFixed(2)}s, items=${playlist.length}, unique=${usedUniqueClips}/${clips.length}`)
-  
-  return {
-    clips: picked,
-    totalDurationSec: totalDurationSecActual,
-    usedFiles: picked.length,
   }
 }
 
@@ -1081,11 +963,6 @@ async function ensureFinalExportDiskCapacity(
     console.warn(`[FinalExport] Vẫn tiếp tục xuất video...`)
     // KHÔNG throw error - cho phép user tiếp tục
   }
-}
-
-async function writeVideoConcatList(files: ValidatedInputFile[], filePath: string): Promise<void> {
-  const content = files.map((clip) => `file '${escapePathForFfmpegList(clip.path)}'`).join('\n')
-  await fsp.writeFile(filePath, content, 'utf-8')
 }
 
 function getFfmpegExecutable(): string {
@@ -1303,6 +1180,12 @@ async function runFinalCommand(opts: RunFinalCommandOptions): Promise<void> {
     })
 
     child.on('close', async (code) => {
+      // Check cancel trước — nếu bị cancel thì reject với thông báo rõ ràng
+      if (videoJobManager.isCancelled(requestId)) {
+        safeReject(new Error('Đã dừng bởi người dùng'))
+        return
+      }
+
       if (code === 0) {
         // Đảm bảo emit progress 100% khi hoàn thành (tránh progress đứng ở ~99%)
         const finalTimeSec = lastTimeSec !== null && lastTimeSec >= totalDurationSec ? totalDurationSec : totalDurationSec
@@ -1478,7 +1361,8 @@ export async function exportFinalVideo(
       error: error?.message || 'Xuất video thất bại.',
       message: error?.message,
     })
-    throw error
+    // NOTE: Không throw lại — emitter.error() đã báo lỗi cho UI.
+    // Nếu throw thì caller (IPC handler) sẽ catch và gửi thêm 1 error event → duplicate trên UI.
   }
 }
 

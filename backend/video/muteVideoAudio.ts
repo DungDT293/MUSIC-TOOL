@@ -141,12 +141,12 @@ export async function muteVideoAudio(
 
         proc.stderr.on('data', (data) => {
           const chunk = data.toString()
-          // Cap stderrBuffer — chỉ giữ 80 dòng cuối để tránh OOM
+          // Append trước, cap sau — đảm bảo mọi chunk đều bị giới hạn
+          stderrBuffer += chunk
           const lines = stderrBuffer.split('\n')
           if (lines.length > 80) {
             stderrBuffer = lines.slice(-80).join('\n')
           }
-          stderrBuffer += chunk
 
           // Nếu user cancel trong khi đang chạy, kill process
           if (videoJobManager.isCancelled(requestId)) {
@@ -227,6 +227,11 @@ export async function muteVideoAudio(
           safeResolve()
         })
       })
+
+      // Check cancel sau khi await — break ngay nếu bị cancel (tránh tiếp tục loop)
+      if (videoJobManager.isCancelled(requestId)) {
+        break
+      }
     }
 
     const elapsedMs = Date.now() - startTime

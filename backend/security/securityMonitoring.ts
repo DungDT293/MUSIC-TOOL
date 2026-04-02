@@ -226,6 +226,11 @@ export async function reportAntiDebugTriggered(
 
 /**
  * Report machine ID mismatch
+ *
+ * NOTE: Hiện không được gọi ở đâu trong codebase.
+ * Đã bỏ gọi từ encryptedAuthStore để tránh false positive khi machineId
+ * thay đổi do VPN/cleanup tools — đây KHÔNG phải tampering.
+ * Giữ lại hàm để dùng nếu cần report trường hợp thực sự đáng ngờ.
  */
 export async function reportMachineIdMismatch(
   details: {

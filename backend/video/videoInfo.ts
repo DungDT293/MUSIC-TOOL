@@ -30,11 +30,27 @@ export async function getVideoFileInfo(filePath: string): Promise<VideoFileInfo>
   const paths = getFfmpegPaths()
   const ffprobePath = paths.ffprobe
 
-  return new Promise((resolve, reject) =\u003e {
+  return new Promise((resolve, _reject) => {
+    let isSettled = false
+    const nullResult: VideoFileInfo = {
+      filePath,
+      durationSec: null,
+      width: null,
+      height: null,
+      sizeBytes,
+    }
+    const safeResolve = (val: VideoFileInfo) => {
+      if (isSettled) return
+      isSettled = true
+      resolve(val)
+    }
+
     // Dùng ffprobe để lấy metadata
+    // IMPORTANT: Phải include codec_type trong show_entries để streams.find(codec_type === 'video')
+    // hoạt động — nếu thiếu thì codec_type sẽ không có trong output JSON → width/height luôn null.
     const args = [
       '-v', 'error',
-      '-show_entries', 'format=duration:stream=width,height',
+      '-show_entries', 'format=duration:stream=width,height,codec_type',
       '-of', 'json',
       filePath,
     ]
@@ -48,31 +64,32 @@ export async function getVideoFileInfo(filePath: string): Promise<VideoFileInfo>
     const killTimer = setTimeout(() => {
       console.warn(`[getVideoFileInfo] ffprobe timeout (30s) for: ${filePath}`)
       try { proc.kill('SIGKILL') } catch { /* ignore */ }
+      // Resolve ngay với null values — không chờ close handler
+      // (process có thể không fire close trên Windows sau SIGKILL)
+      safeResolve(nullResult)
     }, PROBE_TIMEOUT_MS)
 
     let stdout = ''
     let stderr = ''
+    const MAX_BUFFER = 512 * 1024 // 512KB cap — ffprobe output nhỏ, nhưng phòng trường hợp bất thường
 
     proc.stdout?.on('data', (data: Buffer) => {
-      stdout += data.toString('utf-8')
+      if (stdout.length < MAX_BUFFER) {
+        stdout += data.toString('utf-8')
+      }
     })
 
     proc.stderr?.on('data', (data: Buffer) => {
-      stderr += data.toString('utf-8')
+      if (stderr.length < MAX_BUFFER) {
+        stderr += data.toString('utf-8')
+      }
     })
 
     proc.on('close', (code) => {
       clearTimeout(killTimer)
       if (code !== 0) {
-        console.warn(`[getVideoFileInfo] ffprobe failed for ${filePath}:`, stderr)
-        // Trả về null values nhưng không throw
-        resolve({
-          filePath,
-          durationSec: null,
-          width: null,
-          height: null,
-          sizeBytes,
-        })
+        console.warn(`[getVideoFileInfo] ffprobe failed for ${filePath}:`, stderr.slice(-400))
+        safeResolve(nullResult)
         return
       }
 
@@ -81,14 +98,14 @@ export async function getVideoFileInfo(filePath: string): Promise<VideoFileInfo>
         const format = json.format || {}
         const streams = json.streams || []
 
-        // Tìm video stream đầu tiên
+        // Tìm video stream đầu tiên (cần codec_type trong show_entries)
         const videoStream = streams.find((s: any) => s.codec_type === 'video')
 
         const durationSec = format.duration ? parseFloat(format.duration) : null
         const width = videoStream?.width ? parseInt(videoStream.width, 10) : null
         const height = videoStream?.height ? parseInt(videoStream.height, 10) : null
 
-        resolve({
+        safeResolve({
           filePath,
           durationSec,
           width,
@@ -97,38 +114,14 @@ export async function getVideoFileInfo(filePath: string): Promise<VideoFileInfo>
         })
       } catch (error) {
         console.warn(`[getVideoFileInfo] Failed to parse ffprobe output:`, error)
-        resolve({
-          filePath,
-          durationSec: null,
-          width: null,
-          height: null,
-          sizeBytes,
-        })
+        safeResolve(nullResult)
       }
     })
 
     proc.on('error', (error) => {
       clearTimeout(killTimer)
       console.warn(`[getVideoFileInfo] Spawn error:`, error)
-      resolve({
-        filePath,
-        durationSec: null,
-        width: null,
-        height: null,
-        sizeBytes,
-      })
+      safeResolve(nullResult)
     })
   })
 }
-
-
-
-
-
-
-
-
-
-
-
-

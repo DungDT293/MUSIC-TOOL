@@ -19,7 +19,9 @@ function parseFps(rate?: string | null): number | null {
     const num = Number(parts[0])
     const den = Number(parts[1])
     if (!Number.isFinite(num) || !Number.isFinite(den) || den === 0) return null
-    return num / den
+    const result = num / den
+    // Guard: negative fps hoặc 0 thì coi là invalid
+    return Number.isFinite(result) && result > 0 ? result : null
   }
   const v = Number(rate)
   return Number.isFinite(v) && v > 0 ? v : null
@@ -72,6 +74,14 @@ export async function verifyOutputVideo(
   const { ffmpeg } = getFfmpegPaths()
 
   const decodeOk: boolean = await new Promise((resolve) => {
+    // safeResolve guard — tránh double-resolve khi cả error + close đều fire
+    let isSettled = false
+    const safeResolve = (result: boolean) => {
+      if (isSettled) return
+      isSettled = true
+      resolve(result)
+    }
+
     try {
       const child = spawn(
         ffmpeg,
@@ -83,7 +93,12 @@ export async function verifyOutputVideo(
 
       let stderr = ''
       child.stderr?.on('data', (chunk: Buffer) => {
-        stderr += chunk.toString('utf-8')
+        const text = chunk.toString('utf-8')
+        stderr += text
+        // Cap stderr — chỉ giữ ~8KB cuối để tránh OOM với file dài
+        if (stderr.length > 8192) {
+          stderr = stderr.slice(-8192)
+        }
       })
 
       child.on('error', (err) => {
@@ -91,14 +106,14 @@ export async function verifyOutputVideo(
           onLog(`[verifyOutput] ffmpeg decode error: ${err.message}`)
         }
         clearTimeout(killTimer)
-        resolve(false)
+        safeResolve(false)
       })
 
       // Safety timeout: nếu ffmpeg không kết thúc sau 90s → kill và coi là OK
       const killTimer = setTimeout(() => {
         if (onLog) onLog('[verifyOutput] decode test timeout (90s), killing process')
         try { child.kill('SIGKILL') } catch {}
-        resolve(true) // timeout không phải lỗi thật, coi là OK
+        safeResolve(true) // timeout không phải lỗi thật, coi là OK
       }, 90_000)
 
       child.on('close', (code) => {
@@ -107,7 +122,7 @@ export async function verifyOutputVideo(
         // Only treat as failure if exit code != 0 OR stderr contains error keywords.
         const hasError = /corrupt|invalid|moov atom not found/i.test(stderr)
         if (code === 0 && !hasError) {
-          resolve(true)
+          safeResolve(true)
         } else {
           if (onLog) {
             onLog(
@@ -116,14 +131,14 @@ export async function verifyOutputVideo(
               )}`
             )
           }
-          resolve(false)
+          safeResolve(false)
         }
       })
     } catch (err: any) {
       if (onLog) {
         onLog(`[verifyOutput] Failed to spawn ffmpeg decode: ${err?.message || String(err)}`)
       }
-      resolve(false)
+      safeResolve(false)
     }
   })
 

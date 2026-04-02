@@ -10,7 +10,7 @@ import path from 'node:path'
 import { getMachineHash } from '../license/machineId'
 import type { StoredAuthState } from './authStore'
 import type { SessionInfo } from './sessionManager'
-import { reportEncryptionFailed, reportMachineIdMismatch } from '../security/securityMonitoring'
+import { reportEncryptionFailed } from '../security/securityMonitoring'
 
 const AUTH_FILE_NAME = 'authState.enc'
 const IV_LENGTH = 16
@@ -160,6 +160,18 @@ async function decryptAuthState(encryptedBase64: string, machineId: string): Pro
 }
 
 /**
+ * Kiểm tra file .enc có tồn tại không (không cần decrypt).
+ * Dùng để phân biệt "chưa đăng ký lần nào" vs "machineId thay đổi cần đăng nhập lại".
+ */
+export function hasEncryptedAuthFile(): boolean {
+  try {
+    return fs.existsSync(resolveStoragePath())
+  } catch {
+    return false
+  }
+}
+
+/**
  * Đọc encrypted auth state từ file
  */
 export async function readEncryptedAuthState(): Promise<StoredAuthState | null> {
@@ -180,10 +192,10 @@ export async function readEncryptedAuthState(): Promise<StoredAuthState | null> 
     // Decrypt
     const state = await decryptAuthState(encryptedBase64, currentMachineId)
     if (!state) {
-      // Decryption failed — old format or corrupt data from previous version.
-      // Silently delete and let user re-login (not a security event, just migration).
-      console.warn('[encryptedAuthStore] Failed to decrypt auth state — deleting old/corrupt file')
-      try { fs.unlinkSync(file) } catch (_) {}
+      // Decryption failed — có thể do machineId thay đổi (VPN, driver update, cache bị xóa)
+      // KHÔNG xóa file — giữ lại để user có thể đăng nhập lại bằng username/password.
+      // Chỉ trả về null để app hiển thị màn hình đăng nhập (không phải đăng ký mới).
+      console.warn('[encryptedAuthStore] Failed to decrypt auth state — machineId may have changed. File kept for recovery.')
       return null
     }
 
@@ -198,22 +210,20 @@ export async function readEncryptedAuthState(): Promise<StoredAuthState | null> 
     }
 
     // QUAN TRỌNG: Verify machineId trong decrypted state khớp với current
-    // Nếu không khớp, có thể user đã sửa file hoặc chuyển sang máy khác
+    // Nếu không khớp: có thể do cache machine-id.txt bị xóa và hash được tính lại khác.
+    // Trường hợp này KHÔNG phải tampering — là side effect của VPN/cleanup tools.
+    // → Trả về null (app sẽ yêu cầu đăng nhập lại) nhưng KHÔNG xóa file.
     if (state.machineId !== currentMachineId) {
       console.warn(
-        '[encryptedAuthStore] MachineId mismatch! Stored:',
-        state.machineId.substring(0, 16),
-        '... Current:',
-        currentMachineId.substring(0, 16),
-        '...'
+        '[encryptedAuthStore] MachineId mismatch — stored:',
+        state.machineId.substring(0, 16) + '...',
+        'current:',
+        currentMachineId.substring(0, 16) + '...'
       )
-      console.warn('[encryptedAuthStore] This may indicate tampering or machine change')
-      // Report machine ID mismatch
-      await reportMachineIdMismatch({
-        storedMachineId: state.machineId,
-        currentMachineId,
-        context: 'encryptedAuthStore.read',
-      })
+      console.warn('[encryptedAuthStore] Likely caused by: VPN adapter change, cleanup tool deleted cache, or Windows 11 wmic deprecated fallback.')
+      console.warn('[encryptedAuthStore] Keeping .enc file — user can re-login with username/password.')
+      // Chỉ report nếu khác biệt lớn (không phải thay đổi nhỏ do driver)
+      // Không report lên server để tránh false positive security alert
       return null
     }
 

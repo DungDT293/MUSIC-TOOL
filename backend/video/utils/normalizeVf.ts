@@ -51,12 +51,21 @@ export const FPS_OPTIONS = [
  * @returns FFmpeg -vf filter string
  */
 export function buildNormalizeVfFilter(resolution: string, fps: string): string {
+  // Sanitize fps: chỉ cho phép giá trị từ FPS_OPTIONS (hoặc dạng số/phân số hợp lệ)
+  // Phòng injection: fps được nội suy trực tiếp vào FFmpeg filter string,
+  // nên chuỗi như "30,drawtext=text=hacked" sẽ inject filter tùy ý.
+  const FPS_ALLOWLIST = new Set(FPS_OPTIONS.map((o) => o.value))
+  const safeFps = FPS_ALLOWLIST.has(fps) ? fps : '30'
+
   const [wStr, hStr] = resolution.split('x')
   const w = parseInt(wStr, 10)
   const h = parseInt(hStr, 10)
 
-  // Fallback nếu parse không thành công
-  if (!w || !h) return `scale=iw:ih,setsar=1,fps=${fps},format=yuv420p`
+  // Fallback nếu parse không thành công hoặc kích thước quá nhỏ/âm
+  // Cần w >= 2 && h >= 2 vì trunc(x/2)*2 sẽ ra 0 nếu x < 2
+  if (!Number.isFinite(w) || !Number.isFinite(h) || w < 2 || h < 2) {
+    return `scale=trunc(iw/2)*2:trunc(ih/2)*2,setsar=1,fps=${safeFps},format=yuv420p`
+  }
 
   // scale: giữ tỉ lệ gốc, fit vào WxH (không cắt), dùng lanczos cho chất lượng cao
   // scale lần 2 trunc(ow/2)*2:trunc(oh/2)*2 đảm bảo dimension chẵn — bắt buộc cho libx264/h264_nvenc
@@ -65,8 +74,8 @@ export function buildNormalizeVfFilter(resolution: string, fps: string): string 
   const padFilter = `pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2:black`
   // setsar=1: đảm bảo pixel aspect ratio = 1:1 (quan trọng cho compatibility)
   const sarFilter = `setsar=1`
-  // fps: chuẩn hóa frame rate
-  const fpsFilter = `fps=${fps}`
+  // fps: chuẩn hóa frame rate (dùng safeFps đã sanitize)
+  const fpsFilter = `fps=${safeFps}`
 
   // format=yuv420p: đảm bảo pixel format tương thích mọi encoder (GPU & CPU)
   // Phải đặt SAU fps filter để tránh color space mismatch

@@ -228,7 +228,16 @@ async function tryEncodeFile(
     if (fs.existsSync(outputPath)) {
       try { fs.unlinkSync(outputPath) } catch { /* ignore */ }
     }
+    // Check cancel trước khi spawn CPU process — tránh spawn vô ích
+    if (videoJobManager.isCancelled(requestId)) {
+      onGpuUsed(false)
+      return false
+    }
     const cpuOk = await runFfmpegEncode(ffmpeg, inputPath, outputPath, vfFilter, 'cpu', requestId)
+    // Cleanup partial output if CPU encode also failed
+    if (!cpuOk && fs.existsSync(outputPath)) {
+      try { fs.unlinkSync(outputPath) } catch { /* ignore */ }
+    }
     onGpuUsed(false)
     return cpuOk
   } else {
@@ -258,7 +267,6 @@ function runFfmpegEncode(
       resolve(result)
     }
 
-    const videoCodec = mode === 'gpu' ? 'h264_nvenc' : 'libx264'
     const encoderArgs =
       mode === 'gpu'
         ? ['-c:v', 'h264_nvenc', '-preset', 'p4', '-cq', '23', '-pix_fmt', 'yuv420p']
@@ -294,12 +302,12 @@ function runFfmpegEncode(
 
     proc.stderr.on('data', (data) => {
       const chunk = data.toString()
-      // Cap stderrBuffer — chỉ giữ 80 dòng cuối để tránh OOM
+      // Append trước, cap sau — đảm bảo mọi chunk đều bị giới hạn
+      stderrBuffer += chunk
       const lines = stderrBuffer.split('\n')
       if (lines.length > 80) {
         stderrBuffer = lines.slice(-80).join('\n')
       }
-      stderrBuffer += chunk
 
       if (videoJobManager.isCancelled(requestId)) {
         try {

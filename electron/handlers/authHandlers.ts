@@ -118,10 +118,11 @@ export function registerAuthHandlers() {
   ) => {
     const base = await getOrInitAuthState()
 
-    // Rate limit check
-    const rateLimitResult = loginRateLimiter.checkLimit(base.machineId)
+    // Rate limit check — chỉ tính khi thực sự đăng nhập sai password
+    const rateKey = `login:${payload.username}`
+    const rateLimitResult = loginRateLimiter.check(rateKey, LOGIN_RATE_LIMIT_CONFIG)
     if (!rateLimitResult.allowed) {
-      const waitSec = Math.ceil((rateLimitResult.retryAfterMs ?? 0) / 1000)
+      const waitSec = Math.ceil(((rateLimitResult.resetAt ?? Date.now()) - Date.now()) / 1000)
       setAuthState({
         status: 'error',
         machineId: base.machineId,
@@ -149,7 +150,8 @@ export function registerAuthHandlers() {
       })
 
       if (res.status === 'CHO_PHEP' || res.status === 'allowed') {
-        loginRateLimiter.recordSuccess(base.machineId)
+        // Đăng nhập thành công → reset rate limit
+        loginRateLimiter.reset(rateKey)
         const newState = {
           status: 'allowed' as const,
           username: payload.username,
@@ -176,9 +178,13 @@ export function registerAuthHandlers() {
             refreshToken: res.refreshToken,
             remember: true,
           })
+        } else {
+          // remember=false → xóa .enc cũ để không auto-login lần sau
+          clearEncryptedAuthState()
         }
       } else if (res.status === 'PENDING' || res.status === 'pending') {
-        loginRateLimiter.recordFailure(base.machineId)
+        // PENDING = chưa được duyệt, KHÔNG phải sai password → reset rate limit
+        loginRateLimiter.reset(rateKey)
         setAuthState({
           status: 'pending',
           username: payload.username,
@@ -187,7 +193,9 @@ export function registerAuthHandlers() {
           message: res.message || 'Tài khoản đang chờ admin phê duyệt.',
         })
       } else if (res.status === 'BI_CHAN' || res.status === 'blocked') {
-        loginRateLimiter.recordFailure(base.machineId)
+        // BI_CHAN = bị khóa bởi admin, KHÔNG phải sai password → reset rate limit
+        loginRateLimiter.reset(rateKey)
+        clearEncryptedAuthState()
         setAuthState({
           status: 'blocked',
           username: payload.username,
@@ -195,7 +203,7 @@ export function registerAuthHandlers() {
           message: res.message || 'Tài khoản đã bị khóa.',
         })
       } else {
-        loginRateLimiter.recordFailure(base.machineId)
+        // Trường hợp khác (sai password, lỗi khác) → rate limit đã được tính bởi check() ở trên
         setAuthState({
           status: 'error',
           machineId: base.machineId,
@@ -204,7 +212,7 @@ export function registerAuthHandlers() {
       }
     } catch (err: any) {
       console.error('[auth:login] error', err)
-      loginRateLimiter.recordFailure(base.machineId)
+      // Lỗi mạng → rate limit đã được tính bởi check() ở trên
       setAuthState({
         status: 'error',
         machineId: base.machineId,
@@ -259,6 +267,8 @@ export function registerAuthHandlers() {
       } else if (res.status === 'PENDING' || res.status === 'pending') {
         setAuthState({ ...base, status: 'pending', message: res.message || 'Tài khoản đang chờ phê duyệt.' })
       } else if (res.status === 'BI_CHAN' || res.status === 'blocked') {
+        // Bị block → clear .enc để không tự động login nữa
+        clearEncryptedAuthState()
         setAuthState({ ...base, status: 'blocked', message: res.message || 'Tài khoản đã bị khóa.' })
       } else {
         setAuthState({ ...base, status: 'error', message: res.message || 'Làm mới thất bại.' })

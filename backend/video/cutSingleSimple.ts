@@ -318,6 +318,12 @@ export async function cutVideoIntoSegmentsSimple(
       resolve(result)
     }
 
+    // Guard: nếu signal đã aborted trước khi spawn → return ngay (tránh spawn process vô ích)
+    if (options?.signal?.aborted) {
+      safeResolve(buildResult(requestId, false, Date.now() - startTime, 0, 0, [], 'Đã dừng bởi người dùng'))
+      return
+    }
+
     const ffmpegProcess = spawn(ffmpeg, ffmpegArgs, {
       stdio: ['ignore', 'ignore', 'pipe'],
       windowsHide: true,
@@ -328,12 +334,6 @@ export async function cutVideoIntoSegmentsSimple(
 
     // Check signal để cancel khi cần
     if (options?.signal) {
-      // Guard: nếu signal đã aborted trước khi start → return ngay
-      if (options.signal.aborted) {
-        ffmpegProcess.kill('SIGTERM')
-        safeResolve(buildResult(requestId, false, Date.now() - startTime, 0, 0, [], 'Đã dừng bởi người dùng'))
-        return
-      }
       options.signal.addEventListener('abort', () => {
         console.log(`[cutSingleSimple] Job ${requestId} cancelled via AbortSignal`)
         // Cleanup progress file watcher
@@ -442,12 +442,12 @@ export async function cutVideoIntoSegmentsSimple(
       }
 
       const chunk = data.toString()
-      // Cap stderrBuffer — chỉ giữ 80 dòng cuối để tránh OOM với file dài
+      // Append trước, cap sau — đảm bảo mọi chunk đều bị giới hạn
+      stderrBuffer += chunk
       const lines = stderrBuffer.split('\n')
       if (lines.length > 80) {
         stderrBuffer = lines.slice(-80).join('\n')
       }
-      stderrBuffer += chunk
       
       // Debug: Log first few chunks to see what FFmpeg outputs (chỉ khi normalizeOutput = true để debug)
       if (normalizeOutput && stderrBuffer.length < 2000) {
@@ -640,6 +640,11 @@ export async function cutVideoIntoSegmentsSimple(
     })
 
     ffmpegProcess.on('error', (err) => {
+      // Cleanup progress file watcher
+      if (progressFileWatcher) {
+        fs.unwatchFile(progressFilePath!)
+        progressFileWatcher = null
+      }
       const elapsedMs = Date.now() - startTime
       const error = `FFmpeg process error: ${err.message}`
       console.error(`âœ— ${error}`)
