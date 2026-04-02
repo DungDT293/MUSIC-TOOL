@@ -343,9 +343,15 @@ export function registerAuthHandlers() {
     const base = await getOrInitAuthState()
     try {
       type ValidateKeyResponse = {
-        status: string
+        valid: boolean
+        device_token?: string
+        refresh_token?: string
+        expires_at?: number
         message?: string
-        activationKey?: string
+        locked?: boolean
+        attempts?: number
+        action?: string
+        tamperCount?: number
       }
       const res = await postJson<ValidateKeyResponse>('/api/auth/validate-key', {
         tai_khoan: data.username,
@@ -354,13 +360,16 @@ export function registerAuthHandlers() {
         version: APP_VERSION,
       })
 
-      if (res.status === 'success' || res.status === 'CHO_PHEP' || res.status === 'allowed') {
+      if (res.valid === true) {
         const newState = {
           ...base,
           status: 'allowed' as const,
           username: data.username,
           activationKey: data.key,
-          message: res.message || 'Kích hoạt thành công.',
+          deviceToken: res.device_token,
+          refreshToken: res.refresh_token,
+          tokenExpiresAt: res.expires_at,
+          message: 'Kích hoạt thành công.',
         }
         setAuthState(newState)
         await writeEncryptedAuthState({
@@ -369,11 +378,15 @@ export function registerAuthHandlers() {
           password: base.password,
           machineId: newState.machineId,
           activationKey: newState.activationKey,
+          deviceToken: res.device_token,
+          refreshToken: res.refresh_token,
+          tokenExpiresAt: res.expires_at,
           message: newState.message,
           remember: true,
         })
       } else {
-        setAuthState({ ...base, status: 'error', message: res.message || 'Mã kích hoạt không hợp lệ.' })
+        const msg = res.message || (res.locked ? 'Key đã bị khóa.' : 'Mã kích hoạt không hợp lệ.')
+        setAuthState({ ...base, status: 'error', message: msg })
       }
     } catch (err: any) {
       console.error('[auth:validateKey] error', err)
