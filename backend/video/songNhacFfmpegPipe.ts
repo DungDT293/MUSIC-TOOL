@@ -1,12 +1,17 @@
 /**
  * songNhacFfmpegPipe.ts
  * FFmpeg pipe-based renderer for Sóng nhạc export.
- * Receives raw RGBA frames from the renderer process via IPC,
+ * Receives JPEG frames from the renderer process via IPC,
  * pipes them into FFmpeg stdin, and muxes with audio.
+ *
+ * v2: NVENC GPU encoding support — pipe input không cần hwaccel decoder,
+ *     chỉ dùng GPU encoder (h264_nvenc) → nhanh gấp 3-8x so với libx264.
+ *     Auto-detect GPU → fallback libx264 nếu không có NVENC.
  */
 
 import { spawn, type ChildProcess } from 'child_process'
 import { getFfmpegPaths } from '../ffmpeg/config'
+import { getGpuInfo, type GpuEncoder } from '../utils/gpuDetection'
 import fs from 'fs'
 import path from 'path'
 
@@ -21,21 +26,97 @@ export interface SongNhacExportOptions {
   videoBitrate?: string
   preset?: string
   crf?: number
+  // GPU encoding
+  useGpu?: boolean  // true = try GPU, false = force CPU
+  /**
+   * WebCodecs mode: renderer sends pre-encoded H.264 Annex B stream.
+   * FFmpeg uses -f h264 -c:v copy (just mux, no re-encode).
+   */
+  webCodecsMode?: boolean
 }
 
 export interface SongNhacFfmpegPipeResult {
   outputPath: string
   code: number | null
+  usedEncoder: string
 }
 
 /**
- * Start FFmpeg process that accepts raw RGBA frames via stdin pipe.
- * No GPU hwaccel for pipe input (not supported).
+ * Build encoder args based on GPU availability.
+ * Pipe input (image2pipe) does NOT need -hwaccel (no GPU decoder needed).
+ * But we CAN use h264_nvenc as the OUTPUT encoder — GPU does the heavy lifting.
  */
-export function startFfmpegPipe(options: SongNhacExportOptions): {
+function buildEncoderArgs(
+  gpuEncoder: GpuEncoder,
+  useGpu: boolean,
+  preset: string,
+  crf: number,
+  videoBitrate: string,
+): { encoderArgs: string[], usedEncoder: string } {
+  // GPU path: NVENC — nhanh gấp 3-8x, chất lượng tốt
+  if (useGpu && gpuEncoder === 'nvenc') {
+    // Map preset names to NVENC preset
+    let nvPreset = 'p4' // balanced
+    if (preset === 'ultrafast' || preset === 'veryfast') nvPreset = 'p1'
+    else if (preset === 'fast') nvPreset = 'p2'
+    else if (preset === 'medium') nvPreset = 'p4'
+    else if (preset === 'slow') nvPreset = 'p6'
+
+    return {
+      encoderArgs: [
+        '-c:v', 'h264_nvenc',
+        '-preset', nvPreset,
+        '-rc', 'vbr',
+        '-cq', String(Math.max(18, crf)), // NVENC CQ ≈ CRF
+        '-b:v', videoBitrate,
+        '-maxrate', videoBitrate,
+        '-bufsize', `${parseInt(videoBitrate) * 2}k`,
+        '-gpu', '0',
+        '-pix_fmt', 'yuv420p',
+      ],
+      usedEncoder: `h264_nvenc (${nvPreset})`,
+    }
+  }
+
+  // GPU path: AMF (AMD)
+  if (useGpu && gpuEncoder === 'amf') {
+    return {
+      encoderArgs: [
+        '-c:v', 'h264_amf',
+        '-quality', preset === 'ultrafast' || preset === 'veryfast' ? 'speed' : 'balanced',
+        '-rc', 'vbr_peak',
+        '-b:v', videoBitrate,
+        '-maxrate', videoBitrate,
+        '-pix_fmt', 'yuv420p',
+      ],
+      usedEncoder: 'h264_amf',
+    }
+  }
+
+  // CPU fallback: libx264
+  return {
+    encoderArgs: [
+      '-c:v', 'libx264',
+      '-preset', preset,
+      '-crf', String(crf),
+      '-b:v', videoBitrate,
+      '-pix_fmt', 'yuv420p',
+    ],
+    usedEncoder: `libx264 (${preset}, CRF ${crf})`,
+  }
+}
+
+/**
+ * Start FFmpeg process that accepts frames via stdin pipe.
+ * Two modes:
+ *   1. JPEG mode (default): image2pipe → NVENC/libx264 encode
+ *   2. WebCodecs mode: pre-encoded H.264 Annex B → -c:v copy (just mux)
+ */
+export async function startFfmpegPipe(options: SongNhacExportOptions): Promise<{
   ffmpegProc: ChildProcess
   waitForExit: () => Promise<SongNhacFfmpegPipeResult>
-} {
+  usedEncoder: string
+}> {
   const paths = getFfmpegPaths()
   const ffmpegPath = (paths as any).ffmpeg ?? (paths as any).ffmpegPath
 
@@ -44,13 +125,15 @@ export function startFfmpegPipe(options: SongNhacExportOptions): {
     width,
     height,
     fps,
-    audioPaths,
+    audioPaths = [],
     videoBitrate = '8000k',
     preset = 'medium',
     crf = 18,
+    useGpu = true,
+    webCodecsMode = false,
   } = options
 
-  // Ensure even dimensions — libx264 yuv420p requires width & height divisible by 2
+  // Ensure even dimensions — encoder requires width & height divisible by 2
   const safeWidth = width % 2 === 0 ? width : width + 1
   const safeHeight = height % 2 === 0 ? height : height + 1
 
@@ -60,17 +143,58 @@ export function startFfmpegPipe(options: SongNhacExportOptions): {
     fs.mkdirSync(outputDir, { recursive: true })
   }
 
-  // Build FFmpeg args
-  // NOTE: Renderer captures canvas as JPEG (ArrayBuffer) and sends via IPC.
-  // Use image2pipe/mjpeg decoder — NOT rawvideo/rgba.
-  const inputArgs: string[] = [
-    '-y',
-    // JPEG frames piped from renderer (canvas.toBlob('image/jpeg'))
-    '-f', 'image2pipe',
-    '-vcodec', 'mjpeg',
-    '-r', String(fps),
-    '-i', 'pipe:0', // stdin
-  ]
+  let usedEncoder: string
+  let inputArgs: string[]
+  let videoOutputArgs: string[]
+
+  if (webCodecsMode) {
+    // ── WebCodecs mode: H.264 Annex B stream from renderer ──
+    // FFmpeg just muxes into MP4, no re-encoding needed
+    usedEncoder = 'WebCodecs H.264 (copy)'
+    inputArgs = [
+      '-y',
+      '-f', 'h264',           // Raw H.264 Annex B bitstream
+      '-r', String(fps),
+      '-i', 'pipe:0',         // stdin
+    ]
+    videoOutputArgs = [
+      '-c:v', 'copy',         // Stream copy — no re-encode, near zero CPU
+    ]
+    console.log(`[SongNhacFFmpeg] ★ WebCodecs mode: H.264 stream copy (no re-encode)`)
+  } else {
+    // ── JPEG mode: image2pipe → NVENC/libx264 encode ──
+    // Detect GPU
+    let gpuEncoder: GpuEncoder = 'cpu'
+    if (useGpu) {
+      try {
+        const gpuInfo = await getGpuInfo()
+        if (gpuInfo.available) {
+          gpuEncoder = gpuInfo.encoder
+          console.log(`[SongNhacFFmpeg] GPU detected: ${gpuInfo.name ?? gpuInfo.encoder}`)
+        }
+      } catch (err) {
+        console.warn('[SongNhacFFmpeg] GPU detection failed, using CPU:', err)
+      }
+    }
+
+    const built = buildEncoderArgs(gpuEncoder, useGpu, preset, crf, videoBitrate)
+    usedEncoder = built.usedEncoder
+
+    inputArgs = [
+      '-y',
+      '-f', 'image2pipe',
+      '-vcodec', 'mjpeg',
+      '-r', String(fps),
+      '-i', 'pipe:0',
+    ]
+    videoOutputArgs = [
+      // Scale to safe (even) dimensions
+      '-vf', `scale=${safeWidth}:${safeHeight}`,
+      ...built.encoderArgs,
+    ]
+  }
+
+  console.log(`[SongNhacFFmpeg] Using encoder: ${usedEncoder}`)
 
   // Add audio inputs
   for (const audioPath of audioPaths) {
@@ -78,20 +202,18 @@ export function startFfmpegPipe(options: SongNhacExportOptions): {
   }
 
   const outputArgs: string[] = [
-    // Scale to safe (even) dimensions — libx264 yuv420p requires width & height divisible by 2
-    '-vf', `scale=${safeWidth}:${safeHeight}`,
-    // Video encoding (software x264 — pipe input không hỗ trợ hwaccel)
-    '-c:v', 'libx264',
-    '-preset', preset,
-    '-crf', String(crf),
-    '-b:v', videoBitrate,
-    '-pix_fmt', 'yuv420p',
-    // Audio
-    '-c:a', 'aac',
-    '-b:a', '192k',
-    // Map streams
+    // Video output args (mode-dependent: WebCodecs copy or JPEG encode)
+    ...videoOutputArgs,
+    // Map video stream
     '-map', '0:v',
   ]
+
+  // Audio encoding — only when audio inputs exist
+  if (audioPaths.length > 0) {
+    outputArgs.push('-c:a', 'aac', '-b:a', '192k')
+  } else {
+    outputArgs.push('-an')
+  }
 
   // Map audio streams
   for (let i = 0; i < audioPaths.length; i++) {
@@ -142,14 +264,13 @@ export function startFfmpegPipe(options: SongNhacExportOptions): {
     if (exitReject) exitReject(err)
   })
 
-  ffmpegProc.once('close', (code, signal) => {
+  ffmpegProc.once('close', (code, _signal) => {
     if (code !== 0 && code !== null) {
       console.warn(`[SongNhacFFmpeg] Exited with code ${code}`)
-      // Log last stderr for debugging
       const lastLines = stderrData.split('\n').slice(-5).join('\n')
       if (lastLines) console.warn('[SongNhacFFmpeg] Last stderr:', lastLines)
     }
-    exitResult = { outputPath, code }
+    exitResult = { outputPath, code, usedEncoder }
     if (exitResolve) exitResolve(exitResult)
   })
 
@@ -162,5 +283,5 @@ export function startFfmpegPipe(options: SongNhacExportOptions): {
     })
   }
 
-  return { ffmpegProc, waitForExit }
+  return { ffmpegProc, waitForExit, usedEncoder }
 }

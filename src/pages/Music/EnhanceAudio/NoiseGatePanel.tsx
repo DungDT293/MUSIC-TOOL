@@ -41,15 +41,15 @@ export default function NoiseGatePanel({ value, onChange, disabled }: Props) {
         </span>
       </div>
       <div style={{ fontSize: '11px', color: '#555', marginBottom: '10px', lineHeight: '1.4' }}>
-        Tu dong tat tieng khi khong co am thanh — loai bo tieng on nen, tieng hiss, tieng o khi khong co ai noi/hat.
-        Thich hop cho thu am, podcast, nhac cu.
+        Tự động tắt tiếng khi không có âm thanh — loại bỏ tiếng ồn nền, tiếng hiss, tiếng ồ khi không có ai nói/hát.
+        Thích hợp cho thu âm, podcast, nhạc cụ.
       </div>
       <div style={{ opacity: value.enabled ? 1 : 0.4, pointerEvents: value.enabled && !disabled ? 'auto' : 'none' }}>
-        <SliderRow label="Nguong (Threshold)" desc="Am thanh nho hon muc nay se bi tat — keo len neu con nhieu tien on, keo xuong neu cat mat tieng that" min={-80} max={-5} step={1} value={value.thresholdDb} unit=" dB" onChange={v => set('thresholdDb', v)} />
-        <SliderRow label="Ti le giam (Ratio)" desc="Muc do tat tieng — 6:1 la pho bien, 20:1 = tat hoan toan" min={2} max={20} step={0.5} value={value.ratio} unit=":1" onChange={v => set('ratio', v)} />
-        <SliderRow label="Phan ung (Attack)" desc="Bao lau gate mo ra sau khi co tieng — thap = nhanh, tranh cat mat chu dau" min={0.1} max={50} step={0.1} value={value.attackMs} unit=" ms" onChange={v => set('attackMs', v)} />
-        <SliderRow label="Nha (Release)" desc="Bao lau gate dong lai sau khi tieng bien mat — cao = tu nhien hon, thoai mai hon" min={10} max={2000} step={10} value={value.releaseMs} unit=" ms" onChange={v => set('releaseMs', v)} />
-        <SliderRow label="Muc giam (Range)" desc="Khi gate dong, giam bao nhieu dB — -24dB = van nghe duoc rat nhe, -60dB = im lang gaan nhu hoan toan" min={-60} max={-6} step={1} value={value.rangeDb} unit=" dB" onChange={v => set('rangeDb', v)} />
+        <SliderRow label="Ngưỡng (Threshold)" desc="Âm thanh nhỏ hơn mức này sẽ bị tắt — kéo lên nếu còn nhiều tiếng ồn, kéo xuống nếu cắt mất tiếng thật" min={-80} max={-5} step={1} value={value.thresholdDb} unit=" dB" onChange={v => set('thresholdDb', v)} />
+        <SliderRow label="Tỉ lệ giảm (Ratio)" desc="Mức độ tắt tiếng — 6:1 là phổ biến, 20:1 = tắt hoàn toàn" min={2} max={20} step={0.5} value={value.ratio} unit=":1" onChange={v => set('ratio', v)} />
+        <SliderRow label="Phản ứng (Attack)" desc="Bao lâu gate mở ra sau khi có tiếng — thấp = nhanh, tránh cắt mất chữ đầu" min={0.1} max={50} step={0.1} value={value.attackMs} unit=" ms" onChange={v => set('attackMs', v)} />
+        <SliderRow label="Nhả (Release)" desc="Bao lâu gate đóng lại sau khi tiếng biến mất — cao = tự nhiên hơn, thoải mái hơn" min={10} max={2000} step={10} value={value.releaseMs} unit=" ms" onChange={v => set('releaseMs', v)} />
+        <SliderRow label="Mức giảm (Range)" desc="Khi gate đóng, giảm bao nhiêu dB — -24dB = vẫn nghe được rất nhẹ, -60dB = im lặng gần như hoàn toàn" min={-60} max={-6} step={1} value={value.rangeDb} unit=" dB" onChange={v => set('rangeDb', v)} />
       </div>
     </div>
   )

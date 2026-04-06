@@ -783,10 +783,12 @@ export function YouTubeDownloaderTab() {
                   fontFamily: 'monospace'
                 }}>
                   {(() => {
-                    // Lọc các format video (có vcodec)
+                    // Lọc các format video (có vcodec) và bỏ 0x0
                     const videoFormats = videoInfo.formats.filter(f => f.vcodec && f.vcodec !== 'none');
-                    // Lấy unique resolutions
-                    const resolutions = [...new Set(videoFormats.map(f => f.resolution))].sort((a, b) => {
+                    // Lấy unique resolutions, bỏ "0x0" và "none"
+                    const resolutions = [...new Set(videoFormats.map(f => f.resolution))]
+                      .filter(r => r && r !== '0x0' && r !== 'none' && !r.startsWith('0x'))
+                      .sort((a, b) => {
                       const heightA = parseInt(a.split('x')[1] || '0');
                       const heightB = parseInt(b.split('x')[1] || '0');
                       return heightB - heightA; // Sort descending
@@ -796,14 +798,19 @@ export function YouTubeDownloaderTab() {
                 </div>
                 {(() => {
                   const videoFormats = videoInfo.formats.filter(f => f.vcodec && f.vcodec !== 'none');
-                  const maxHeight = Math.max(...videoFormats.map(f => {
-                    const match = f.resolution.match(/(\d+)x(\d+)/);
-                    return match ? parseInt(match[2]) : 0;
-                  }));
-                  if (maxHeight < 1080 && quality === '1080') {
+                  // Tính maxHeight từ formats, fallback sang videoInfo.height (đã được backend set = max)
+                  const maxHeightFromFormats = videoFormats.length > 0
+                    ? Math.max(...videoFormats.map(f => {
+                        const match = f.resolution?.match(/(\d+)x(\d+)/);
+                        return match ? parseInt(match[2]) : 0;
+                      }))
+                    : 0;
+                  const maxHeight = Math.max(maxHeightFromFormats, videoInfo.height || 0);
+                  const requestedHeight = parseInt(quality) || 0; // quality = '1080', '1440', '2160', etc.
+                  if (requestedHeight > 0 && maxHeight > 0 && maxHeight < requestedHeight) {
                     return (
                       <p style={{ fontSize: '12px', color: '#ffaa66', marginTop: '4px' }}>
-                        Video chỉ có resolution tối đa {maxHeight}p, không có 1080p. Tool sẽ tải resolution cao nhất có sẵn.
+                        Video chỉ có resolution tối đa {maxHeight}p, không có {requestedHeight}p. Tool sẽ tải resolution cao nhất có sẵn.
                       </p>
                     );
                   }

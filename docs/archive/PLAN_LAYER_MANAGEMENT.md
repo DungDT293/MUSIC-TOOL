@@ -1,4 +1,6 @@
-# Kế Hoạch Phát Triển Layer Management cho Chức Năng Số 10 (Tạo Sóng Nhạc)
+> ⛔ **ARCHIVED** (2026-04-02) — Fabric.js layer management đã bị thay thế bởi custom layer system trong `src/features/song-nhac/store/songNhacLayerStore.ts`.
+
+# [ARCHIVED] Kế Hoạch Phát Triển Layer Management cho Chức Năng Số 10 (Tạo Sóng Nhạc)
 
 ## 📋 Tổng Quan
 

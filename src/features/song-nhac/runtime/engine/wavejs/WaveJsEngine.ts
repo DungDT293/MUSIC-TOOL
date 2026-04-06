@@ -1,54 +1,62 @@
 /**
  * Wave.js Engine — Multiple wave animation styles (Canvas 2D).
  *
- * Tích hợp @foobar404/wave (https://github.com/foobar404/Wave.js)
+ * Tích hợp @foobar404/wave v2 (https://github.com/foobar404/Wave.js)
  * để render nhiều kiểu sóng đẹp mắt.
  *
- * Renders trực tiếp lên canvas WebGL context (dùng 2D fallback).
+ * Architecture:
+ * - Wave.js v2 API uses class constructors (Shine, Circles, Lines, etc.)
+ *   NOT string keys like v1 ('shine rings').
+ * - Wave constructor accepts HTMLAudioElement OR { context, source } for
+ *   sharing an existing AudioContext (avoids cross-context issues).
+ * - Wave.js has its own internal RAF loop that renders to the canvas.
+ * - We render to an offscreen canvas, then blit to the target each frame.
  */
 
 import type { Size, EngineRenderFrame, WebGLVisualizerEngine } from '../types'
 
+/**
+ * Mapping from user-friendly animation names to Wave.js v2 class names.
+ * Wave.js v2 has 10 animation classes: Arcs, Circles, Cubes, Flower, Glob, Lines, Shine, Square, Turntable, Wave
+ */
 export type WaveJsAnimation =
-  | 'wave'
-  | 'bars'
-  | 'bars blocks'
-  | 'dualbars'
-  | 'dualbars blocks'
-  | 'fireworks'
-  | 'flower'
-  | 'flower blocks'
-  | 'orbs'
-  | 'ring'
-  | 'rings'
-  | 'round bars'
-  | 'round wave'
   | 'shine'
-  | 'shine rings'
-  | 'star'
-  | 'stitches'
-  | 'web'
+  | 'circles'
+  | 'lines'
+  | 'arcs'
+  | 'cubes'
+  | 'flower'
+  | 'glob'
+  | 'square'
+  | 'turntable'
+  | 'wave'
 
 export const WAVEJS_ANIMATIONS: { value: WaveJsAnimation; label: string }[] = [
-  { value: 'wave', label: 'Wave' },
-  { value: 'bars', label: 'Bars' },
-  { value: 'bars blocks', label: 'Bars Blocks' },
-  { value: 'dualbars', label: 'Dual Bars' },
-  { value: 'dualbars blocks', label: 'Dual Bars Blocks' },
-  { value: 'fireworks', label: 'Fireworks' },
-  { value: 'flower', label: 'Flower' },
-  { value: 'flower blocks', label: 'Flower Blocks' },
-  { value: 'orbs', label: 'Orbs' },
-  { value: 'ring', label: 'Ring' },
-  { value: 'rings', label: 'Rings' },
-  { value: 'round bars', label: 'Round Bars' },
-  { value: 'round wave', label: 'Round Wave' },
   { value: 'shine', label: 'Shine' },
-  { value: 'shine rings', label: 'Shine Rings' },
-  { value: 'star', label: 'Star' },
-  { value: 'stitches', label: 'Stitches' },
-  { value: 'web', label: 'Web' },
+  { value: 'circles', label: 'Circles' },
+  { value: 'lines', label: 'Lines' },
+  { value: 'arcs', label: 'Arcs' },
+  { value: 'cubes', label: 'Cubes' },
+  { value: 'flower', label: 'Flower' },
+  { value: 'glob', label: 'Glob' },
+  { value: 'square', label: 'Square' },
+  { value: 'turntable', label: 'Turntable' },
+  { value: 'wave', label: 'Wave' },
 ]
+
+/** Map WaveJsAnimation → Wave.js v2 class name on wave.animations */
+const ANIM_CLASS_MAP: Record<WaveJsAnimation, string> = {
+  shine: 'Shine',
+  circles: 'Circles',
+  lines: 'Lines',
+  arcs: 'Arcs',
+  cubes: 'Cubes',
+  flower: 'Flower',
+  glob: 'Glob',
+  square: 'Square',
+  turntable: 'Turntable',
+  wave: 'Wave',
+}
 
 export interface WaveJsConfig {
   animation?: WaveJsAnimation
@@ -57,7 +65,7 @@ export interface WaveJsConfig {
 }
 
 export class WaveJsEngine implements WebGLVisualizerEngine {
-  private wave: any = null
+  private waveInstance: any = null
   private canvas: HTMLCanvasElement | null = null
   private offscreenCanvas: HTMLCanvasElement | null = null
   private ctx: CanvasRenderingContext2D | null = null
@@ -65,12 +73,15 @@ export class WaveJsEngine implements WebGLVisualizerEngine {
   private config: WaveJsConfig
   private inited = false
   private destroyed = false
-  private audioElement: HTMLAudioElement | null = null
-  private animationId: number | null = null
+  /** Saved audio source for Wave.js constructor. */
+  private audioSource: MediaElementAudioSourceNode | null = null
+  private audioContext: AudioContext | null = null
+  /** Guard to prevent concurrent startWaveJs calls. */
+  private startingWave = false
 
   constructor(config: WaveJsConfig = {}) {
     this.config = {
-      animation: 'shine rings',
+      animation: 'shine',
       colors: ['#ff0066', '#00ccff', '#33ff66', '#ffcc00', '#cc66ff'],
       lineWidth: 2,
       ...config,
@@ -87,65 +98,98 @@ export class WaveJsEngine implements WebGLVisualizerEngine {
     this.offscreenCanvas.width = size.width
     this.offscreenCanvas.height = size.height
 
+    // Prepare fallback ctx immediately
+    this.ctx = this.offscreenCanvas.getContext('2d')
+
     this.inited = true
     console.log('[WaveJsEngine] Initialized, animation:', this.config.animation)
   }
 
   private async startWaveJs(): Promise<void> {
-    if (!this.offscreenCanvas || !this.audioElement || this.destroyed) return
+    if (!this.offscreenCanvas || this.destroyed || this.startingWave) return
+    if (!this.audioSource || !this.audioContext) return
+
+    this.startingWave = true
     try {
       const WaveModule = await import('@foobar404/wave')
-      const Wave = WaveModule.default || WaveModule.Wave || WaveModule
-      if (this.destroyed) return
+      if (this.destroyed) { this.startingWave = false; return }
 
-      this.wave = new Wave(this.audioElement, this.offscreenCanvas)
+      // Wave.js v2 ESM import: mod.default = { Wave: WaveClass }
+      // CJS require: mod = { Wave: WaveClass }
+      // Need to extract the actual Wave constructor class.
+      const Wave = WaveModule.default?.Wave || WaveModule.Wave || WaveModule.default || WaveModule
 
-      this.wave.addAnimation(
-        this.wave.animations[this.config.animation as string] ||
-          this.wave.animations['shine rings'],
-        {
-          lineColor: this.config.colors?.[0] || '#ff0066',
-          lineWidth: this.config.lineWidth || 2,
-          count: 100,
-          fillColor: { gradient: this.config.colors || ['#ff0066', '#00ccff'] },
-          diameter: Math.min(this.size.width, this.size.height) * 0.6,
-        }
+      // Clear any previous wave instance
+      if (this.waveInstance) {
+        try { this.waveInstance.clearAnimations?.() } catch {}
+        this.waveInstance = null
+      }
+
+      // Wave.js v2: pass { context, source } to share existing AudioContext
+      // This avoids creating a duplicate AudioContext + cross-context issues
+      this.waveInstance = new Wave(
+        { context: this.audioContext, source: this.audioSource },
+        this.offscreenCanvas
       )
 
-      console.log('[WaveJsEngine] Wave.js started with animation:', this.config.animation)
+      // Create animation instance using v2 class constructor
+      const animKey = this.config.animation || 'shine'
+      const className = ANIM_CLASS_MAP[animKey] || 'Shine'
+      const AnimClass = this.waveInstance.animations?.[className]
+
+      if (AnimClass) {
+        const colors = this.config.colors || ['#ff0066', '#00ccff']
+        const animOpts: any = {
+          lineColor: colors[0],
+          lineWidth: this.config.lineWidth || 2,
+          count: 100,
+        }
+
+        // Some animations support extra options
+        if (['shine', 'circles', 'flower'].includes(animKey)) {
+          animOpts.diameter = Math.min(this.size.width, this.size.height) * 0.6
+        }
+        if (['shine', 'lines', 'arcs', 'cubes', 'square'].includes(animKey)) {
+          animOpts.fillColor = { gradient: colors }
+        }
+
+        const animInstance = new AnimClass(animOpts)
+        this.waveInstance.addAnimation(animInstance)
+        console.log('[WaveJsEngine] Wave.js v2 started with animation:', className)
+      } else {
+        console.warn(
+          '[WaveJsEngine] Animation class not found:', className,
+          '— available:', Object.keys(this.waveInstance.animations || {})
+        )
+        this.startFallbackRender()
+      }
     } catch (err) {
       console.error('[WaveJsEngine] Failed to start Wave.js:', err)
-      // Fallback: tự render nếu Wave.js gặp lỗi
       this.startFallbackRender()
     }
+    this.startingWave = false
   }
 
   private startFallbackRender(): void {
-    // Fallback visualization khi Wave.js không hoạt động
     this.ctx = this.offscreenCanvas?.getContext('2d') || null
   }
 
   attachAudioSource(source: MediaElementAudioSourceNode, audioContext: AudioContext): void {
-    // Wave.js cần HTMLAudioElement trực tiếp
-    // Lấy từ source node
-    const mediaEl = (source as any).mediaElement as HTMLAudioElement
-    if (mediaEl) {
-      this.audioElement = mediaEl
-      this.startWaveJs()
-    }
+    this.audioSource = source
+    this.audioContext = audioContext
+    // Start Wave.js now that we have audio
+    this.startWaveJs()
   }
 
   setAnimation(animation: WaveJsAnimation): void {
     this.config.animation = animation
     // Restart wave engine nếu đang chạy
-    if (this.wave) {
-      try {
-        this.wave.clearAnimations?.()
-      } catch {}
-      this.wave = null
-      if (this.audioElement) {
-        this.startWaveJs()
-      }
+    if (this.waveInstance) {
+      try { this.waveInstance.clearAnimations?.() } catch {}
+      this.waveInstance = null
+    }
+    if (this.audioSource && this.audioContext) {
+      this.startWaveJs()
     }
   }
 
@@ -160,16 +204,16 @@ export class WaveJsEngine implements WebGLVisualizerEngine {
   render(frame: EngineRenderFrame): void {
     if (!this.canvas || !this.inited) return
 
-    // Nếu có Wave.js offscreen canvas, blit vào target
     if (this.offscreenCanvas) {
       const ctx = this.canvas.getContext('2d')
       if (ctx) {
         ctx.clearRect(0, 0, this.size.width, this.size.height)
 
-        if (this.wave && this.offscreenCanvas) {
+        if (this.waveInstance && this.offscreenCanvas) {
+          // Wave.js renders via its own RAF to offscreenCanvas → just blit
           ctx.drawImage(this.offscreenCanvas, 0, 0, this.size.width, this.size.height)
         } else if (this.ctx) {
-          // Fallback render
+          // Fallback render using our own visualization
           this.renderFallback(frame)
           ctx.drawImage(this.offscreenCanvas, 0, 0, this.size.width, this.size.height)
         }
@@ -218,19 +262,14 @@ export class WaveJsEngine implements WebGLVisualizerEngine {
   destroy(): void {
     this.destroyed = true
     this.inited = false
-    if (this.animationId != null) {
-      cancelAnimationFrame(this.animationId)
-      this.animationId = null
-    }
-    if (this.wave) {
-      try {
-        this.wave.clearAnimations?.()
-      } catch {}
-      this.wave = null
+    if (this.waveInstance) {
+      try { this.waveInstance.clearAnimations?.() } catch {}
+      this.waveInstance = null
     }
     this.offscreenCanvas = null
     this.canvas = null
     this.ctx = null
-    this.audioElement = null
+    this.audioSource = null
+    this.audioContext = null
   }
 }

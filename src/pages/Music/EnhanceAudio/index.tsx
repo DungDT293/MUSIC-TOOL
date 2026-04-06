@@ -176,10 +176,10 @@ export default function EnhanceAudioMain() {
           audio.play().catch(() => {})
         }
       } else {
-        setError(res.error ?? 'Preview that bai')
+        setError(res.error ?? 'Preview thất bại')
       }
     } catch (err: any) {
-      setError(err?.message ?? 'Loi preview')
+      setError(err?.message ?? 'Lỗi preview')
     } finally {
       setPreviewLoading(false)
     }
@@ -188,10 +188,10 @@ export default function EnhanceAudioMain() {
   // ── Main enhance ─────────────────────────────────────────────────────────
 
   const handleStart = async () => {
-    if (files.length === 0) { setError('Vui long them it nhat 1 file.'); return }
+    if (files.length === 0) { setError('Vui lòng thêm ít nhất 1 file.'); return }
     const anyEnabled = eq.enabled || compressor.enabled || loudnorm.enabled || stereo.enabled
       || noiseGate.enabled || limiter.enabled || exciter.enabled || noiseReduction.enabled
-    if (!anyEnabled) { setError('Vui long bat it nhat 1 hieu ung.'); return }
+    if (!anyEnabled) { setError('Vui lòng bật ít nhất 1 hiệu ứng.'); return }
 
     setError(null); setSuccess(null); setResult(null); setProgress(null); setLoading(true)
 
@@ -215,14 +215,14 @@ export default function EnhanceAudioMain() {
       const res: EnhanceAudioResult = await api.music.enhanceAudio(req)
       setResult(res)
       if (res.processed > 0) {
-        setSuccess(`Da nang cap ${res.processed}/${files.length} file thanh cong.`)
+        setSuccess(`Đã nâng cấp ${res.processed}/${files.length} file thành công.`)
         if (outputDir) window.api.openPath?.(outputDir)
       }
       if (res.failed > 0) {
-        setError(`${res.failed} file that bai:\n${res.errors.map(e => `• ${e.file}: ${e.error}`).join('\n')}`)
+        setError(`${res.failed} file thất bại:\n${res.errors.map(e => `• ${e.file}: ${e.error}`).join('\n')}`)
       }
     } catch (err: any) {
-      setError(err?.message ?? 'Loi khong xac dinh')
+      setError(err?.message ?? 'Lỗi không xác định')
     } finally {
       setLoading(false); setProgress(null)
     }
@@ -244,7 +244,7 @@ export default function EnhanceAudioMain() {
     const elapsed = (Date.now() - startTimeRef.current) / 1000
     const totalEstSec = elapsed / (progress.percent / 100)
     const remaining = Math.max(0, totalEstSec - elapsed)
-    if (remaining < 5) return '< 5 giay'
+    if (remaining < 5) return '< 5 giây'
     const m = Math.floor(remaining / 60)
     const s = Math.floor(remaining % 60)
     return m > 0 ? `~${m}p ${s}s` : `~${s}s`
@@ -262,7 +262,7 @@ export default function EnhanceAudioMain() {
 
       {/* ── Col trai ── */}
       <div style={{ width: '300px', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: '10px', overflow: 'hidden' }}>
-        <div style={{ fontSize: '16px', fontWeight: 'bold', color: '#fff' }}>Nang cap am thanh</div>
+        <div style={{ fontSize: '16px', fontWeight: 'bold', color: '#fff' }}>Nâng cấp âm thanh</div>
 
         <div style={{ flex: 1, overflow: 'hidden' }}>
           <FileList
@@ -280,22 +280,22 @@ export default function EnhanceAudioMain() {
 
         {/* Output settings */}
         <div style={{ borderTop: '1px solid #333', paddingTop: '10px' }}>
-          <div style={{ fontSize: '12px', color: '#888', marginBottom: '6px' }}>Thu muc xuat</div>
+          <div style={{ fontSize: '12px', color: '#888', marginBottom: '6px' }}>Thư mục xuất</div>
           <div style={{ display: 'flex', gap: '6px', marginBottom: '8px' }}>
             <input
               type="text" readOnly
-              value={outputDir || 'Cung thu muc goc'}
+              value={outputDir || 'Cùng thư mục gốc'}
               style={{ flex: 1, backgroundColor: '#1a1a1a', color: '#aaa', border: '1px solid #333', borderRadius: '4px', padding: '4px 8px', fontSize: '12px' }}
             />
             <button onClick={handleSelectOutputDir} disabled={loading}
               style={{ fontSize: '11px', padding: '4px 8px', backgroundColor: '#007acc', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
-              Chon
+              Chọn
             </button>
           </div>
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
             <select value={outputFormat} onChange={e => setOutputFormat(e.target.value as any)} disabled={loading}
               style={{ flex: 1, backgroundColor: '#1a1a1a', color: '#ccc', border: '1px solid #333', borderRadius: '4px', padding: '4px 6px', fontSize: '12px' }}>
-              <option value="keep">Giu nguyen format</option>
+              <option value="keep">Giữ nguyên format</option>
               <option value="mp3">MP3</option>
               <option value="aac">AAC (M4A)</option>
               <option value="wav">WAV</option>
@@ -308,7 +308,7 @@ export default function EnhanceAudioMain() {
           </div>
           <label style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '6px', fontSize: '12px', color: '#888', cursor: 'pointer' }}>
             <input type="checkbox" checked={overwrite} onChange={e => setOverwrite(e.target.checked)} disabled={loading} />
-            Ghi de file goc (khong tao _enhanced)
+            Ghi đè file gốc (không tạo _enhanced)
           </label>
         </div>
       </div>
@@ -368,7 +368,7 @@ export default function EnhanceAudioMain() {
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: '#88cc88', marginBottom: '6px' }}>
               <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{progress.currentFile}</span>
               <span style={{ flexShrink: 0, marginLeft: '8px' }}>
-                {progress.currentIndex + 1}/{progress.totalFiles} — {pct}%{getEta() && ` (con lai ${getEta()})`}
+                {progress.currentIndex + 1}/{progress.totalFiles} — {pct}%{getEta() && ` (còn lại ${getEta()})`}
               </span>
             </div>
             <div style={{ height: '6px', backgroundColor: '#1a1a1a', borderRadius: '3px', overflow: 'hidden' }}>
@@ -403,14 +403,14 @@ export default function EnhanceAudioMain() {
               border: 'none', borderRadius: '6px', cursor: loading || files.length === 0 ? 'not-allowed' : 'pointer',
             }}
           >
-            {loading ? `Dang xu ly... (${pct}%)` : `Bat dau nang cap (${files.length} file)`}
+            {loading ? `Đang xử lý... (${pct}%)` : `Bắt đầu nâng cấp (${files.length} file)`}
           </button>
           {loading && (
             <button
               onClick={handleStop}
               style={{ padding: '10px 16px', backgroundColor: '#3a1f1f', color: '#ff8888', border: '1px solid #662222', borderRadius: '6px', cursor: 'pointer', fontSize: '14px' }}
             >
-              Dung
+              Dừng
             </button>
           )}
         </div>

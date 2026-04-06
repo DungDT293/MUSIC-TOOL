@@ -1,4 +1,6 @@
-# Audio Visualizer Integration - Hoàn thành
+> ⛔ **ARCHIVED** (2026-04-02) — Kiến trúc cũ, đã thay thế bởi `src/features/song-nhac/`.
+
+# [ARCHIVED] Audio Visualizer Integration - Hoàn thành
 
 ## ✅ Đã tích hợp thành công
 

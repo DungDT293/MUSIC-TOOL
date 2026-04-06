@@ -4,13 +4,33 @@
  * Tích hợp vanta (https://github.com/tengbao/vanta)
  * để render các background 3D ấn tượng: birds, waves, fog, net, rings, dots...
  * Audio-reactive: điều khiển speed/scale/color theo FFT data.
+ *
+ * Architecture:
+ * - Vanta's CJS dist expects `window.THREE` or a THREE object passed via config.
+ * - We import THREE ESM and pass it as a plain object. Vanta accesses properties like
+ *   THREE.Vector3, THREE.WebGLRenderer etc. — ESM namespace works because properties are
+ *   the same. We also set window.THREE as fallback.
+ * - Vanta creates its own WebGL renderer internally (in its container).
+ * - We need `preserveDrawingBuffer: true` on Vanta's renderer to blit its canvas
+ *   (otherwise readPixels/drawImage captures blank). We achieve this by monkey-patching
+ *   THREE.WebGLRenderer before Vanta creates it.
+ * - Each frame, we blit from Vanta's internal canvas → runtime's webglCanvas (2D).
+ *
+ * FIX V2: Monkey-patch WebGLRenderer correctly as a proper constructor class.
+ *  - Previous version used a plain function which broke `new.target` / prototype chain.
+ *  - Now we use `class PatchedRenderer extends OriginalRenderer` pattern.
+ *  - Also: cache 2D context instead of calling getContext('2d') every frame.
  */
 
 // THREE lazy-loaded khi effect được khởi tạo
 // Vanta cần THREE object nhưng chỉ khi user thực sự chọn Vanta engine
 let _THREE: any = null
 async function getThree() {
-  if (!_THREE) _THREE = await import('three')
+  if (!_THREE) {
+    _THREE = await import('three')
+    // Set window.THREE as fallback for Vanta CJS dist
+    ;(window as any).THREE = _THREE
+  }
   return _THREE
 }
 
@@ -69,6 +89,8 @@ const effectImports: Record<VantaEffect, () => Promise<any>> = {
 export class VantaEngine implements WebGLVisualizerEngine {
   private vantaEffect: any = null
   private canvas: HTMLCanvasElement | null = null
+  /** Cached 2D context for target canvas — avoids calling getContext('2d') every frame. */
+  private targetCtx: CanvasRenderingContext2D | null = null
   private container: HTMLDivElement | null = null
   private size: Size = { width: 0, height: 0 }
   private config: VantaConfig
@@ -97,6 +119,9 @@ export class VantaEngine implements WebGLVisualizerEngine {
     this.canvas = canvas
     this.size = size
     this.destroyed = false
+
+    // Cache the 2D context on init — the target canvas is guaranteed to be fresh here
+    this.targetCtx = canvas.getContext('2d')
 
     // Vanta cần một container DOM element
     this.container = document.createElement('div')
@@ -135,10 +160,28 @@ export class VantaEngine implements WebGLVisualizerEngine {
 
       const VantaFn = vantaMod.default || vantaMod
 
+      // Monkey-patch THREE.WebGLRenderer to inject preserveDrawingBuffer: true.
+      // This is needed so we can blit from Vanta's canvas (drawImage reads back buffer).
+      //
+      // FIX V2: Use a proper class extends pattern instead of a plain function wrapper.
+      // A plain function breaks `new.target`, prototype chain, and instanceof checks.
+      const OriginalRenderer = THREE.WebGLRenderer
+      const patchedTHREE = Object.create(THREE)
+
+      // Use a class that properly extends the original renderer
+      class PatchedWebGLRenderer extends OriginalRenderer {
+        constructor(params: any = {}) {
+          params.preserveDrawingBuffer = true
+          params.alpha = true
+          super(params)
+        }
+      }
+      patchedTHREE.WebGLRenderer = PatchedWebGLRenderer
+
       // Cấu hình chung cho mọi effect
       const baseConfig: any = {
         el: this.container,
-        THREE: THREE,
+        THREE: patchedTHREE,
         mouseControls: false,
         touchControls: false,
         gyroControls: false,
@@ -246,6 +289,7 @@ export class VantaEngine implements WebGLVisualizerEngine {
 
       this.vantaEffect = VantaFn(baseConfig)
       this.currentEffect = effectName
+      console.log(`[VantaEngine] Effect "${effectName}" loaded successfully`)
     } catch (err) {
       console.error(`[VantaEngine] Failed to load effect "${effectName}":`, err)
     }
@@ -287,9 +331,9 @@ export class VantaEngine implements WebGLVisualizerEngine {
       const bassEnd = Math.floor(len * 0.15)
       const midEnd = Math.floor(len * 0.5)
 
-      for (let i = 0; i < bassEnd; i++) bass += freq[i]
-      for (let i = bassEnd; i < midEnd; i++) mid += freq[i]
-      for (let i = midEnd; i < len; i++) treble += freq[i]
+      for (let i = 0; i < bassEnd; i++) bass += freq[i]!
+      for (let i = bassEnd; i < midEnd; i++) mid += freq[i]!
+      for (let i = midEnd; i < len; i++) treble += freq[i]!
 
       bass = (bass / (bassEnd * 255)) || 0
       mid = (mid / ((midEnd - bassEnd) * 255)) || 0
@@ -331,7 +375,12 @@ export class VantaEngine implements WebGLVisualizerEngine {
     try {
       const vantaCanvas = this.container.querySelector('canvas') as HTMLCanvasElement
       if (vantaCanvas) {
-        const ctx = this.canvas.getContext('2d')
+        // Use cached 2D context — fallback to re-acquiring if null
+        let ctx = this.targetCtx
+        if (!ctx) {
+          ctx = this.canvas.getContext('2d')
+          this.targetCtx = ctx
+        }
         if (ctx) {
           ctx.clearRect(0, 0, this.size.width, this.size.height)
           ctx.drawImage(vantaCanvas, 0, 0, this.size.width, this.size.height)
@@ -352,5 +401,6 @@ export class VantaEngine implements WebGLVisualizerEngine {
     }
     this.container = null
     this.canvas = null
+    this.targetCtx = null
   }
 }

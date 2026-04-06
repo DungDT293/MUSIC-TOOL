@@ -23,10 +23,10 @@ interface Props {
 }
 
 const CATEGORY_LABELS: Record<string, string> = {
-  platform: 'Nen tang',
-  genre: 'The loai nhac',
-  voice: 'Giong noi/hat',
-  utility: 'Tien ich',
+  platform: 'Nền tảng',
+  genre: 'Thể loại nhạc',
+  voice: 'Giọng nói/hát',
+  utility: 'Tiện ích',
 }
 
 const CATEGORY_COLORS: Record<string, string> = {
@@ -81,7 +81,7 @@ export default function PresetsPanel({ currentSettings, onApply, disabled }: Pro
     return (
       <div style={{ border: '1px solid #333', borderRadius: '6px', padding: '10px 12px', marginBottom: '10px', backgroundColor: '#1e1e1e' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <span style={{ fontSize: '13px', fontWeight: 'bold', color: '#fff' }}>Presets chuyen nghiep</span>
+          <span style={{ fontSize: '13px', fontWeight: 'bold', color: '#fff' }}>Presets chuyên nghiệp</span>
           {appliedPreset && (
             <span style={{ fontSize: '11px', color: '#40a9ff', backgroundColor: '#0a1929', padding: '2px 6px', borderRadius: '10px' }}>
               {appliedPreset}
@@ -92,11 +92,11 @@ export default function PresetsPanel({ currentSettings, onApply, disabled }: Pro
             disabled={disabled}
             style={{ marginLeft: 'auto', fontSize: '11px', padding: '3px 10px', backgroundColor: '#007acc', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
           >
-            Chon preset
+            Chọn preset
           </button>
         </div>
         <div style={{ fontSize: '11px', color: '#555', marginTop: '4px' }}>
-          15 preset chuyen nghiep — pop, EDM, jazz, podcast, streaming (YouTube, Spotify, Apple Music...)
+          15 preset chuyên nghiệp — pop, EDM, jazz, podcast, streaming (YouTube, Spotify, Apple Music...)
         </div>
       </div>
     )
@@ -105,17 +105,17 @@ export default function PresetsPanel({ currentSettings, onApply, disabled }: Pro
   return (
     <div style={{ border: '1px solid #3a3a00', borderRadius: '6px', padding: '12px', marginBottom: '10px', backgroundColor: '#1e1e00' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
-        <span style={{ fontSize: '13px', fontWeight: 'bold', color: '#fff' }}>Presets chuyen nghiep</span>
+        <span style={{ fontSize: '13px', fontWeight: 'bold', color: '#fff' }}>Presets chuyên nghiệp</span>
         {appliedPreset && (
           <span style={{ fontSize: '11px', color: '#40a9ff', backgroundColor: '#0a1929', padding: '2px 6px', borderRadius: '10px' }}>
-            Da ap dung: {appliedPreset}
+            Đã áp dụng: {appliedPreset}
           </span>
         )}
         <button
           onClick={() => setExpanded(false)}
           style={{ marginLeft: 'auto', fontSize: '11px', padding: '3px 8px', backgroundColor: '#333', color: '#aaa', border: '1px solid #444', borderRadius: '4px', cursor: 'pointer' }}
         >
-          Thu gon
+          Thu gọn
         </button>
       </div>
 
@@ -199,7 +199,7 @@ export default function PresetsPanel({ currentSettings, onApply, disabled }: Pro
       </div>
 
       <div style={{ marginTop: '8px', padding: '6px 8px', backgroundColor: '#1a1a00', borderRadius: '4px', fontSize: '11px', color: '#666', lineHeight: '1.4' }}>
-        Nhan vao preset de ap dung. Tat ca thong so se duoc cap nhat ngay lap tuc — ban van co the chinh chinh sau khi ap dung.
+        Nhấn vào preset để áp dụng. Tất cả thông số sẽ được cập nhật ngay lập tức — bạn vẫn có thể chỉnh sửa sau khi áp dụng.
       </div>
     </div>
   )

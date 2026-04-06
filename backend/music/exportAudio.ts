@@ -21,6 +21,10 @@ export interface ExportPlaylistRequest {
   bitrateKbps?: number // chỉ dùng cho mp3, default 320
   smoothTransitions?: boolean // bật crossfade (re-encode)
   crossfadeDurationSec?: number // thời lượng crossfade (giây)
+  /** Cân bằng âm lượng giữa các bài (EBU R128 loudnorm) */
+  normalizeLoudness?: boolean
+  /** Target LUFS (default -14 = YouTube/Spotify standard) */
+  loudnessTargetLufs?: number
 }
 
 export interface ExportPlaylistResult {
@@ -82,6 +86,75 @@ function createConcatListFile(
 
   fs.writeFileSync(listFile, lines.join('\n'), 'utf-8')
   return listFile
+}
+
+/**
+ * Pre-normalize từng track riêng lẻ bằng FFmpeg loudnorm (EBU R128).
+ * Mỗi bài được analyze và normalize RIÊNG → đảm bảo âm lượng đều giữa các bài.
+ *
+ * FFmpeg loudnorm cần 2-pass nhưng single-pass mode (linear=false, default)
+ * đã đủ tốt cho use case này vì chỉ cần cân bằng giữa các bài, không cần master-grade.
+ *
+ * Return: mảng đường dẫn file WAV tạm (cùng thứ tự với input tracks).
+ */
+async function preNormalizeTracks(
+  tracks: PlaylistDefinition['tracks'],
+  tempDir: string,
+  playlistId: string,
+  targetLufs: number,
+  tempFiles: Set<string>,
+  onProgress?: (trackIndex: number, totalTracks: number) => void,
+  requestId?: string,
+  signal?: AbortSignal,
+): Promise<string[]> {
+  const normalizedPaths: string[] = []
+  const loudnormFilter = `loudnorm=I=${targetLufs}:TP=-1:LRA=11`
+
+  for (let i = 0; i < tracks.length; i++) {
+    const track = tracks[i]
+    if (!track?.path) {
+      throw new Error(`Track ${i + 1} has no path`)
+    }
+    const outFile = path.join(
+      tempDir,
+      `norm-${playlistId}-${i}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}.wav`
+    )
+    tempFiles.add(outFile)
+
+    if (onProgress) onProgress(i, tracks.length)
+
+    const args = [
+      '-hide_banner',
+      '-y',
+      '-i', track.path,
+      '-vn',
+      '-af', loudnormFilter,
+      '-ar', '48000',
+      '-ac', '2',
+      '-acodec', 'pcm_s16le',
+      outFile,
+    ]
+
+    console.log(`[ExportAudio] Normalizing track ${i + 1}/${tracks.length}: ${path.basename(track.path)} → ${targetLufs} LUFS`)
+
+    const result = await runFfmpeg({
+      args,
+      timeoutMs: 600000, // 10 min per track
+      requestId,
+      signal,
+    })
+
+    if (result.code !== 0) {
+      throw new Error(
+        `Normalize track ${i + 1} failed (${path.basename(track.path)}): ${result.stderr || 'Unknown error'}`
+      )
+    }
+
+    normalizedPaths.push(outFile)
+  }
+
+  console.log(`[ExportAudio] ✓ Pre-normalized ${tracks.length} tracks → ${targetLufs} LUFS`)
+  return normalizedPaths
 }
 
 /**
@@ -191,6 +264,13 @@ export async function exportPlaylistToFile(
       fs.mkdirSync(tempDir, { recursive: true })
     }
 
+    // 5b. Loudness normalization config (EBU R128) — sẽ thực hiện per-track SAU khi playlist final
+    const loudnormEnabled = !!req.normalizeLoudness
+    const loudnormLufs = req.loudnessTargetLufs ?? -14
+    if (loudnormEnabled) {
+      console.log(`[ExportAudio] Loudness normalization ON → will pre-normalize each track to ${loudnormLufs} LUFS`)
+    }
+
     // 6. Chế độ crossfade (re-encode) hoặc concat copy-stream
     const smoothTransitions = !!req.smoothTransitions && playlist.tracks.length > 1
     const crossfadeDurationSec = (() => {
@@ -215,6 +295,26 @@ export async function exportPlaylistToFile(
 
     if (!smoothTransitions) {
       // Giữ concat copy như cũ (nhanh, không fade)
+
+      // Pre-normalize per-track TRƯỚC khi concat (playlist đã final cho concat mode)
+      if (loudnormEnabled) {
+        const normalizedPaths = await preNormalizeTracks(
+          playlist.tracks, tempDir, req.playlistId, loudnormLufs, tempFiles,
+          (idx, total) => {
+            if (progressEmitter) progressEmitter({
+              playlistId: req.playlistId, outputPath, currentSec: 0,
+              totalSec: playlist.totalDurationSec,
+              percent: Math.round((idx / total) * 20),
+            })
+          },
+          (req as any).requestId, (req as any).signal,
+        )
+        playlist = {
+          ...playlist,
+          tracks: playlist.tracks.map((t, i) => ({ ...t, path: normalizedPaths[i]! })),
+        }
+      }
+
       try {
         listFile = createConcatListFile(playlist.tracks, tempDir, req.playlistId)
         if (listFile) tempFiles.add(listFile) // Fix High #2.1: Track for cleanup
@@ -450,7 +550,26 @@ export async function exportPlaylistToFile(
           console.warn(`[exportAudio] Không có scan result để thêm bài nhạc vào playlist.`)
         }
       }
-      
+
+      // Pre-normalize per-track SAU khi playlist đã final (bao gồm cả bài mới thêm)
+      if (loudnormEnabled) {
+        const normalizedPaths = await preNormalizeTracks(
+          playlist.tracks, tempDir, req.playlistId, loudnormLufs, tempFiles,
+          (idx, total) => {
+            if (progressEmitter) progressEmitter({
+              playlistId: req.playlistId, outputPath, currentSec: 0,
+              totalSec: playlist.totalDurationSec,
+              percent: Math.round((idx / total) * 20),
+            })
+          },
+          (req as any).requestId, (req as any).signal,
+        )
+        playlist = {
+          ...playlist,
+          tracks: playlist.tracks.map((t, i) => ({ ...t, path: normalizedPaths[i]! })),
+        }
+      }
+
       if (totalTracks <= MAX_TRACKS_PER_BATCH) {
         // Nếu số tracks <= MAX_TRACKS_PER_BATCH, xử lý bình thường
       args = ['-hide_banner', '-y']
@@ -922,7 +1041,7 @@ export async function exportPlaylistToFile(
         } else {
           args.push('-acodec', 'pcm_s16le')
         }
-        
+
         // KHÔNG dùng -t để cắt - để FFmpeg xuất hết audio thực tế
         // Nếu muốn đúng target duration, cần thêm bài nhạc vào playlist, không phải cắt/pad
         args.push(outputPath)

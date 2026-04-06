@@ -1,4 +1,6 @@
-# Tiến Độ Phát Triển Layer Management - Chức Năng Số 10
+> ⛔ **ARCHIVED** (2026-04-02) — Fabric.js layer management đã bị thay thế bởi custom layer system trong `src/features/song-nhac/store/songNhacLayerStore.ts`.
+
+# [ARCHIVED] Tiến Độ Phát Triển Layer Management - Chức Năng Số 10
 
 ## ✅ Đã Hoàn Thành
 

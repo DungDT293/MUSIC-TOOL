@@ -88,32 +88,32 @@ export default function EQPanel({ value, onChange, disabled }: Props) {
 
         <div style={{ borderTop: '1px solid #2a2a2a', paddingTop: '12px' }}>
           <SliderRow
-            label="Bass (110 Hz — Am tram)"
-            desc="Am tram — tang de nhac am, manh, nang hon; giam neu nhac bi u hoac qua nang ne"
+            label="Bass (110 Hz — Âm trầm)"
+            desc="Âm trầm — tăng để nhạc ấm, mạnh, nặng hơn; giảm nếu nhạc bị ù hoặc quá nặng nề"
             min={-12} max={12} step={0.5} value={value.bassGainDb} unit=" dB"
             onChange={v => set('bassGainDb', v)} disabled={disabled}
           />
           <SliderRow
             label="Low-Mid (200 Hz — Mud/Warm)"
-            desc="Vung bun — giam de cat am bun, tieng 'hop', giup nhac nghe sach hon; tang de them do am. Hay giam 2-4dB cho nhac co tieng trong qua day"
+            desc="Vùng bùn — giảm để cắt âm bùn, tiếng 'hộp', giúp nhạc nghe sạch hơn; tăng để thêm độ ấm. Hay giảm 2-4dB cho nhạc có tiếng trống quá dày"
             min={-12} max={12} step={0.5} value={value.band1Gain} unit=" dB"
             onChange={v => set('band1Gain', v)} disabled={disabled} color="#7c3aed"
           />
           <SliderRow
-            label="Mid (1 kHz — Giong hat)"
-            desc="Am giua — tang de giong hat va nhac cu ro hon; giam neu nhac nghe cung hoac choi tai"
+            label="Mid (1 kHz — Giọng hát)"
+            desc="Âm giữa — tăng để giọng hát và nhạc cụ rõ hơn; giảm nếu nhạc nghe cứng hoặc chói tai"
             min={-12} max={12} step={0.5} value={value.midGainDb} unit=" dB"
             onChange={v => set('midGainDb', v)} disabled={disabled} color="#059669"
           />
           <SliderRow
-            label="Presence (4 kHz — Do ro rang)"
-            desc="Vung do noi bat — tang de nhac nghe 'cat through' tot hon, giong hat ro hon; giam neu nhac qua gay hoac nghe met tai"
+            label="Presence (4 kHz — Độ rõ ràng)"
+            desc="Vùng độ nổi bật — tăng để nhạc nghe 'cut through' tốt hơn, giọng hát rõ hơn; giảm nếu nhạc quá gắt hoặc nghe mệt tai"
             min={-12} max={12} step={0.5} value={value.band2Gain} unit=" dB"
             onChange={v => set('band2Gain', v)} disabled={disabled} color="#d97706"
           />
           <SliderRow
-            label="Treble (10 kHz — Am cao)"
-            desc="Am cao (Air) — tang de tieng hi-hat, chuong, violin sac net, nghe 'thoang' hon; giam neu nhac bi rit hoac choi tai"
+            label="Treble (10 kHz — Âm cao)"
+            desc="Âm cao (Air) — tăng để tiếng hi-hat, chuông, violin sắc nét, nghe 'thoáng' hơn; giảm nếu nhạc bị rít hoặc chói tai"
             min={-12} max={12} step={0.5} value={value.trebleGainDb} unit=" dB"
             onChange={v => set('trebleGainDb', v)} disabled={disabled}
           />

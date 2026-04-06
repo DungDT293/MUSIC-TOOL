@@ -180,7 +180,7 @@ async function runConcat(
     const args = retryCount > 0
       ? [
           '-v', 'error',
-          '-fflags', '+genpts+igndts',
+          '-fflags', '+genpts+igndts+discardcorrupt',
           '-f', 'concat',
           '-safe', '0',
           '-i', concatListPath,
@@ -194,7 +194,7 @@ async function runConcat(
       : [
           '-v', 'error',
           '-stats',
-          '-fflags', '+genpts+igndts',
+          '-fflags', '+genpts+igndts+discardcorrupt',
           '-f', 'concat',
           '-safe', '0',
           '-i', concatListPath,
@@ -453,7 +453,7 @@ async function runConcatWithCut(
     const args = retryCount > 0
       ? [
           '-v', 'error',
-          '-fflags', '+genpts+igndts',
+          '-fflags', '+genpts+igndts+discardcorrupt',
           '-f', 'concat',
           '-safe', '0',
           '-i', concatListPath,
@@ -468,7 +468,7 @@ async function runConcatWithCut(
       : [
           '-v', 'error',
           '-stats',
-          '-fflags', '+genpts+igndts',
+          '-fflags', '+genpts+igndts+discardcorrupt',
           '-f', 'concat',
           '-safe', '0',
           '-i', concatListPath,
@@ -703,7 +703,7 @@ async function runCut(
     const args = retryCount > 0
       ? [
           '-y',
-          '-fflags', '+genpts+igndts',
+          '-fflags', '+genpts+igndts+discardcorrupt',
           '-v', 'error',
           '-i', inputPath,
           '-t', String(targetDurationSec),
@@ -715,7 +715,7 @@ async function runCut(
         ]
       : [
           '-y',
-          '-fflags', '+genpts+igndts',
+          '-fflags', '+genpts+igndts+discardcorrupt',
           '-v', 'error',
           '-stats',
           '-i', inputPath,
@@ -984,13 +984,14 @@ async function fallbackTranscodeAndConcat(
           return arg
         })
 
-        // When normalizeVfFilter is provided, use it; otherwise default normalize (fix SAR + format only)
-        // Không hardcode fps=30 — giữ nguyên fps gốc của clip để tránh timestamp mismatch khi concat
-        const vfFilter = normalizeVfFilter || 'scale=iw:ih,setsar=1,format=yuv420p'
+        // When normalizeVfFilter is provided, use it (already includes fps=); otherwise default normalize
+        // Phải thêm fps=30 vào default vf filter để đảm bảo CFR — các clip VFR hoặc FPS khác nhau
+        // khi concat copy sẽ gây timestamp mismatch → dừng hình tại điểm chuyển cảnh
+        const vfFilter = normalizeVfFilter || 'scale=iw:ih,setsar=1,fps=30,format=yuv420p'
         const args = [
           '-hide_banner',
           '-y',
-          '-fflags', '+genpts+igndts', // Regenerate PTS to fix discontinuous timestamps from source clips
+          '-fflags', '+genpts+igndts+discardcorrupt', // Regenerate PTS to fix discontinuous timestamps from source clips
           ...hwaccelArgs, // Hardware acceleration flags (only if no software vf filter)
           '-i', input,
           '-vf', vfFilter,

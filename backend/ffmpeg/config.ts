@@ -80,9 +80,10 @@ export function getFfmpegPaths(): FfmpegPaths {
     ffprobePath = path.join(binDir, `ffprobe${exeExt}`)
   }
 
-  // Log để debug (chỉ trong DEV mode hoặc khi có NODE_ENV=development)
+  // Log để debug — CHỈ LOG 1 LẦN (tránh spam khi probe hàng ngàn files)
   const isDev = !isPackaged || process.env.NODE_ENV === 'development'
-  if (isDev) {
+  if (isDev && !getFfmpegPaths._logged) {
+    getFfmpegPaths._logged = true
     console.log('[FFMPEG CONFIG] isPackaged =', isPackaged)
     console.log('[FFMPEG CONFIG] ffmpegPath =', ffmpegPath)
     console.log('[FFMPEG CONFIG] ffprobePath =', ffprobePath)
@@ -103,4 +104,7 @@ export function getFfmpegPaths(): FfmpegPaths {
     ffprobe: ffprobePath,
   }
 }
+
+// Flag để chỉ log 1 lần
+getFfmpegPaths._logged = false as boolean
 

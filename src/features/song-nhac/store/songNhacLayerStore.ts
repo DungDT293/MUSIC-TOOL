@@ -610,11 +610,12 @@ export const useSongNhacLayerStore = create<SongNhacLayerState>((set, get) => ({
     const { parentId: _, ...rest } = layer as { parentId?: string }
     const updatedLayer = rest as SongNhacLayer
     const updatedGroup = { ...group, children: group.children.filter((c) => c !== layerId) }
-    set((s) => ({
-      layers: s.layers.map((l) =>
-        l.id === layerId ? updatedLayer : l.id === parentId ? updatedGroup : l
-      ),
-    }))
+    // Remove from current position → append to end (top of visual stack)
+    // so the ungrouped layer doesn't stay trapped between group header and siblings
+    const filtered = layers
+      .filter((l) => l.id !== layerId)
+      .map((l) => (l.id === parentId ? updatedGroup : l))
+    set({ layers: [...filtered, updatedLayer] })
   },
 
   moveSelectedLayers: (deltaX, deltaY) => {

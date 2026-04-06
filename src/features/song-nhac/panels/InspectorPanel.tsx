@@ -19,6 +19,7 @@ import {
   DEFAULT_FILTER,
 } from '../types/layerTypes'
 import type { SongNhacWaveStyleId, SongNhacColorMode } from '../types/layerTypes'
+import { getAllWaveMetas } from '../runtime/render/waves'
 
 /* ── Styles ── */
 const panelStyle: React.CSSProperties = {
@@ -202,22 +203,15 @@ function Section({ title, icon, defaultOpen = true, badge, children }: {
   )
 }
 
-/* ── Wave style picker ── */
-const WAVE_STYLES: { value: SongNhacWaveStyleId; label: string; icon: string }[] = [
-  { value: 'circlebars', label: 'Tia tròn', icon: 'O' },
-  { value: 'bars', label: 'Thanh', icon: '📊' },
-  { value: 'line', label: 'Đường', icon: '〰️' },
-  { value: 'waveform', label: 'Sóng âm', icon: '~' },
-  { value: 'ring', label: 'Vành', icon: '💿' },
-  { value: 'dots', label: 'Chấm', icon: '·' },
-  { value: 'plasma', label: 'Plasma', icon: '🌀' },
-  { value: 'lightning', label: 'Sét', icon: '/' },
-  { value: 'galaxy', label: 'Thiên hà', icon: '🌌' },
-  { value: 'fire', label: 'Lửa', icon: '^' },
-  { value: 'neonbars', label: 'Neon 3D', icon: '💡' },
-  { value: 'crystalring', label: 'Pha lê', icon: '💎' },
-  { value: 'nebula', label: 'Tinh vân', icon: '✨' },
-]
+/* ── Wave style picker — TỰ ĐỘNG từ registry ── */
+// Khi thêm wave mới: chỉ cần tạo file waves/xxx.ts + import trong waves/index.ts
+// → UI tự động hiện style mới mà KHÔNG cần sửa file này!
+const WAVE_STYLES: { value: SongNhacWaveStyleId; label: string; icon: string }[] =
+  getAllWaveMetas().map(m => ({
+    value: m.id as SongNhacWaveStyleId,
+    label: m.label,
+    icon: m.icon,
+  }))
 
 const FONT_FAMILIES = [
   { value: 'system-ui, sans-serif', label: 'System UI' },

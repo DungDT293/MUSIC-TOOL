@@ -118,7 +118,7 @@ export default function LoudnormPanel({ value, onChange, currentLufs = -Infinity
         {/* Preview button */}
         <div style={{ padding: '8px', backgroundColor: '#252526', borderRadius: '4px', border: '1px solid #333' }}>
           <div style={{ fontSize: '11px', color: '#f59e0b', marginBottom: '6px' }}>
-            Loudnorm can 2-pass FFmpeg — khong the real-time. Nhan de render 30s preview.
+            Loudnorm cần 2-pass FFmpeg — không thể real-time. Nhấn để render 30s preview.
           </div>
           <button
             onClick={onRequestPreview}
@@ -131,7 +131,7 @@ export default function LoudnormPanel({ value, onChange, currentLufs = -Infinity
               borderRadius: '4px', cursor: selectedFile && !previewLoading ? 'pointer' : 'not-allowed',
             }}
           >
-            {previewLoading ? 'Dang render preview...' : 'Render 30s Preview (FFmpeg)'}
+            {previewLoading ? 'Đang render preview...' : 'Render 30s Preview (FFmpeg)'}
           </button>
         </div>
       </div>

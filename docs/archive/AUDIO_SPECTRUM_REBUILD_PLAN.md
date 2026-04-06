@@ -1,4 +1,7 @@
-# Kế Hoạch Rebuild Chức Năng Sóng Nhạc - Audio Spectrum Rendering UI
+> ⛔ **ARCHIVED** (2026-04-02) — Kiến trúc này đã được thay thế bởi `src/features/song-nhac/`.
+> Xem [`README.md`](../README.md) → phần "Sóng nhạc" cho tài liệu hiện tại.
+
+# [ARCHIVED] Kế Hoạch Rebuild Chức Năng Sóng Nhạc - Audio Spectrum Rendering UI
 
 ## Mục Tiêu
 Xóa toàn bộ code cũ của chức năng sóng nhạc và thiết kế lại hoàn toàn theo UI design mới từ "Audio Spectrum Rendering UI" với:

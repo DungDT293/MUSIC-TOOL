@@ -10,7 +10,7 @@
  * Presets: neon-cyberpunk | crystal-glass | holographic | particle-universe | inferno
  */
 
-export type ThreeJsPresetId = 'neon-cyberpunk' | 'crystal-glass' | 'holographic' | 'particle-universe' | 'inferno'
+export type ThreeJsPresetId = 'neon-cyberpunk' | 'crystal-glass' | 'holographic' | 'particle-universe' | 'inferno' | 'circuit-board'
 
 export interface ThreeJsPreset {
   id: ThreeJsPresetId
@@ -1046,6 +1046,275 @@ void main() {
     ],
     particleSizeMultiplier: 1.4,
     particleSpeedMultiplier: 1.5,
+  },
+
+  // ════════════════════════════════════════════════════════════════════
+  //  PRESET 6: CIRCUIT BOARD
+  //  - Inspired by professional tech/cyberpunk logo design
+  //  - Dark navy background with glowing cyan/teal circuit traces
+  //  - Neon circuit nodes at junctions that pulse with bass
+  //  - PCB trace patterns on the ground plane
+  //  - Metallic bar shading with inner circuit glow
+  //  - Professional electronic/tech aesthetic
+  // ════════════════════════════════════════════════════════════════════
+
+  'circuit-board': {
+    id: 'circuit-board',
+    label: 'Circuit Board',
+    description: 'Bảng mạch phát sáng — đường mạch neon cyan, nút sáng, phong cách công nghệ chuyên nghiệp',
+
+    clearColor: 0x040810,
+    fogColor: 0x040810,
+    fogDensity: 0.016,
+    ambientLightColor: 0x0a1830,
+    ambientLightIntensity: 0.45,
+    pointLightColor: 0x00ddcc,
+    pointLightIntensity: 2.2,
+
+    bloomStrength: 1.9,
+    bloomRadius: 0.55,
+    bloomThreshold: 0.09,
+    bloomBassMultiplier: 2.5,
+    bloomPeakMultiplier: 1.3,
+
+    cameraOrbitSpeed: 0.065,
+    cameraHeightBase: 5.8,
+    cameraBassLift: 1.5,
+
+    toneMappingExposure: 1.25,
+
+    barFragShader: /* glsl */ `
+uniform float uBarCount;
+uniform float uTime;
+uniform float uBass;
+uniform float uMid;
+uniform float uTreble;
+uniform float uPeak;
+uniform sampler2D uFreqTexture;
+varying float vInstanceId;
+varying vec3 vWorldPos;
+varying vec3 vNormal;
+varying float vHeight;
+
+${GLSL_COSINE_PALETTE}
+
+float hash(float n) { return fract(sin(n) * 43758.5453); }
+
+void main() {
+  float t = vInstanceId / uBarCount;
+  float freq = texture2D(uFreqTexture, vec2(t, 0.0)).r;
+  float hueShift = uTime * 0.03;
+
+  // Circuit color palette: dark teal → bright cyan → electric blue → white
+  vec3 circuit1 = cosinePalette(
+    t + hueShift,
+    vec3(0.15, 0.35, 0.4),
+    vec3(0.25, 0.45, 0.5),
+    vec3(1.0, 1.0, 0.8),
+    vec3(0.10, 0.45, 0.55)
+  );
+
+  vec3 circuit2 = cosinePalette(
+    t + hueShift + 0.35,
+    vec3(0.1, 0.25, 0.45),
+    vec3(0.3, 0.4, 0.5),
+    vec3(0.8, 1.0, 1.2),
+    vec3(0.20, 0.55, 0.65)
+  );
+
+  vec3 circuit3 = cosinePalette(
+    t + hueShift + 0.65,
+    vec3(0.2, 0.3, 0.5),
+    vec3(0.2, 0.35, 0.4),
+    vec3(1.0, 0.8, 0.6),
+    vec3(0.15, 0.35, 0.50)
+  );
+
+  vec3 color = mix(circuit1, circuit2, freq * 0.5 + uTreble * 0.2);
+  color = mix(color, circuit3, uMid * 0.25 + freq * 0.15);
+
+  // Height gradient: bottom = dark metallic base, top = glowing cyan
+  float heightFactor = smoothstep(0.0, 1.0, vWorldPos.y / max(vHeight, 0.01));
+
+  // Metallic base color (dark gunmetal)
+  vec3 metalBase = vec3(0.08, 0.1, 0.14);
+  color = mix(metalBase, color, 0.3 + heightFactor * 0.7);
+
+  // Circuit trace lines running up the bars (horizontal bands)
+  float traceFreq1 = sin(vWorldPos.y * 25.0 + t * 30.0) * 0.5 + 0.5;
+  float traceFreq2 = sin(vWorldPos.y * 50.0 - t * 15.0 + uTime * 1.5) * 0.5 + 0.5;
+  float trace = smoothstep(0.88, 1.0, traceFreq1) + smoothstep(0.92, 1.0, traceFreq2) * 0.6;
+  color += vec3(0.0, 0.9, 0.8) * trace * (0.3 + freq * 0.5);
+
+  // Circuit node glow at specific heights (junction points)
+  float nodePhase = fract(vWorldPos.y * 5.0 + t * 3.0);
+  float node = smoothstep(0.03, 0.0, abs(nodePhase - 0.5)) * freq;
+  color += vec3(0.0, 1.0, 0.9) * node * 1.5;
+
+  // Top cap glow: bright cyan-white tip
+  float topGlow = smoothstep(0.85, 1.0, heightFactor) * freq;
+  color += topGlow * vec3(0.6, 1.0, 0.95) * 2.2;
+
+  // Fresnel rim: electric blue edge highlight
+  vec3 viewDir = normalize(vec3(sin(uTime * 0.1) * 0.3, 0.2, 1.0));
+  float rim = 1.0 - abs(dot(normalize(vNormal), viewDir));
+  rim = pow(rim, 2.0);
+  vec3 rimColor = mix(vec3(0.0, 0.7, 1.0), vec3(0.0, 1.0, 0.8), sin(t * 6.28 + uTime * 0.4) * 0.5 + 0.5);
+  color += rim * 0.8 * rimColor;
+
+  // Emissive boost
+  float brightness = 0.5 + freq * 1.0;
+  float emissive = 0.9 + uBass * 2.5 + freq * 1.8 + uPeak * 0.7;
+  color *= brightness * emissive;
+
+  // Data pulse: traveling light along the bar ring
+  float dataPulse = sin(t * 6.28 * 3.0 + uTime * 4.0) * 0.5 + 0.5;
+  dataPulse = smoothstep(0.85, 1.0, dataPulse) * freq * 0.3;
+  color += vec3(0.0, 0.8, 1.0) * dataPulse;
+
+  // Bass pulse: circuit power surge
+  float bassPulse = smoothstep(0.4, 0.8, uBass) * sin(uTime * 8.0 + t * 3.14) * 0.15;
+  color += bassPulse * vec3(0.0, 0.6, 0.5);
+
+  // Sparkle nodes at peak frequencies
+  float sparkle1 = step(0.82, freq) * (sin(uTime * 18.0 + vInstanceId * 11.3) * 0.5 + 0.5) * 0.4;
+  float sparkle2 = step(0.90, freq) * (cos(uTime * 27.0 + vInstanceId * 7.7) * 0.5 + 0.5) * 0.5;
+  float sparkle3 = step(0.95, freq) * (sin(uTime * 35.0 + vInstanceId * 3.1) * 0.5 + 0.5) * 0.7;
+  color += (sparkle1 + sparkle2 + sparkle3) * vec3(0.5, 1.0, 1.0);
+
+  // PCB solder point flash on bass
+  float solderFlash = step(0.7, uBass) * step(0.85, freq) * hash(vInstanceId * 19.7 + floor(uTime * 12.0));
+  color += vec3(0.8, 1.0, 0.9) * solderFlash * 2.0;
+
+  // Inner glow: circuit board energy
+  float innerGlow = freq * freq * 0.2;
+  color += innerGlow * circuit1;
+
+  gl_FragColor = vec4(color, 1.0);
+}
+`,
+
+    groundFragShader: /* glsl */ `
+uniform float uTime;
+uniform float uBass;
+uniform float uPeak;
+
+varying vec2 vUv;
+varying vec3 vWorldPos;
+
+float hash2(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+
+void main() {
+  float dist = length(vUv - 0.5) * 2.0;
+
+  // Dark PCB substrate base
+  vec3 color = vec3(0.02, 0.035, 0.05);
+
+  // ── CIRCUIT TRACE GRID ──
+  // Main traces (thick, orthogonal)
+  float traceX1 = smoothstep(0.955, 1.0, abs(sin(vWorldPos.x * 3.14159 * 1.5)));
+  float traceZ1 = smoothstep(0.955, 1.0, abs(sin(vWorldPos.z * 3.14159 * 1.5)));
+  float mainTrace = max(traceX1, traceZ1);
+
+  // Secondary traces (thinner, offset grid)
+  float traceX2 = smoothstep(0.975, 1.0, abs(sin(vWorldPos.x * 3.14159 * 4.0 + 0.7)));
+  float traceZ2 = smoothstep(0.975, 1.0, abs(sin(vWorldPos.z * 3.14159 * 4.0 + 0.7)));
+  float subTrace = max(traceX2, traceZ2) * 0.5;
+
+  // Diagonal traces (for PCB routing feel)
+  float diagTrace = smoothstep(0.97, 1.0, abs(sin((vWorldPos.x + vWorldPos.z) * 3.14159 * 2.5)));
+  diagTrace += smoothstep(0.97, 1.0, abs(sin((vWorldPos.x - vWorldPos.z) * 3.14159 * 2.5))) * 0.5;
+  diagTrace *= 0.35;
+
+  float allTraces = mainTrace + subTrace + diagTrace;
+
+  // Trace color: glowing cyan/teal with bass reactivity
+  vec3 traceColor = mix(vec3(0.0, 0.5, 0.5), vec3(0.0, 1.0, 0.9), sin(uTime * 0.2) * 0.3 + 0.5);
+  color += traceColor * allTraces * (0.12 + uBass * 0.15);
+
+  // ── CIRCUIT NODES (junction points) ──
+  // Compute grid cell
+  vec2 cellId = floor(vWorldPos.xz * 1.5);
+  float nodeHash = hash2(cellId);
+  vec2 cellCenter = (cellId + 0.5) / 1.5;
+  float nodeDist = length(vWorldPos.xz - cellCenter);
+
+  // Only some cells have nodes (pseudo-random selection)
+  float hasNode = step(0.65, nodeHash);
+  float nodeGlow = hasNode * smoothstep(0.3, 0.0, nodeDist) * 0.12;
+  // Node core (bright)
+  float nodeCore = hasNode * smoothstep(0.08, 0.0, nodeDist) * 0.5;
+
+  // Node pulsation: each node pulses at a different phase
+  float nodePulse = sin(uTime * 2.5 + nodeHash * 20.0) * 0.3 + 0.7;
+  nodeGlow *= nodePulse * (1.0 + uBass * 1.5);
+  nodeCore *= nodePulse;
+
+  color += vec3(0.0, 0.9, 0.85) * nodeGlow;
+  color += vec3(0.5, 1.0, 0.95) * nodeCore;
+
+  // ── DATA FLOW ANIMATION ──
+  // Traveling light pulses along main traces
+  float dataFlow1 = sin(vWorldPos.x * 8.0 + uTime * 3.0) * 0.5 + 0.5;
+  dataFlow1 = smoothstep(0.88, 1.0, dataFlow1) * mainTrace;
+  float dataFlow2 = sin(vWorldPos.z * 8.0 - uTime * 2.5) * 0.5 + 0.5;
+  dataFlow2 = smoothstep(0.88, 1.0, dataFlow2) * mainTrace;
+  color += vec3(0.2, 1.0, 0.9) * (dataFlow1 + dataFlow2) * 0.18 * (0.5 + uBass * 0.8);
+
+  // ── EXPANDING POWER RINGS ──
+  float ringDist = length(vWorldPos.xz);
+  float powerRing1 = fract(uTime * 0.3) * 22.0;
+  float powerRing2 = fract(uTime * 0.3 + 0.5) * 22.0;
+  float pr1 = smoothstep(0.25, 0.0, abs(ringDist - powerRing1)) * smoothstep(22.0, 10.0, powerRing1);
+  float pr2 = smoothstep(0.25, 0.0, abs(ringDist - powerRing2)) * smoothstep(22.0, 10.0, powerRing2);
+  color += vec3(0.0, 0.6, 0.7) * (pr1 + pr2) * 0.1 * (0.5 + uBass * 1.2);
+
+  // ── COMPONENT PADS (IC chip outlines) ──
+  vec2 padCell = floor(vWorldPos.xz * 0.8);
+  float padHash = hash2(padCell * 3.7);
+  vec2 padCenter = (padCell + 0.5) / 0.8;
+  vec2 padDelta = abs(vWorldPos.xz - padCenter);
+  float padSize = 0.3 + padHash * 0.15;
+  float padOutline = step(padDelta.x, padSize) * step(padDelta.y, padSize);
+  float padEdge = padOutline * (1.0 - step(padDelta.x, padSize - 0.02) * step(padDelta.y, padSize - 0.02));
+  padEdge *= step(0.82, padHash); // Only some cells
+  color += vec3(0.0, 0.4, 0.45) * padEdge * 0.08;
+
+  // ── CENTER PROCESSOR GLOW ──
+  float cpuGlow = (1.0 - dist) * 0.1 * (1.0 + uBass * 2.0);
+  color += vec3(0.0, 0.5, 0.6) * cpuGlow;
+
+  // Signal pulse from center on bass
+  float signalPulse = smoothstep(0.02, 0.0, abs(ringDist - fract(uTime * 0.6 + uBass * 0.3) * 15.0));
+  signalPulse *= smoothstep(15.0, 5.0, fract(uTime * 0.6) * 15.0) * uBass;
+  color += vec3(0.0, 1.0, 0.85) * signalPulse * 0.15;
+
+  // ── SUBTLE COPPER LAYER ──
+  float copper = sin(vWorldPos.x * 1.5 + uTime * 0.1) * cos(vWorldPos.z * 1.2 - uTime * 0.08);
+  copper = max(0.0, copper) * 0.015;
+  color += vec3(0.15, 0.08, 0.02) * copper;
+
+  // Radial fade to darkness at edges
+  float alpha = smoothstep(1.0, 0.15, dist) * 0.72;
+
+  gl_FragColor = vec4(color, alpha);
+}
+`,
+
+    reflectionOpacity: 0.35,
+    reflectionColorMul: 0.5,
+    reflectionFadeRange: -2.5,
+
+    particleColors: [
+      [0.0, 0.9, 0.8],  // bright teal
+      [0.0, 0.7, 1.0],  // electric cyan
+      [0.2, 1.0, 0.9],  // mint glow
+      [0.0, 0.5, 0.6],  // dark teal
+      [0.5, 0.9, 1.0],  // pale cyan
+      [0.0, 1.0, 0.7],  // green-teal
+    ],
+    particleSizeMultiplier: 0.9,
+    particleSpeedMultiplier: 0.8,
   },
 }
 

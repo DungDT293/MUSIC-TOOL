@@ -121,20 +121,16 @@ const AUDIOMOTION_GRADIENTS = [
 ]
 
 const WAVEJS_ANIMATIONS = [
-  { value: 'wave', label: 'Wave' },
-  { value: 'bars', label: 'Bars' },
-  { value: 'bars blocks', label: 'Bars Blocks' },
-  { value: 'dualbars', label: 'Dual Bars' },
-  { value: 'fireworks', label: 'Fireworks' },
-  { value: 'flower', label: 'Flower' },
-  { value: 'orbs', label: 'Orbs' },
-  { value: 'ring', label: 'Ring' },
-  { value: 'rings', label: 'Rings' },
-  { value: 'round bars', label: 'Round Bars' },
-  { value: 'round wave', label: 'Round Wave' },
   { value: 'shine', label: 'Shine' },
-  { value: 'star', label: 'Star' },
-  { value: 'web', label: 'Web' },
+  { value: 'circles', label: 'Circles' },
+  { value: 'lines', label: 'Lines' },
+  { value: 'arcs', label: 'Arcs' },
+  { value: 'cubes', label: 'Cubes' },
+  { value: 'flower', label: 'Flower' },
+  { value: 'glob', label: 'Glob' },
+  { value: 'square', label: 'Square' },
+  { value: 'turntable', label: 'Turntable' },
+  { value: 'wave', label: 'Wave' },
 ]
 
 const VANTA_EFFECTS = [

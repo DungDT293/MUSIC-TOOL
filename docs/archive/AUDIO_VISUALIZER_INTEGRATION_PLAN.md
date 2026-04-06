@@ -1,4 +1,6 @@
-# Kế hoạch Tích hợp Audio Visualizer - Mã nguồn mở
+> ⛔ **ARCHIVED** (2026-04-02) — Kiến trúc cũ, đã thay thế bởi `src/features/song-nhac/`.
+
+# [ARCHIVED] Kế hoạch Tích hợp Audio Visualizer - Mã nguồn mở
 
 ## Tổng quan
 Tài liệu này mô tả kế hoạch tích hợp các dự án mã nguồn mở vào chức năng "Tạo sóng nhạc" hiện tại.

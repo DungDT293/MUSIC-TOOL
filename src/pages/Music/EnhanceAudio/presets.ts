@@ -77,7 +77,7 @@ export const MASTER_PRESETS: MasterPreset[] = [
   },
   {
     name: 'EDM / Electronic',
-    description: 'Mạnh, to, stereo rộng — sub punch manh, highs sáng',
+    description: 'Mạnh, to, stereo rộng — sub punch mạnh, highs sáng',
     category: 'genre',
     eq: { enabled: true, highpassHz: 30, lowpassHz: 22050, bassGainDb: 4, band1Gain: -3, midGainDb: -1.5, band2Gain: 2, trebleGainDb: 4 },
     compressor: { enabled: true, thresholdDb: -18, ratio: 4, attackMs: 5, releaseMs: 70, makeupGainDb: 4, knee: 2, mix: 1 },
@@ -109,7 +109,7 @@ export const MASTER_PRESETS: MasterPreset[] = [
   },
   {
     name: 'R&B / Soul',
-    description: 'Am ap, smooth, silky — bass am, giong hat noi bat',
+    description: 'Ấm áp, smooth, silky — bass ấm, giọng hát nổi bật',
     category: 'genre',
     eq: { enabled: true, highpassHz: 35, lowpassHz: 22050, bassGainDb: 3, band1Gain: -1, midGainDb: 0, band2Gain: 1.5, trebleGainDb: 2 },
     compressor: { enabled: true, thresholdDb: -24, ratio: 2.5, attackMs: 12, releaseMs: 150, makeupGainDb: 2, knee: 4, mix: 1 },
@@ -120,7 +120,7 @@ export const MASTER_PRESETS: MasterPreset[] = [
   },
   {
     name: 'Classical / Orchestral',
-    description: 'Trong sang, tu nhien, giu nguyen dynamic toan bo',
+    description: 'Trong sáng, tự nhiên, giữ nguyên dynamic toàn bộ',
     category: 'genre',
     eq: { enabled: true, highpassHz: 20, lowpassHz: 22050, bassGainDb: 0, band1Gain: -1, midGainDb: 0, band2Gain: 1, trebleGainDb: 0.5 },
     compressor: { enabled: true, thresholdDb: -30, ratio: 1.5, attackMs: 50, releaseMs: 500, makeupGainDb: 1, knee: 6, mix: 1 },
@@ -130,7 +130,7 @@ export const MASTER_PRESETS: MasterPreset[] = [
   },
   {
     name: 'Jazz',
-    description: 'Am ap, trong suot, nhieu dynamic — giu phong cach co dien',
+    description: 'Ấm áp, trong suốt, nhiều dynamic — giữ phong cách cổ điển',
     category: 'genre',
     eq: { enabled: true, highpassHz: 30, lowpassHz: 22050, bassGainDb: 1.5, band1Gain: -0.5, midGainDb: 0, band2Gain: 0.5, trebleGainDb: 1 },
     compressor: { enabled: true, thresholdDb: -28, ratio: 1.8, attackMs: 30, releaseMs: 300, makeupGainDb: 1, knee: 5, mix: 1 },
@@ -140,7 +140,7 @@ export const MASTER_PRESETS: MasterPreset[] = [
   },
   {
     name: 'Metal / Heavy',
-    description: 'Aggressive, den dac, tight low-end — danh cho nhac nang',
+    description: 'Aggressive, dày đặc, tight low-end — dành cho nhạc nặng',
     category: 'genre',
     eq: { enabled: true, highpassHz: 60, lowpassHz: 22050, bassGainDb: 3, band1Gain: -3, midGainDb: -2, band2Gain: 3, trebleGainDb: 2.5 },
     compressor: { enabled: true, thresholdDb: -14, ratio: 6, attackMs: 3, releaseMs: 40, makeupGainDb: 6, knee: 2, mix: 1 },
@@ -151,7 +151,7 @@ export const MASTER_PRESETS: MasterPreset[] = [
   },
   {
     name: 'Ambient / Lo-fi',
-    description: 'Khong gian rong, nhieu dynamic, am at — phu hop nhac nen',
+    description: 'Không gian rộng, nhiều dynamic, êm ắt — phù hợp nhạc nền',
     category: 'genre',
     eq: { enabled: true, highpassHz: 20, lowpassHz: 16000, bassGainDb: 1, band1Gain: 0, midGainDb: 0, band2Gain: 0, trebleGainDb: -1 },
     compressor: { enabled: true, thresholdDb: -30, ratio: 1.5, attackMs: 100, releaseMs: 800, makeupGainDb: 1, knee: 6, mix: 0.7 },
@@ -161,8 +161,8 @@ export const MASTER_PRESETS: MasterPreset[] = [
   },
   // ── Voice presets ─────────────────────────────────────────────────────────
   {
-    name: 'Podcast / Giong noi',
-    description: 'Loc am nen, cat mud, giu giong ro rang — chuan cho podcast',
+    name: 'Podcast / Giọng nói',
+    description: 'Lọc âm nền, cắt mud, giữ giọng rõ ràng — chuẩn cho podcast',
     category: 'voice',
     eq: { enabled: true, highpassHz: 100, lowpassHz: 12000, bassGainDb: -1, band1Gain: -3, midGainDb: 2, band2Gain: 1.5, trebleGainDb: 0 },
     compressor: { enabled: true, thresholdDb: -20, ratio: 4, attackMs: 5, releaseMs: 50, makeupGainDb: 4, knee: 3, mix: 1 },
@@ -172,8 +172,8 @@ export const MASTER_PRESETS: MasterPreset[] = [
     limiter: { enabled: true, thresholdDbtp: -1.5, attackMs: 1, releaseMs: 50 },
   },
   {
-    name: 'Giong hat (Vocal)',
-    description: 'Lam noi bat giong hat, cat bo am nen, them do sang',
+    name: 'Giọng hát (Vocal)',
+    description: 'Làm nổi bật giọng hát, cắt bỏ âm nền, thêm độ sáng',
     category: 'voice',
     eq: { enabled: true, highpassHz: 80, lowpassHz: 18000, bassGainDb: -2, band1Gain: -3, midGainDb: 1.5, band2Gain: 2, trebleGainDb: 2 },
     compressor: { enabled: true, thresholdDb: -20, ratio: 3, attackMs: 8, releaseMs: 120, makeupGainDb: 3, knee: 3, mix: 1 },
@@ -185,8 +185,8 @@ export const MASTER_PRESETS: MasterPreset[] = [
   },
   // ── Utility presets ───────────────────────────────────────────────────────
   {
-    name: 'Khu nhieu (Noise Cleanup)',
-    description: 'Chi khu nhieu — phuc hoi ban ghi co tieng on nen',
+    name: 'Khử nhiễu (Noise Cleanup)',
+    description: 'Chỉ khử nhiễu — phục hồi bản ghi có tiếng ồn nền',
     category: 'utility',
     eq: { enabled: false, highpassHz: 20, lowpassHz: 22050, bassGainDb: 0, band1Gain: 0, midGainDb: 0, band2Gain: 0, trebleGainDb: 0 },
     compressor: { enabled: false, thresholdDb: -18, ratio: 4, attackMs: 5, releaseMs: 50, makeupGainDb: 2, knee: 3, mix: 1 },
@@ -196,8 +196,8 @@ export const MASTER_PRESETS: MasterPreset[] = [
     noiseGate: { enabled: true, thresholdDb: -50, ratio: 6, attackMs: 5, releaseMs: 200, rangeDb: -30 },
   },
   {
-    name: 'Nang am luong (Volume Boost)',
-    description: 'Chi chuan hoa am luong, khong thay doi tone',
+    name: 'Nâng âm lượng (Volume Boost)',
+    description: 'Chỉ chuẩn hóa âm lượng, không thay đổi tone',
     category: 'utility',
     eq: { enabled: false, highpassHz: 20, lowpassHz: 22050, bassGainDb: 0, band1Gain: 0, midGainDb: 0, band2Gain: 0, trebleGainDb: 0 },
     compressor: { enabled: false, thresholdDb: -18, ratio: 4, attackMs: 5, releaseMs: 50, makeupGainDb: 2, knee: 3, mix: 1 },

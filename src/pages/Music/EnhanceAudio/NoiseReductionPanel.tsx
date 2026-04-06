@@ -20,17 +20,17 @@ export default function NoiseReductionPanel({ value, onChange, disabled }: Props
         </span>
       </div>
       <div style={{ fontSize: '11px', color: '#555', marginBottom: '10px', lineHeight: '1.4' }}>
-        Khu nhieu bang pho (FFT denoising) — loai bo tieng hiss, hum, phong thu on va tap am nen.
-        Dung dau tien truoc cac xu ly khac. Khong nen dung qua manh de tranh artefact.
+        Khử nhiễu bằng phổ (FFT denoising) — loại bỏ tiếng hiss, hum, phòng thu ồn và tạp âm nền.
+        Dùng đầu tiên trước các xử lý khác. Không nên dùng quá mạnh để tránh artefact.
       </div>
       <div style={{ opacity: value.enabled ? 1 : 0.4, pointerEvents: value.enabled && !disabled ? 'auto' : 'none' }}>
         <div style={{ marginBottom: '12px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: '#ccc', marginBottom: '2px' }}>
-            <span>Muc khu nhieu (dB)</span>
+            <span>Mức khử nhiễu (dB)</span>
             <span style={{ color: '#40a9ff', fontWeight: 'bold' }}>{value.noiseReducDb} dB</span>
           </div>
           <div style={{ fontSize: '11px', color: '#666', marginBottom: '5px', lineHeight: '1.4' }}>
-            Giam bao nhieu dB tieng on — 10-20dB la an toan, tren 30dB co the lam mat tu nhien am thanh
+            Giảm bao nhiêu dB tiếng ồn — 10-20dB là an toàn, trên 30dB có thể làm mất tự nhiên âm thanh
           </div>
           <input type="range" min={0} max={80} step={1} value={value.noiseReducDb}
             onChange={e => set('noiseReducDb', Number(e.target.value))}
@@ -38,18 +38,18 @@ export default function NoiseReductionPanel({ value, onChange, disabled }: Props
         </div>
         <div style={{ marginBottom: '8px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: '#ccc', marginBottom: '2px' }}>
-            <span>San nhieu (Noise Floor dBFS)</span>
+            <span>Sàn nhiễu (Noise Floor dBFS)</span>
             <span style={{ color: '#40a9ff', fontWeight: 'bold' }}>{value.noiseFloorDb} dBFS</span>
           </div>
           <div style={{ fontSize: '11px', color: '#666', marginBottom: '5px', lineHeight: '1.4' }}>
-            Muc am luong coi la "tieng on" — -50dBFS la pho bien. Cao hon = khu nhieu nhieu hon nhung de cat nham tieng that
+            Mức âm lượng coi là "tiếng ồn" — -50dBFS là phổ biến. Cao hơn = khử nhiễu nhiều hơn nhưng dễ cắt nhầm tiếng thật
           </div>
           <input type="range" min={-90} max={-20} step={1} value={value.noiseFloorDb}
             onChange={e => set('noiseFloorDb', Number(e.target.value))}
             disabled={disabled} style={{ width: '100%', accentColor: '#40a9ff' }} />
         </div>
         <div style={{ padding: '6px 8px', backgroundColor: '#252526', borderRadius: '4px', fontSize: '11px', color: '#777', lineHeight: '1.4' }}>
-          Su dung FFmpeg afftdn (FFT Noise Reduction). Chay tren file xuat, khong the nghe thu real-time.
+          Sử dụng FFmpeg afftdn (FFT Noise Reduction). Chạy trên file xuất, không thể nghe thử real-time.
         </div>
       </div>
     </div>

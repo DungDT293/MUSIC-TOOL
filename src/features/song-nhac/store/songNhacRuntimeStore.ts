@@ -8,6 +8,7 @@ import { create } from 'zustand'
 import type { PreviewQuality } from '../runtime/types'
 import type { EngineType } from '../runtime/engine/types'
 import type { ThreeJsPresetId } from '../runtime/engine/threejs/threejsPresets'
+import type { SongNhacWaveStyleId } from '../types/layerTypes'
 
 export type AspectRatioId = '16:9' | '4:3' | '1:1' | '9:16' | '4:5' | '2.35:1' | '2:1' | '1.85:1' | '3:4' | '5.8-inch'
 export type VisualizerLayoutId = 'circular' | 'horizontal' | 'mirror'
@@ -73,8 +74,8 @@ interface SongNhacRuntimeState {
   waveAroundIntensity: number
   setWaveAroundIntensity: (v: number) => void
   /** Kiểu sóng quanh ảnh. */
-  waveAroundStyle: 'bars' | 'line' | 'ring' | 'dots' | 'waveform' | 'circlebars' | 'plasma' | 'lightning' | 'galaxy' | 'fire' | 'neonbars' | 'crystalring' | 'nebula'
-  setWaveAroundStyle: (v: 'bars' | 'line' | 'ring' | 'dots' | 'waveform' | 'circlebars' | 'plasma' | 'lightning' | 'galaxy' | 'fire' | 'neonbars' | 'crystalring' | 'nebula') => void
+  waveAroundStyle: SongNhacWaveStyleId
+  setWaveAroundStyle: (v: SongNhacWaveStyleId) => void
   /** Visualizer layout: circular | horizontal | mirror. */
   visualizerLayout: VisualizerLayoutId
   setVisualizerLayout: (v: VisualizerLayoutId) => void
@@ -205,7 +206,7 @@ export const useSongNhacRuntimeStore = create<SongNhacRuntimeState>((set, get) =
   setAudiomotionRadial: (v) => set({ audiomotionRadial: v }),
   audiomotionLedBars: false,
   setAudiomotionLedBars: (v) => set({ audiomotionLedBars: v }),
-  wavejsAnimation: 'shine rings',
+  wavejsAnimation: 'shine',
   setWavejsAnimation: (v) => set({ wavejsAnimation: v }),
   vantaEffect: 'waves',
   setVantaEffect: (v) => set({ vantaEffect: v }),

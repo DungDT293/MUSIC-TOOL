@@ -1,179 +1,173 @@
-# Hướng Dẫn Khắc Phục Sự Cố - 93 Media Tool Mix Nhạc
+# Hướng Dẫn Khắc Phục Sự Cố — 93 Media Tool Mix Nhạc v4.0.2
 
-## 🔴 Vấn Đề: Ứng dụng không khởi động (màn hình đen)
+> Cập nhật: 2026-04-02 · Phiên bản: 4.0.2
 
-### Bước 1: Kiểm tra DevTools
+---
 
-1. **Mở DevTools:**
-   - Nhấn `F12` hoặc `Ctrl + Shift + I`
-   - Hoặc click chuột phải → "Inspect Element"
+## 🔴 Ứng dụng không khởi động (màn hình đen/trắng)
 
-2. **Kiểm tra Console:**
-   - Xem có lỗi màu đỏ nào không
-   - Copy toàn bộ lỗi và gửi cho admin
+### Bước 1: Kiểm tra Version Blocking
 
-### Bước 2: Kiểm tra các lỗi thường gặp
+App v4.0.2 có **Version Gating** — nếu phiên bản quá cũ, app sẽ hiện:
+- **"Phiên bản quá cũ"** → Nhấn nút cập nhật (auto-update)
+- **"Phiên bản bị chặn"** → Tải installer mới từ link được cung cấp
+
+Nếu không có internet, app sẽ hiện **banner offline** sau 8 giây và cho phép dùng bình thường.
+
+### Bước 2: Kiểm tra DevTools
+
+1. Nhấn `F12` hoặc `Ctrl + Shift + I` (chỉ hoạt động ở dev mode — production đã block)
+2. Kiểm tra Console cho lỗi màu đỏ
+3. Copy toàn bộ lỗi và gửi cho admin
+
+### Bước 3: Các lỗi thường gặp
 
 #### ❌ Lỗi: "window.api is not available"
 
 **Nguyên nhân:** Preload script chưa được load đúng cách.
 
 **Giải pháp:**
-1. Đảm bảo bạn đang chạy file `.exe` đã build (không phải dev mode)
-2. Thử chạy lại ứng dụng với quyền Administrator
+1. Đảm bảo chạy file `.exe` đã build (không phải dev mode)
+2. Thử chạy với quyền Administrator
 3. Kiểm tra Windows Defender/Antivirus có chặn file không
-4. Thử tắt tạm thời Windows Defender/Antivirus
+4. Tắt tạm thời antivirus và thử lại
 
 #### ❌ Lỗi: "Failed to load index.html"
 
 **Nguyên nhân:** File `index.html` không tìm thấy trong package.
 
 **Giải pháp:**
-1. Đảm bảo bạn đã tải đúng file `.exe` (không bị hỏng)
-2. Thử tải lại file `.exe` từ nguồn chính thức
-3. Kiểm tra dung lượng file (phải > 100 MB)
+1. Đảm bảo tải đúng file `.exe` (không bị hỏng)
+2. Kiểm tra dung lượng file (phải > 100 MB)
+3. Tải lại từ nguồn chính thức
 
 #### ❌ Lỗi: "Machine ID mismatch"
 
-**Nguyên nhân:** File authentication đã được tạo trên máy khác.
+**Nguyên nhân:** File authentication tạo trên máy khác hoặc phần cứng đã thay đổi.
 
 **Giải pháp:**
-1. Xóa file `authState.enc` trong thư mục user data:
-   - Windows: `%APPDATA%\93-media-tool-mix-nhac\authState.enc`
-   - Hoặc: `C:\Users\<TênUser>\AppData\Roaming\93-media-tool-mix-nhac\authState.enc`
+1. Xóa file `authState.enc`:
+   ```
+   %APPDATA%\93-media-tool-mix-nhac\authState.enc
+   ```
 2. Khởi động lại ứng dụng
 3. Đăng ký/đăng nhập lại
+4. Nếu đã thay đổi phần cứng: liên hệ admin để **allow-rebind** machine ID
 
-#### ❌ Lỗi: "Không gửi được yêu cầu đăng ký" (app đã build)
+#### ❌ Lỗi: "Không gửi được yêu cầu đăng ký"
 
-**Nguyên nhân:** App build không gửi được request lên server (URL sai, mạng, hoặc decrypt AUTH_BASE lỗi).
+**Nguyên nhân:** Không gửi được request lên license server.
 
 **Giải pháp:**
-1. **Đặt URL server bằng env:** Tạo file `.env` đặt **cùng thư mục với file .exe** (thư mục cài đặt app), nội dung:
+1. **Đặt URL server bằng env:** Tạo file `.env` cùng thư mục với file `.exe`:
    ```
    AUTH_BASE_URL=https://license-server.dungdong333.workers.dev
    ```
-   (thay bằng URL server license thật của bạn nếu khác). Khởi động lại app rồi thử đăng ký lại.
-2. **Xem lỗi chi tiết:** Mở app, mở DevTools (F12) → tab Console, hoặc xem log trong `%APPDATA%\93-media-tool-mix-nhac\logs\`. Tìm dòng `[auth:register] Gửi đăng ký thất bại. Code: ... Message: ...` để biết lý do (ECONNREFUSED, ENOTFOUND, ETIMEDOUT, v.v.).
-3. Kiểm tra mạng, firewall, VPN/proxy (giống mục "Network error" bên dưới).
+2. **Xem log chi tiết:**
+   - Mở `%APPDATA%\93-media-tool-mix-nhac\logs\`
+   - Tìm dòng `[auth:register]` hoặc `[auth:login]`
+3. Kiểm tra mạng, firewall, VPN/proxy
 
 #### ❌ Lỗi: "Network error" hoặc "Failed to fetch"
 
-**Nguyên nhân:** Không kết nối được đến license server.
-
 **Giải pháp:**
 1. Kiểm tra kết nối internet
-2. Kiểm tra Firewall có chặn ứng dụng không
-3. Thử tắt VPN/Proxy nếu đang dùng
-4. Kiểm tra Windows Firewall:
-   - Mở "Windows Defender Firewall"
-   - "Allow an app through firewall"
-   - Tìm "93 Media - Tool Mix Nhạc" và cho phép
+2. Kiểm tra Firewall: "Windows Defender Firewall" → "Allow an app" → tìm "93 Media"
+3. Tắt VPN/Proxy nếu đang dùng
 
-### Bước 3: Kiểm tra file và thư mục
+#### ❌ Lỗi: "Tài khoản bị chặn" (banner đỏ)
 
-#### Vị trí file user data:
-```
-Windows: %APPDATA%\93-media-tool-mix-nhac\
-Hoặc: C:\Users\<TênUser>\AppData\Roaming\93-media-tool-mix-nhac\
-```
+**Nguyên nhân:** Admin đã revoke tài khoản hoặc auto-block engine phát hiện bất thường.
 
-#### Các file quan trọng:
-- `authState.enc` - File authentication (đã mã hóa)
-- `logs/` - Thư mục chứa log files
+**Giải pháp:**
+1. Liên hệ admin để kiểm tra trạng thái tài khoản
+2. Admin có thể approve lại qua Dashboard
 
-#### Xóa cache (nếu cần):
-1. Đóng ứng dụng hoàn toàn
-2. Xóa thư mục `%APPDATA%\93-media-tool-mix-nhac\`
-3. Khởi động lại ứng dụng
+---
 
-### Bước 4: Kiểm tra hệ thống
+## 🟡 Sóng nhạc (Visualizer) — Sự cố
 
-#### Yêu cầu hệ thống:
-- **OS:** Windows 10/11 (64-bit)
-- **RAM:** Tối thiểu 4 GB (khuyến nghị 8 GB)
-- **Disk:** Tối thiểu 500 MB trống
-- **.NET Framework:** Không cần (Electron tự chứa)
+#### Export video bị đen/không có hình
 
-#### Kiểm tra:
-1. **Windows Version:**
-   - Nhấn `Win + R` → gõ `winver` → Enter
-   - Phải là Windows 10 hoặc 11
+1. Kiểm tra đã chọn audio file
+2. Kiểm tra có ít nhất 1 layer visible
+3. Nếu dùng GPU encode (NVENC): thử lại với **CPU fallback** (app sẽ gợi ý khi GPU fail)
+4. Kiểm tra dung lượng ổ đĩa (cần ít nhất 1GB trống)
 
-2. **RAM:**
-   - Nhấn `Ctrl + Shift + Esc` → Task Manager
-   - Xem "Memory" có đủ không
+#### Timeline không hiện waveform
 
-3. **Antivirus:**
-   - Tạm thời tắt Windows Defender/Antivirus
-   - Thử chạy lại ứng dụng
+1. Audio file phải là MP3/WAV/AAC/FLAC
+2. File quá dài (>15 phút) sẽ được downsample tự động — đợi Web Worker xử lý xong
+3. Thử reload page (Ctrl+R trong dev mode)
 
-### Bước 5: Chạy với quyền Administrator
+---
 
-1. Click chuột phải vào file `.exe`
-2. Chọn "Run as administrator"
-3. Cho phép UAC nếu được hỏi
+## 🟡 Video — Sự cố
 
-### Bước 6: Kiểm tra Event Viewer (Windows)
+#### FFmpeg lỗi khi cắt/ghép
 
-1. Nhấn `Win + X` → "Event Viewer"
-2. Windows Logs → Application
-3. Tìm các lỗi liên quan đến "93 Media" hoặc "Electron"
-4. Copy thông tin lỗi và gửi cho admin
+1. Kiểm tra file video không bị hỏng: chạy "Audit Files" tab trước
+2. Codec mismatch khi ghép: app sẽ cảnh báo — cần normalize trước
+3. Đường dẫn chứa ký tự đặc biệt: di chuyển file sang thư mục đường dẫn đơn giản
 
-### Bước 7: Chạy từ Command Prompt
+#### GPU encoding thất bại
 
-1. Mở Command Prompt (cmd)
-2. Chuyển đến thư mục chứa file `.exe`
-3. Chạy: `"93 Media - Tool Mix Nhạc-1.0.5-x64.exe"`
-4. Xem output trong console để biết lỗi
+1. Kiểm tra driver NVIDIA/AMD cập nhật
+2. Thử chuyển sang CPU encoding trong Settings
+3. Một số video cũ không tương thích GPU encoder
 
-### Bước 8: Kiểm tra Log Files
+---
 
-1. Mở thư mục: `%APPDATA%\93-media-tool-mix-nhac\logs\`
-2. Xem file log mới nhất
-3. Tìm các dòng có "ERROR" hoặc "FATAL"
-4. Copy và gửi cho admin
+## 🟡 YouTube Downloader — Sự cố
+
+#### yt-dlp không hoạt động
+
+1. App tự động update yt-dlp khi khởi động — kiểm tra toast notification
+2. Nếu yt-dlp quá cũ (>15 ngày): app sẽ hiện warning
+3. Thử manual update: nhấn nút "Cập nhật yt-dlp" trong YouTube tab
+
+#### Age-restricted video
+
+App hỗ trợ browser cookie extraction tự động. Nếu vẫn lỗi:
+1. Đăng nhập YouTube trên Chrome/Edge trước
+2. Thử lại download
+
+---
+
+## 📁 Vị trí file & thư mục
+
+| File/Thư mục | Đường dẫn |
+|--------------|-----------|
+| User data | `%APPDATA%\93-media-tool-mix-nhac\` |
+| Auth state (encrypted) | `%APPDATA%\93-media-tool-mix-nhac\authState.enc` |
+| Log files | `%APPDATA%\93-media-tool-mix-nhac\logs\` |
+| External tools | `<app-dir>\bin\` (ffmpeg, ffprobe, yt-dlp, exiftool, AtomicParsley) |
 
 ---
 
 ## 📋 Checklist Khắc Phục Nhanh
 
-- [ ] Đã mở DevTools (F12) và kiểm tra Console
-- [ ] Đã thử chạy với quyền Administrator
-- [ ] Đã kiểm tra kết nối internet
-- [ ] Đã tắt tạm thời Windows Defender/Antivirus
-- [ ] Đã xóa file `authState.enc` nếu có
-- [ ] Đã kiểm tra Windows version (10/11)
-- [ ] Đã kiểm tra RAM (tối thiểu 4 GB)
-- [ ] Đã kiểm tra log files trong `%APPDATA%\93-media-tool-mix-nhac\logs\`
+- [ ] Kiểm tra version blocking screen (cập nhật nếu cần)
+- [ ] Kiểm tra kết nối internet
+- [ ] Tắt tạm thời Windows Defender/Antivirus
+- [ ] Chạy với quyền Administrator
+- [ ] Xóa file `authState.enc` và đăng nhập lại
+- [ ] Kiểm tra Windows version (10/11 64-bit)
+- [ ] Kiểm tra RAM (tối thiểu 4 GB)
+- [ ] Kiểm tra log files trong `%APPDATA%\93-media-tool-mix-nhac\logs\`
+- [ ] Kiểm tra dung lượng ổ đĩa (TopBar hiển thị real-time)
 
 ---
 
 ## 🆘 Liên Hệ Hỗ Trợ
 
-Nếu vẫn không giải quyết được, vui lòng cung cấp:
+Cung cấp thông tin sau:
 
-1. **Thông tin hệ thống:**
-   - Windows version
-   - RAM
-   - CPU
+1. **App version** (hiện ở góc dưới sidebar)
+2. **Thông tin hệ thống** (Windows version, RAM, CPU — hiện ở TopBar)
+3. **Screenshot lỗi** hoặc console output
+4. **Log files** từ `%APPDATA%\93-media-tool-mix-nhac\logs\`
+5. **Mô tả**: app hiện gì, đang làm gì khi lỗi xảy ra
 
-2. **Lỗi từ DevTools:**
-   - Screenshot Console (F12)
-   - Copy toàn bộ lỗi
-
-3. **Log files:**
-   - File log mới nhất từ `%APPDATA%\93-media-tool-mix-nhac\logs\`
-
-4. **Mô tả vấn đề:**
-   - Ứng dụng có mở được không?
-   - Màn hình hiển thị gì? (đen, trắng, lỗi?)
-   - Có thông báo lỗi nào không?
-
----
-
-**Version:** 1.0.5  
-**Cập nhật:** 2025-12-06
-
-
+**Email:** dungdong333@gmail.com
+**SĐT/Zalo:** 0393954568

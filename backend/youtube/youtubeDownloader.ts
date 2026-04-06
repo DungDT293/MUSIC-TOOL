@@ -395,17 +395,17 @@ export class YouTubeDownloader extends EventEmitter {
       throw new Error(`yt-dlp not found at ${this.ytDlpPath}. Please download it from https://github.com/yt-dlp/yt-dlp/releases`);
     }
     
-    // REFACTORED: Dùng android,web client cùng lúc như tool Python
-    // Tool Python dùng: --extractor-args "youtube:player_client=android,web"
-    // Điều này cho phép yt-dlp tự động chọn client tốt nhất để lấy format cao nhất
+    // Fix: Dùng tv,android_vr,web_safari cho getVideoInfo — GIỐNG với downloadVideo()
+    // android/web client cũ bị SABR block, chỉ trả về format 18 (360p muxed)
+    // tv/android_vr trả đầy đủ DASH adaptive formats (1080p, 4K, etc.)
     try {
-      console.log(`[YouTubeDownloader] Using android,web client (like Python tool) for video info...`);
-      return await this.getVideoInfoWithClient(url, 'android,web');
+      console.log(`[YouTubeDownloader] Using tv,android_vr,web_safari client for video info...`);
+      return await this.getVideoInfoWithClient(url, 'tv,android_vr,web_safari');
     } catch (error: any) {
-      // Nếu android,web fail, fallback về android đơn thuần
-      console.warn(`[YouTubeDownloader] android,web client failed, trying android only...`);
+      // Fallback: thử android,web nếu tv client fail
+      console.warn(`[YouTubeDownloader] tv,android_vr,web_safari failed, trying android,web...`);
       try {
-        return await this.getVideoInfoWithClient(url, 'android');
+        return await this.getVideoInfoWithClient(url, 'android,web');
       } catch (fallbackError: any) {
         throw new Error(`Failed to get video info: ${fallbackError?.message || error?.message}`);
       }
@@ -416,7 +416,7 @@ export class YouTubeDownloader extends EventEmitter {
    * Helper: Get video info với client cụ thể
    * REFACTORED: Hỗ trợ 'android,web' như tool Python
    */
-  private async getVideoInfoWithClient(url: string, client: 'web' | 'ios' | 'tv_embedded' | 'android' | 'android,web'): Promise<VideoInfo> {
+  private async getVideoInfoWithClient(url: string, client: string): Promise<VideoInfo> {
     const args = [
       '--dump-json',
       '--no-playlist',      // Single video only (nếu URL trong playlist)
@@ -467,7 +467,7 @@ export class YouTubeDownloader extends EventEmitter {
             const parsedFormatsWithSize: ParsedFormatWithSize[] = rawInfo.formats ? rawInfo.formats.map((f: any): ParsedFormatWithSize => ({
               formatId: f.format_id || '',
               ext: f.ext || '',
-              resolution: f.resolution || `${f.width || 0}x${f.height || 0}`,
+              resolution: (f.resolution && f.resolution !== 'none') ? f.resolution : `${f.width || 0}x${f.height || 0}`,
               fps: f.fps || 0,
               filesize: f.filesize || f.filesize_approx || 0,
               vcodec: f.vcodec || 'none',

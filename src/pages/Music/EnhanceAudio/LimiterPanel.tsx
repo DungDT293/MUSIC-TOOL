@@ -20,22 +20,22 @@ export default function LimiterPanel({ value, onChange, disabled }: Props) {
         </span>
         {value.enabled && (
           <span style={{ marginLeft: 'auto', fontSize: '11px', color: '#f59e0b' }}>
-            Tran: {value.thresholdDbtp} dBTP
+            Trần: {value.thresholdDbtp} dBTP
           </span>
         )}
       </div>
       <div style={{ fontSize: '11px', color: '#555', marginBottom: '10px', lineHeight: '1.4' }}>
-        Tuong bich wall — dam bao am thanh KHONG BAO GIO vuot qua muc tran nay, tranh clip/vo tieng.
-        Dat cuoi chuoi xu ly. True Peak dam bao an toan tren tat ca thiet bi.
+        Tường bích wall — đảm bảo âm thanh KHÔNG BAO GIỜ vượt qua mức trần này, tránh clip/vỡ tiếng.
+        Đặt cuối chuỗi xử lý. True Peak đảm bảo an toàn trên tất cả thiết bị.
       </div>
       <div style={{ opacity: value.enabled ? 1 : 0.4, pointerEvents: value.enabled && !disabled ? 'auto' : 'none' }}>
         <div style={{ marginBottom: '12px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: '#ccc', marginBottom: '2px' }}>
-            <span>Nguong tran (True Peak)</span>
+            <span>Ngưỡng trần (True Peak)</span>
             <span style={{ color: '#40a9ff', fontWeight: 'bold' }}>{value.thresholdDbtp} dBTP</span>
           </div>
           <div style={{ fontSize: '11px', color: '#666', marginBottom: '5px', lineHeight: '1.4' }}>
-            -1 dBTP la chuan cho streaming (Spotify, YouTube). -0.5 cho nhac club. 0 = muc toi da tuyet doi.
+            -1 dBTP là chuẩn cho streaming (Spotify, YouTube). -0.5 cho nhạc club. 0 = mức tối đa tuyệt đối.
           </div>
           <input type="range" min={-3} max={0} step={0.1} value={value.thresholdDbtp}
             onChange={e => set('thresholdDbtp', Number(e.target.value))}
@@ -44,14 +44,14 @@ export default function LimiterPanel({ value, onChange, disabled }: Props) {
         <div style={{ display: 'flex', gap: '10px' }}>
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: '11px', color: '#888', marginBottom: '2px' }}>Attack (ms)</div>
-            <div style={{ fontSize: '10px', color: '#555', marginBottom: '4px', lineHeight: '1.3' }}>Toc do phan ung — 1ms la pho bien</div>
+            <div style={{ fontSize: '10px', color: '#555', marginBottom: '4px', lineHeight: '1.3' }}>Tốc độ phản ứng — 1ms là phổ biến</div>
             <input type="number" min={0.1} max={20} step={0.1} value={value.attackMs}
               onChange={e => set('attackMs', Number(e.target.value))} disabled={disabled}
               style={{ width: '100%', backgroundColor: '#252526', color: '#ccc', border: '1px solid #444', borderRadius: '3px', padding: '4px 6px', fontSize: '12px' }} />
           </div>
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: '11px', color: '#888', marginBottom: '2px' }}>Release (ms)</div>
-            <div style={{ fontSize: '10px', color: '#555', marginBottom: '4px', lineHeight: '1.3' }}>Toc do nha — 50ms la tu nhien</div>
+            <div style={{ fontSize: '10px', color: '#555', marginBottom: '4px', lineHeight: '1.3' }}>Tốc độ nhả — 50ms là tự nhiên</div>
             <input type="number" min={10} max={500} step={5} value={value.releaseMs}
               onChange={e => set('releaseMs', Number(e.target.value))} disabled={disabled}
               style={{ width: '100%', backgroundColor: '#252526', color: '#ccc', border: '1px solid #444', borderRadius: '3px', padding: '4px 6px', fontSize: '12px' }} />

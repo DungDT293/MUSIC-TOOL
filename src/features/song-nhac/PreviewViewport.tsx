@@ -305,61 +305,110 @@ export default function PreviewViewport({ onTimelineCompute, audioRef: externalA
   }, [threejsPreset])
 
   // Background engine switching → runtime.setBgEngine
+  // Then apply current sub-settings AFTER engine is ready (setBgEngine is async).
   useEffect(() => {
-    runtimeRef.current?.setBgEngine(bgEngine)
-  }, [bgEngine])
+    let cancelled = false
+    const runtime = runtimeRef.current
+    if (!runtime) return
+
+    ;(async () => {
+      await runtime.setBgEngine(bgEngine)
+      if (cancelled) return
+      // Apply current sub-settings after engine is loaded & initialized
+      if (bgEngine === 'threejs') {
+        // Re-apply ThreeJS settings from store (setBgEngine uses hardcoded defaults)
+        runtime.setLayout(visualizerLayout)
+        runtime.setBloomParams(bloomStrength, bloomRadius, bloomThreshold)
+        runtime.setThreejsPreset(threejsPreset)
+      } else {
+        const engine = runtime.getAltEngine() as any
+        if (!engine) return
+        switch (bgEngine) {
+          case 'vanta':
+            engine.setEffect?.(vantaEffect)
+            break
+          case 'wavejs':
+            engine.setAnimation?.(wavejsAnimation)
+            break
+          case 'audiomotion':
+            engine.setMode?.(audiomotionMode)
+            engine.setGradient?.(audiomotionGradient)
+            engine.setRadial?.(audiomotionRadial)
+            engine.setLedBars?.(audiomotionLedBars)
+            break
+        }
+      }
+    })()
+
+    return () => { cancelled = true }
+  }, [bgEngine]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Background mode switching
   useEffect(() => {
     runtimeRef.current?.setBgMode(bgMode)
   }, [bgMode])
 
-  // Vanta effect change
+  // Wire blur background image from first image layer src
+  useEffect(() => {
+    const runtime = runtimeRef.current
+    if (!runtime) return
+    if (bgMode !== 'blur') {
+      // Not blur mode — clear cached blur image
+      runtime.setBlurImage(null)
+      return
+    }
+    // Find first image layer with a src
+    const imageLayer = layers.find((l) => l.type === 'image' && (l as any).src)
+    const src = imageLayer ? (imageLayer as any).src as string : null
+    runtime.setBlurImage(src)
+  }, [bgMode, layers])
+
+  // Vanta effect change (after engine is already loaded)
   useEffect(() => {
     if (bgEngine !== 'vanta') return
     const engine = runtimeRef.current?.getAltEngine() as any
     engine?.setEffect?.(vantaEffect)
-  }, [vantaEffect, bgEngine])
+  }, [vantaEffect]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Wave.js animation change
+  // Wave.js animation change (after engine is already loaded)
   useEffect(() => {
     if (bgEngine !== 'wavejs') return
     const engine = runtimeRef.current?.getAltEngine() as any
     engine?.setAnimation?.(wavejsAnimation)
-  }, [wavejsAnimation, bgEngine])
+  }, [wavejsAnimation]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // AudioMotion settings changes
+  // AudioMotion settings changes (after engine is already loaded)
   useEffect(() => {
     if (bgEngine !== 'audiomotion') return
     const engine = runtimeRef.current?.getAltEngine() as any
     engine?.setMode?.(audiomotionMode)
-  }, [audiomotionMode, bgEngine])
+  }, [audiomotionMode]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (bgEngine !== 'audiomotion') return
     const engine = runtimeRef.current?.getAltEngine() as any
     engine?.setGradient?.(audiomotionGradient)
-  }, [audiomotionGradient, bgEngine])
+  }, [audiomotionGradient]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (bgEngine !== 'audiomotion') return
     const engine = runtimeRef.current?.getAltEngine() as any
     engine?.setRadial?.(audiomotionRadial)
-  }, [audiomotionRadial, bgEngine])
+  }, [audiomotionRadial]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (bgEngine !== 'audiomotion') return
     const engine = runtimeRef.current?.getAltEngine() as any
     engine?.setLedBars?.(audiomotionLedBars)
-  }, [audiomotionLedBars, bgEngine])
+  }, [audiomotionLedBars]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Butterchurn preset control events
   useEffect(() => {
     if (bgEngine !== 'butterchurn') return
-    const engine = runtimeRef.current?.getAltEngine() as any
-    const onRandom = () => engine?.randomPreset?.()
-    const onNext = () => engine?.nextPreset?.()
-    const onPrev = () => engine?.prevPreset?.()
+    // Get engine lazily in each handler (engine may not exist yet during initial mount)
+    const onRandom = () => (runtimeRef.current?.getAltEngine() as any)?.randomPreset?.()
+    const onNext = () => (runtimeRef.current?.getAltEngine() as any)?.nextPreset?.()
+    const onPrev = () => (runtimeRef.current?.getAltEngine() as any)?.prevPreset?.()
     window.addEventListener('butterchurn:random', onRandom)
     window.addEventListener('butterchurn:next', onNext)
     window.addEventListener('butterchurn:prev', onPrev)

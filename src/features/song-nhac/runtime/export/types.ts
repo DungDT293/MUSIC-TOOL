@@ -40,6 +40,10 @@ export interface ExportConfig {
   forceSoftwareRenderer?: boolean
   /** Start offset (seconds) khi export từ range — frame i maps to timeSec = startSec + i/fps */
   startSec?: number
+  /** Background engine type to use during export (mirrors preview). Default: 'threejs'. */
+  bgEngine?: import('../engine/types').EngineType
+  /** Runtime settings snapshot for engine configuration. */
+  runtimeSettings?: Record<string, unknown>
 }
 
 export interface ExportProgress {

@@ -4,16 +4,18 @@
  */
 
 const DEFAULT_FFT_SIZE = 2048
-const DEFAULT_FREQ_BINS = 128
+
+/** Empty fallback returned after destroy to avoid caller crashes. */
+const EMPTY_BUFFER = new Uint8Array(128)
 
 export class AudioAnalyzerRealtime {
-  private ctx: AudioContext
-  private source: MediaElementAudioSourceNode
-  private analyser: AnalyserNode
+  private ctx: AudioContext | null
+  private source: MediaElementAudioSourceNode | null
+  private analyser: AnalyserNode | null
   private freqBuffer: Uint8Array
   private waveformBuffer: Uint8Array
-  // Bug #7 fix: track resume in-flight to avoid 60x/sec Promise spam
   private _resuming = false
+  private _destroyed = false
 
   constructor(audioEl: HTMLAudioElement) {
     this.ctx = new AudioContext()
@@ -29,9 +31,19 @@ export class AudioAnalyzerRealtime {
     this.waveformBuffer = new Uint8Array(freqBinCount)
   }
 
+  /** Public accessor — engines use this instead of `(audio as any).ctx`. */
+  getAudioContext(): AudioContext | null {
+    return this.ctx
+  }
+
+  /** Public accessor — engines use this instead of `(audio as any).source`. */
+  getSourceNode(): MediaElementAudioSourceNode | null {
+    return this.source
+  }
+
   getFrequencyData(): Uint8Array {
+    if (this._destroyed || !this.ctx || !this.analyser) return EMPTY_BUFFER
     // Auto-resume context if browser suspended it (autoplay policy)
-    // Bug #7 fix: only call resume() once, not 60x/sec
     if (this.ctx.state === 'suspended' && !this._resuming) {
       this._resuming = true
       this.ctx.resume().finally(() => { this._resuming = false })
@@ -41,6 +53,7 @@ export class AudioAnalyzerRealtime {
   }
 
   getWaveformData(): Uint8Array {
+    if (this._destroyed || !this.ctx || !this.analyser) return EMPTY_BUFFER
     if (this.ctx.state === 'suspended' && !this._resuming) {
       this._resuming = true
       this.ctx.resume().finally(() => { this._resuming = false })
@@ -50,18 +63,24 @@ export class AudioAnalyzerRealtime {
   }
 
   resume(): void {
-    if (this.ctx.state === 'suspended') {
-      this.ctx.resume()
+    if (this._destroyed || !this.ctx) return
+    if (this.ctx.state === 'suspended' && !this._resuming) {
+      this._resuming = true
+      this.ctx.resume().finally(() => { this._resuming = false })
     }
   }
 
   destroy(): void {
+    this._destroyed = true
     try {
-      this.source.disconnect()
-      this.analyser.disconnect()
-      this.ctx.close()
+      this.source?.disconnect()
+      this.analyser?.disconnect()
+      this.ctx?.close().catch(() => {})
     } catch (_) {
       // ignore
     }
+    this.source = null
+    this.analyser = null
+    this.ctx = null
   }
 }

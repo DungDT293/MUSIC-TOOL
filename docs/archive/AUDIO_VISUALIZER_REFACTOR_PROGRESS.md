@@ -1,4 +1,11 @@
-# Audio Visualizer Refactor Progress
+> ⛔ **ARCHIVED — KHÔNG CÒN CHÍNH XÁC** (2026-04-02)
+>
+> Kiến trúc `src/components/AudioVisualizer/` đã bị thay thế hoàn toàn bởi `src/features/song-nhac/`.
+> Xem [`README.md`](../README.md) → phần "Sóng nhạc (Music Visualizer)" cho tài liệu hiện tại.
+>
+> ---
+
+# [ARCHIVED] Audio Visualizer Refactor Progress
 
 ## ✅ Đã hoàn thành
 

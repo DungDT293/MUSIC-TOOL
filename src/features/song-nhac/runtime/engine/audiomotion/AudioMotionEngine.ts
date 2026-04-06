@@ -4,7 +4,13 @@
  * Tích hợp audiomotion-analyzer (https://github.com/hvianna/audioMotion-analyzer)
  * để render spectrum analyzer chuyên nghiệp với nhiều mode và gradient.
  *
- * Renders offscreen rồi blit kết quả vào webglCanvas của CanvasHost.
+ * FIX V2: Defer Analyzer creation until AudioContext is available.
+ *  - AudioMotion creates its own AudioContext on construction if none is supplied.
+ *  - When VisualizerRuntime later calls attachAudioSource() with a *different*
+ *    AudioContext, connectInput() throws DOMException.
+ *  - Solution: save canvas+size in initWithCanvas(), wait for attachAudioSource()
+ *    to supply the real AudioContext, THEN create the Analyzer.
+ *  - If no audio ever arrives, create the Analyzer lazily on the first render().
  */
 
 import type { Size, EngineRenderFrame, WebGLVisualizerEngine } from '../types'
@@ -61,12 +67,18 @@ export const AUDIOMOTION_GRADIENTS: { value: string; label: string }[] = [
 
 export class AudioMotionEngine implements WebGLVisualizerEngine {
   private analyzer: any = null
-  private offscreenCanvas: HTMLCanvasElement | null = null
   private targetCanvas: HTMLCanvasElement | null = null
+  private container: HTMLDivElement | null = null
   private size: Size = { width: 0, height: 0 }
   private config: AudioMotionConfig
   private inited = false
   private destroyed = false
+  /** Saved audio context from attachAudioSource — used to create Analyzer with matching context. */
+  private audioCtx: AudioContext | null = null
+  /** Saved audio source — connected once Analyzer is created. */
+  private audioSource: MediaElementAudioSourceNode | null = null
+  /** True once the Analyzer module has been loaded (but Analyzer may not be created yet). */
+  private moduleLoaded = false
 
   constructor(config: AudioMotionConfig = {}) {
     this.config = {
@@ -90,24 +102,41 @@ export class AudioMotionEngine implements WebGLVisualizerEngine {
     this.destroyed = false
 
     try {
-      const Analyzer = await loadAudioMotion()
+      await loadAudioMotion()
       if (this.destroyed) return
+      this.moduleLoaded = true
 
-      // audioMotion-analyzer cần một container div
-      this.offscreenCanvas = document.createElement('canvas')
-      this.offscreenCanvas.width = size.width
-      this.offscreenCanvas.height = size.height
+      // Create off-screen container (Analyzer needs a DOM element)
+      this.container = document.createElement('div')
+      this.container.style.position = 'fixed'
+      this.container.style.left = '-9999px'
+      this.container.style.top = '-9999px'
+      this.container.style.width = `${size.width}px`
+      this.container.style.height = `${size.height}px`
+      document.body.appendChild(this.container)
 
-      // Container tạm cho audioMotion
-      const container = document.createElement('div')
-      container.style.position = 'fixed'
-      container.style.left = '-9999px'
-      container.style.top = '-9999px'
-      container.style.width = `${size.width}px`
-      container.style.height = `${size.height}px`
-      document.body.appendChild(container)
+      this.inited = true
 
-      this.analyzer = new Analyzer(container, {
+      // If audio was already attached, create the Analyzer now
+      if (this.audioCtx && this.audioSource) {
+        this._createAnalyzer()
+      }
+
+      console.log('[AudioMotionEngine] Initialized (deferred analyzer creation), mode:', this.config.mode)
+    } catch (err) {
+      console.error('[AudioMotionEngine] Init failed:', err)
+    }
+  }
+
+  /**
+   * Create the actual AudioMotion Analyzer instance.
+   * Called once both canvas+container AND audioCtx are available.
+   */
+  private _createAnalyzer(): void {
+    if (this.analyzer || this.destroyed || !this.container || !AudioMotionAnalyzer) return
+
+    try {
+      const opts: any = {
         mode: this.config.mode,
         gradient: this.config.gradient,
         barSpace: this.config.barSpace,
@@ -126,29 +155,96 @@ export class AudioMotionEngine implements WebGLVisualizerEngine {
         fftSize: 8192,
         smoothing: 0.7,
         weightingFilter: 'D',
-      })
+        connectSpeakers: false, // don't double-connect to speakers
+      }
 
-      // Store container ref for cleanup
-      ;(this as any)._container = container
+      // CRITICAL: pass the SAME AudioContext so connectInput won't throw
+      if (this.audioCtx) {
+        opts.audioCtx = this.audioCtx
+      }
 
-      this.inited = true
-      console.log('[AudioMotionEngine] Initialized, mode:', this.config.mode)
+      this.analyzer = new AudioMotionAnalyzer(this.container, opts)
+
+      // Connect saved audio source
+      if (this.audioSource) {
+        try {
+          this.analyzer.connectInput(this.audioSource)
+          console.log('[AudioMotionEngine] Audio source connected successfully')
+        } catch (err: any) {
+          console.warn('[AudioMotionEngine] connectInput failed:', err?.message)
+          // Fallback: try HTMLMediaElement directly
+          try {
+            const mediaEl = (this.audioSource as any).mediaElement as HTMLMediaElement
+            if (mediaEl) {
+              this.analyzer.connectInput(mediaEl)
+              console.log('[AudioMotionEngine] Fallback: connected via HTMLMediaElement')
+            }
+          } catch (e2: any) {
+            console.warn('[AudioMotionEngine] connectInput(mediaElement) also failed:', e2?.message)
+          }
+        }
+      }
+
+      console.log('[AudioMotionEngine] Analyzer created, mode:', this.config.mode)
     } catch (err) {
-      console.error('[AudioMotionEngine] Init failed:', err)
+      console.error('[AudioMotionEngine] Analyzer creation failed:', err)
+    }
+  }
+
+  /**
+   * Create the Analyzer WITHOUT audio context (visual-only fallback).
+   * Used when render() is called but no audio has been attached yet.
+   */
+  private _createAnalyzerWithoutAudio(): void {
+    if (this.analyzer || this.destroyed || !this.container || !AudioMotionAnalyzer) return
+    try {
+      this.analyzer = new AudioMotionAnalyzer(this.container, {
+        mode: this.config.mode,
+        gradient: this.config.gradient,
+        barSpace: this.config.barSpace,
+        lumiBars: this.config.lumiBars,
+        radial: this.config.radial,
+        reflexRatio: this.config.reflexRatio,
+        showPeaks: this.config.showPeaks,
+        mirror: this.config.mirror,
+        roundBars: this.config.roundBars,
+        ledBars: this.config.ledBars,
+        showBgColor: true,
+        bgAlpha: 1,
+        overlay: false,
+        showScaleX: false,
+        showScaleY: false,
+        fftSize: 8192,
+        smoothing: 0.7,
+        weightingFilter: 'D',
+        connectSpeakers: false,
+      })
+      console.log('[AudioMotionEngine] Analyzer created (no audio)')
+    } catch (err) {
+      console.error('[AudioMotionEngine] Analyzer creation (no audio) failed:', err)
     }
   }
 
   attachAudioSource(source: MediaElementAudioSourceNode, audioContext: AudioContext): void {
-    if (this.analyzer) {
+    this.audioSource = source
+    this.audioCtx = audioContext
+
+    if (this.inited && !this.analyzer) {
+      // Analyzer hasn't been created yet → create it now with the correct AudioContext
+      this._createAnalyzer()
+    } else if (this.analyzer) {
+      // Analyzer already exists — try to connect
+      // This can happen if user switches tracks (new source, same context)
       try {
-        // AudioMotion dùng audioContext riêng — cần truyền audioCtx + source cùng context
-        // Nếu source thuộc context khác → bỏ qua, AudioMotion sẽ không reactive
-        // nhưng ít nhất không crash
         this.analyzer.connectInput(source)
       } catch (err: any) {
-        // DOMException: cannot connect AudioNode from different audio context
-        // → Bỏ qua, AudioMotion sẽ hiển thị silence visualization
-        console.warn('[AudioMotionEngine] connectInput skipped (different AudioContext):', err?.message)
+        console.warn('[AudioMotionEngine] connectInput on existing analyzer failed:', err?.message)
+        // Destroy and recreate with correct context
+        try {
+          this.analyzer.destroy()
+        } catch {}
+        this.analyzer = null
+        this._createAnalyzer()
       }
     }
   }
@@ -189,18 +285,23 @@ export class AudioMotionEngine implements WebGLVisualizerEngine {
 
   resize(size: Size): void {
     this.size = size
-    if (this.analyzer) {
-      const container = (this as any)._container as HTMLDivElement
-      if (container) {
-        container.style.width = `${size.width}px`
-        container.style.height = `${size.height}px`
-      }
+    if (this.container) {
+      this.container.style.width = `${size.width}px`
+      this.container.style.height = `${size.height}px`
     }
   }
 
   render(frame: EngineRenderFrame): void {
-    if (!this.analyzer || !this.targetCanvas || !this.inited) return
-    // audioMotion-analyzer tự render với RAF — chỉ cần blit vào target
+    if (!this.targetCanvas || !this.inited) return
+
+    // Lazy-create analyzer on first render if no audio has arrived
+    if (!this.analyzer && this.moduleLoaded) {
+      this._createAnalyzerWithoutAudio()
+    }
+    if (!this.analyzer) return
+
+    // AudioMotion renders internally via its own RAF.
+    // Blit the analyzer's canvas → our target canvas each frame.
     try {
       const analyzerCanvas = this.analyzer.canvas as HTMLCanvasElement
       if (analyzerCanvas) {
@@ -216,6 +317,7 @@ export class AudioMotionEngine implements WebGLVisualizerEngine {
   destroy(): void {
     this.destroyed = true
     this.inited = false
+    this.moduleLoaded = false
     if (this.analyzer) {
       try {
         this.analyzer.destroy()
@@ -223,12 +325,12 @@ export class AudioMotionEngine implements WebGLVisualizerEngine {
       this.analyzer = null
     }
     // Remove container
-    const container = (this as any)._container as HTMLDivElement
-    if (container && container.parentNode) {
-      container.parentNode.removeChild(container)
+    if (this.container?.parentNode) {
+      this.container.parentNode.removeChild(this.container)
     }
-    ;(this as any)._container = null
-    this.offscreenCanvas = null
+    this.container = null
     this.targetCanvas = null
+    this.audioSource = null
+    this.audioCtx = null
   }
 }

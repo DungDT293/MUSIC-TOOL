@@ -62,6 +62,7 @@ function ExportAudioPage() {
   const [quality, setQuality] = useState<AudioQuality>('aac_384')
   const [smoothTransitions, setSmoothTransitions] = useState<boolean>(false)
   const [crossfadeDuration, setCrossfadeDuration] = useState<string>('') // giây
+  const [normalizeLoudness, setNormalizeLoudness] = useState<boolean>(false)
   const [loading, setLoading] = useState<boolean>(false)
   const [progressText, setProgressText] = useState<string | null>(null)
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
@@ -646,6 +647,8 @@ const filteredHistory = useMemo(() => {
               : smoothTransitions
                 ? 4 // default 4s nếu bật nhưng không nhập
                 : undefined,
+          normalizeLoudness,
+          loudnessTargetLufs: normalizeLoudness ? -14 : undefined,
         }
 
         try {
@@ -994,6 +997,28 @@ const filteredHistory = useMemo(() => {
           <div style={{ marginTop: '4px', fontSize: '12px', color: '#666' }}>
             Nếu bật, các bài sẽ crossfade mượt mà với nhau. Để trống sẽ dùng mặc định 4s.
           </div>
+        </div>
+
+        {/* Cân bằng âm lượng (Loudness Normalization) */}
+        <div style={{ marginTop: '12px' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: '500' }}>
+            <input
+              type="checkbox"
+              checked={normalizeLoudness}
+              onChange={(e) => setNormalizeLoudness(e.target.checked)}
+              disabled={loading}
+            />
+            <span>Cân bằng âm lượng giữa các bài (Loudnorm)</span>
+          </label>
+          <div style={{ marginTop: '4px', fontSize: '12px', color: '#666' }}>
+            Tự động đồng đều âm lượng giữa tất cả các bài theo chuẩn EBU R128 (-14 LUFS = chuẩn YouTube/Spotify).
+            Bài to sẽ được giảm, bài nhỏ sẽ được tăng — đảm bảo không bị chênh lệch khi nghe liên tục.
+          </div>
+          {normalizeLoudness && (
+            <div style={{ marginTop: '4px', fontSize: '12px', color: '#f59e0b', fontStyle: 'italic' }}>
+              Lưu ý: Mỗi bài sẽ được xử lý riêng trước khi ghép, nên thời gian xuất sẽ lâu hơn bình thường.
+            </div>
+          )}
         </div>
 
         {/* Nút kiểm tra playlist (chỉ hiện khi crossfade bật) */}

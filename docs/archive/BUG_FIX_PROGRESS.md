@@ -1,7 +1,17 @@
-# Bug Fix Progress Checklist
+> ⚠️ **OUTDATED — CẦN XEM XÉT** (2026-04-02)
+>
+> Tài liệu này từ 2024-11-24. **13 file** được liệt kê là "NEW" (PathValidator.ts, fileLockService.ts,
+> processTimeout.ts, diskSpaceMonitor.ts, downloadCleanup.ts, etc.) **KHÔNG TỒN TẠI** trong codebase hiện tại.
+> Nhiều bug fix đã được xử lý bằng cách khác hoặc tích hợp vào module khác.
+>
+> **Xem trạng thái test hiện tại:** [`FUNCTIONALITY_TEST_REPORT.md`](../FUNCTIONALITY_TEST_REPORT.md)
+>
+> ---
+
+# [OUTDATED] Bug Fix Progress Checklist
 
 > **Last Updated**: 2024-11-24  
-> **Status**: In Progress  
+> **Status**: Archived  
 > **Total Bugs**: 14
 
 ---

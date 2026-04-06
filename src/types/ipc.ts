@@ -257,6 +257,10 @@ export interface ExportPlaylistRequest {
   bitrateKbps?: number
   smoothTransitions?: boolean
   crossfadeDurationSec?: number
+  /** Cân bằng âm lượng giữa các bài (EBU R128 loudnorm) */
+  normalizeLoudness?: boolean
+  /** Target LUFS (default -14 = YouTube/Spotify standard) */
+  loudnessTargetLufs?: number
 }
 
 export interface ExportPlaylistResult {

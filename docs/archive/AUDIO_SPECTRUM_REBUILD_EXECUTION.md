@@ -1,4 +1,6 @@
-# Execution Plan - Audio Spectrum Rebuild
+> ⛔ **ARCHIVED** (2026-04-02) — Kiến trúc này đã được thay thế bởi `src/features/song-nhac/`.
+
+# [ARCHIVED] Execution Plan - Audio Spectrum Rebuild
 
 ## ✅ Completed
 1. ✅ Backup code hiện tại: `backup_v20251231_153213.zip`

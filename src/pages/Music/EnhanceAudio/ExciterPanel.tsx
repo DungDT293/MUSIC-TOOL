@@ -40,14 +40,14 @@ export default function ExciterPanel({ value, onChange, disabled }: Props) {
         </span>
       </div>
       <div style={{ fontSize: '11px', color: '#555', marginBottom: '10px', lineHeight: '1.4' }}>
-        Them harmonic (hoa am bac cao) vao vung tan so cao — giup nhac nghe "song", "sang" va "hien dien" hon
-        ma khong can tang treble EQ. Phuong phap cua iZotope Ozone va Aphex Aural Exciter.
+        Thêm harmonic (hòa âm bậc cao) vào vùng tần số cao — giúp nhạc nghe "sống", "sáng" và "hiện diện" hơn
+        mà không cần tăng treble EQ. Phương pháp của iZotope Ozone và Aphex Aural Exciter.
       </div>
       <div style={{ opacity: value.enabled ? 1 : 0.4, pointerEvents: value.enabled && !disabled ? 'auto' : 'none' }}>
-        <SliderRow label="Tan so bat dau (Hz)" desc="Chi xu ly am tren tan so nay — 7500Hz la chuan cho nhac, 5000Hz cho guitar/nhac rock" min={2000} max={12000} step={100} value={value.freq} unit=" Hz" onChange={v => set('freq', v)} />
-        <SliderRow label="Cuong do (Amount)" desc="Luong harmonic them vao — tang len thi nghe 'the' hon, nhung qua cao se boc mui mat tu nhien" min={1} max={50} step={1} value={value.amount} unit="%" onChange={v => set('amount', v)} />
-        <SliderRow label="Drive" desc="Muc do sat clipping khi tao harmonic — cao = nhieu harmonic bac cao hon, am thanh gay hon" min={1} max={10} step={0.1} value={value.drive} unit="x" onChange={v => set('drive', v)} />
-        <SliderRow label="Pha tron (Blend)" desc="Can bang giua harmonic chan/le — so am = am toi, so duong = sang, 0 = trung tinh" min={-10} max={10} step={0.5} value={value.blend} unit="" onChange={v => set('blend', v)} />
+        <SliderRow label="Tần số bắt đầu (Hz)" desc="Chỉ xử lý âm trên tần số này — 7500Hz là chuẩn cho nhạc, 5000Hz cho guitar/nhạc rock" min={2000} max={12000} step={100} value={value.freq} unit=" Hz" onChange={v => set('freq', v)} />
+        <SliderRow label="Cường độ (Amount)" desc="Lượng harmonic thêm vào — tăng lên thì nghe 'thể' hơn, nhưng quá cao sẽ bốc mùi mất tự nhiên" min={1} max={50} step={1} value={value.amount} unit="%" onChange={v => set('amount', v)} />
+        <SliderRow label="Drive" desc="Mức độ sát clipping khi tạo harmonic — cao = nhiều harmonic bậc cao hơn, âm thanh gắt hơn" min={1} max={10} step={0.1} value={value.drive} unit="x" onChange={v => set('drive', v)} />
+        <SliderRow label="Pha trộn (Blend)" desc="Cân bằng giữa harmonic chẵn/lẻ — số âm = âm tối, số dương = sáng, 0 = trung tính" min={-10} max={10} step={0.5} value={value.blend} unit="" onChange={v => set('blend', v)} />
       </div>
     </div>
   )

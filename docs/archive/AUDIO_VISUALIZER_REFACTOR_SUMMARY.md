@@ -1,4 +1,14 @@
-# Audio Visualizer Refactor Summary
+> ⛔ **ARCHIVED — KHÔNG CÒN CHÍNH XÁC** (2026-04-02)
+>
+> Tài liệu này mô tả kiến trúc `src/components/AudioVisualizer/` — thư mục này **đã bị xóa hoàn toàn**.
+> Visualizer đã được pivot sang `src/features/song-nhac/` với kiến trúc hoàn toàn khác
+> (VisualizerRuntime, EngineHost, Zustand stores, custom CanvasHost).
+>
+> **Xem tài liệu hiện tại:** [`README.md`](../README.md) → phần "Sóng nhạc (Music Visualizer)"
+>
+> ---
+
+# [ARCHIVED] Audio Visualizer Refactor Summary
 
 ## Tổng quan
 Đã refactor lại chức năng "Tạo sóng nhạc" với cấu trúc mới, tách biệt concerns và dễ maintain hơn.

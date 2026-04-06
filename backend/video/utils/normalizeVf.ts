@@ -61,17 +61,23 @@ export function buildNormalizeVfFilter(resolution: string, fps: string): string 
   const w = parseInt(wStr, 10)
   const h = parseInt(hStr, 10)
 
+  // Đảm bảo w, h chẵn (bắt buộc cho libx264/h264_nvenc)
+  // Tính trong TypeScript thay vì dùng trunc(ow/2)*2 trong FFmpeg (gây self-reference error)
+  const evenW = Math.floor(w / 2) * 2
+  const evenH = Math.floor(h / 2) * 2
+
   // Fallback nếu parse không thành công hoặc kích thước quá nhỏ/âm
-  // Cần w >= 2 && h >= 2 vì trunc(x/2)*2 sẽ ra 0 nếu x < 2
-  if (!Number.isFinite(w) || !Number.isFinite(h) || w < 2 || h < 2) {
+  // Cần evenW >= 2 && evenH >= 2
+  if (!Number.isFinite(w) || !Number.isFinite(h) || evenW < 2 || evenH < 2) {
     return `scale=trunc(iw/2)*2:trunc(ih/2)*2,setsar=1,fps=${safeFps},format=yuv420p`
   }
 
   // scale: giữ tỉ lệ gốc, fit vào WxH (không cắt), dùng lanczos cho chất lượng cao
-  // scale lần 2 trunc(ow/2)*2:trunc(oh/2)*2 đảm bảo dimension chẵn — bắt buộc cho libx264/h264_nvenc
-  const scaleFilter = `scale=${w}:${h}:force_original_aspect_ratio=decrease:flags=lanczos,scale=trunc(ow/2)*2:trunc(oh/2)*2`
+  // Dùng evenW/evenH đã tính sẵn — tránh scale lần 2 với ow/oh tự tham chiếu
+  const scaleFilter = `scale=${evenW}:${evenH}:force_original_aspect_ratio=decrease:flags=lanczos`
   // pad: thêm dải đen để đủ kích thước target (letterbox/pillarbox), căn giữa
-  const padFilter = `pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2:black`
+  // Dùng evenW:evenH thay vì ow:oh để đảm bảo kích thước chẵn
+  const padFilter = `pad=${evenW}:${evenH}:(ow-iw)/2:(oh-ih)/2:black`
   // setsar=1: đảm bảo pixel aspect ratio = 1:1 (quan trọng cho compatibility)
   const sarFilter = `setsar=1`
   // fps: chuẩn hóa frame rate (dùng safeFps đã sanitize)

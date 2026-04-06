@@ -360,7 +360,8 @@ export default function LayersPanel() {
               const isExpanded = expandedGroupIds[group.id] === true || editingGroupId === group.id
               const isEditing = editingGroupId === group.id
               // FIX: displayOrder is reversed, so rootIdx=0 is visually top (= last in layers array)
-              // canMoveUp means move towards display-top (= higher index in layers), which is moveLayerUp
+              // canMoveUp means move towards display-top (= higher index in layers), which is moveLayerDown in store
+              // (moveLayerDown increases array index → higher z → visually higher)
               const canMoveUp = rootIdx > 0         // has something above in displayOrder
               const canMoveDown = rootIdx < displayOrder.length - 1  // has something below
               const childLayers = group.children
@@ -390,8 +391,8 @@ export default function LayersPanel() {
                       {group.name} <span style={{ color: 'rgba(255,255,255,0.35)', fontSize: 10 }}>({group.children.length})</span>
                     </span>
                     {isEditing && <span style={{ fontSize: 9, color: '#4d9fff' }}>✏️ Đang sửa</span>}
-                    <button type="button" onClick={(e) => { e.stopPropagation(); moveLayerUp(group.id) }} disabled={!canMoveUp} title="Lên trên" style={{ ...iconBtn, opacity: canMoveUp ? 1 : 0.3 }}>↑</button>
-                    <button type="button" onClick={(e) => { e.stopPropagation(); moveLayerDown(group.id) }} disabled={!canMoveDown} title="Xuống dưới" style={{ ...iconBtn, opacity: canMoveDown ? 1 : 0.3 }}>↓</button>
+                    <button type="button" onClick={(e) => { e.stopPropagation(); moveLayerDown(group.id) }} disabled={!canMoveUp} title="Lên trên" style={{ ...iconBtn, opacity: canMoveUp ? 1 : 0.3 }}>↑</button>
+                    <button type="button" onClick={(e) => { e.stopPropagation(); moveLayerUp(group.id) }} disabled={!canMoveDown} title="Xuống dưới" style={{ ...iconBtn, opacity: canMoveDown ? 1 : 0.3 }}>↓</button>
                     <button type="button" onClick={(e) => { e.stopPropagation(); removeLayer(group.id) }} title="Xóa" style={{ ...iconBtn, color: 'rgba(255,100,100,0.8)' }}>x</button>
                   </div>
                   {isExpanded && childLayers.map((child, idx) => {
@@ -425,8 +426,8 @@ export default function LayersPanel() {
 
             // Root layer:
             // displayOrder[0] = top of visual stack (last in layers array)
-            // moveLayerUp on layer at layers[N-1] moves it to front (already there) — DISABLED
-            // The ▲ button should move layer towards display top (higher z), which = moveLayerUp in store
+            // ↑ button should move layer towards display top (higher z) = moveLayerDown in store
+            // ↓ button should move layer towards display bottom (lower z) = moveLayerUp in store
             // FIX: rootIdx=0 is visually topmost; can't go higher
             const canMoveUp = rootIdx > 0
             const canMoveDown = rootIdx < displayOrder.length - 1
@@ -439,8 +440,8 @@ export default function LayersPanel() {
                   canMoveDown={canMoveDown}
                   onSelect={(ev) => setSelection(layer.id, { ctrlKey: ev?.ctrlKey, shiftKey: ev?.shiftKey })}
                   onRemove={() => removeLayer(layer.id)}
-                  onMoveUp={() => moveLayerUp(layer.id)}
-                  onMoveDown={() => moveLayerDown(layer.id)}
+                  onMoveUp={() => moveLayerDown(layer.id)}
+                  onMoveDown={() => moveLayerUp(layer.id)}
                   onToggleVisible={() => updateLayer(layer.id, { visible: !layer.visible })}
                   onToggleLocked={() => updateLayerWithHistory(layer.id, { locked: !layer.locked })}
                   onAddToGroup={(gid) => addLayerToGroup(layer.id, gid)}

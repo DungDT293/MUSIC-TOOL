@@ -120,7 +120,7 @@ export interface SongNhacTextLayer extends SongNhacBaseLayer {
 }
 
 /** Wave style IDs cho visualizer layer */
-export type SongNhacWaveStyleId = 'bars' | 'line' | 'ring' | 'dots' | 'waveform' | 'circlebars' | 'plasma' | 'lightning' | 'galaxy' | 'fire' | 'neonbars' | 'crystalring' | 'nebula'
+export type SongNhacWaveStyleId = 'bars' | 'line' | 'ring' | 'dots' | 'waveform' | 'circlebars' | 'plasma' | 'lightning' | 'galaxy' | 'fire' | 'neonbars' | 'crystalring' | 'nebula' | 'waterripple' | 'particles' | 'musicnotes' | 'beatbars' | 'helix' | 'aurora' | 'heartbeat' | 'starburst' | 'matrix' | 'spectrum3d' | 'oscilloscope' | 'vinyl' | 'firefly' | 'sakura' | 'diamondgrid' | 'radar' | 'vortex' | 'shockwave'
 
 /** Color mode cho visualizer */
 export type SongNhacColorMode = 'rainbow' | 'solid' | 'gradient'

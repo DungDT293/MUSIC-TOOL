@@ -56,11 +56,14 @@ export function renderComposite(canvases: TestPatternCanvasSet): void {
   const { webglCanvas, overlay2dCanvas, compositeCanvas } = canvases
   const ctx = compositeCanvas.getContext('2d')
   if (!ctx) return
-  ctx.clearRect(0, 0, compositeCanvas.width, compositeCanvas.height)
-  ctx.drawImage(webglCanvas, 0, 0)
+  const w = compositeCanvas.width
+  const h = compositeCanvas.height
+  ctx.clearRect(0, 0, w, h)
+  // Ensure source-over blend BEFORE first drawImage (not after)
   ctx.globalCompositeOperation = 'source-over'
-  ctx.drawImage(overlay2dCanvas, 0, 0)
-  ctx.globalCompositeOperation = 'source-over'
+  // Use explicit destination dimensions to handle potential size mismatches
+  ctx.drawImage(webglCanvas, 0, 0, w, h)
+  ctx.drawImage(overlay2dCanvas, 0, 0, w, h)
 }
 
 /** Bước 1: full test pattern (webgl + overlay + composite). */

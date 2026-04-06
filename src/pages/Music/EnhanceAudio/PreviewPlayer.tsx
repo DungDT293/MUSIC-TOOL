@@ -152,9 +152,9 @@ export default function PreviewPlayer({ chain, selectedFilePath, lufs, gainReduc
 
       {/* Status */}
       <div style={{ marginTop: '6px', fontSize: '11px', color: '#555' }}>
-        {!isReady && 'Web Audio chua san sang — nhan Play de khoi dong.'}
-        {isReady && !selectedFilePath && 'Chon mot file ben trai de nghe thu.'}
-        {isReady && selectedFilePath && 'Real-time: EQ, Compressor, Stereo hoat dong ngay khi keo slider.'}
+        {!isReady && 'Web Audio chưa sẵn sàng — nhấn Play để khởi động.'}
+        {isReady && !selectedFilePath && 'Chọn một file bên trái để nghe thử.'}
+        {isReady && selectedFilePath && 'Real-time: EQ, Compressor, Stereo hoạt động ngay khi kéo slider.'}
       </div>
     </div>
   )

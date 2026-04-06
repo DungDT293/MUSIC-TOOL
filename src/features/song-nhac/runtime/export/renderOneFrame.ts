@@ -18,6 +18,7 @@ import { useSongNhacRuntimeStore } from '../../store/songNhacRuntimeStore'
 let beatLevel = 0         // smoothed beat value (0–1)
 let lastBeatTime = 0      // last recognized beat timestamp
 let energyAvg = 0         // running average baseline
+let energyPrimed = false  // whether EMA has been primed with first real data
 
 /**
  * Reset beat detection state between tracks.
@@ -27,14 +28,19 @@ export function resetBeatState(): void {
   beatLevel = 0
   lastBeatTime = 0
   energyAvg = 0
+  energyPrimed = false
 }
 
 /**
  * Beat detection — ported from Tab 10 (VisualizerTab.tsx).
  * Simple, proven: bass EMA → delta → boost × 3 → peak/decay.
  * Returns 0–1 beat intensity.
+ *
+ * Uses timeSec (seconds) for peak interval detection instead of
+ * performance.now(), so export produces deterministic results
+ * (frame i maps to timeSec = i/fps, not wall-clock time).
  */
-function computeBeat(frequencyData: Uint8Array): number {
+function computeBeat(frequencyData: Uint8Array, timeSec: number): number {
   const len = frequencyData.length
   if (len === 0) { beatLevel *= 0.95; return beatLevel }
 
@@ -51,7 +57,13 @@ function computeBeat(frequencyData: Uint8Array): number {
   const bassNorm = (bassBins > 0 ? sum / bassBins : 0) / 255
 
   // ── Running average baseline (EMA α = 0.1) ──
-  energyAvg = energyAvg * 0.9 + bassNorm * 0.1
+  // Prime EMA with first real data point to avoid false beats during cold-start
+  if (!energyPrimed) {
+    energyAvg = bassNorm
+    energyPrimed = true
+  } else {
+    energyAvg = energyAvg * 0.9 + bassNorm * 0.1
+  }
 
   // ── Delta from baseline, normalized ──
   const delta = bassNorm - energyAvg
@@ -60,21 +72,20 @@ function computeBeat(frequencyData: Uint8Array): number {
   const boostedBeat = Math.max(0, Math.min(1, normalizedBeat * 3))
 
   // ── Peak detection with min interval ──
-  const now = performance.now()
+  // Use timeSec * 1000 for deterministic timing in both preview and export.
+  const nowMs = timeSec * 1000
   const peakThreshold = 0.12
   const minIntervalMs = 120
 
-  if (boostedBeat > peakThreshold && now - lastBeatTime > minIntervalMs) {
+  if (boostedBeat > peakThreshold && nowMs - lastBeatTime > minIntervalMs) {
     beatLevel = Math.max(beatLevel * 0.6, boostedBeat) // fast attack
-    lastBeatTime = now
+    lastBeatTime = nowMs
   } else {
     beatLevel = beatLevel * 0.92 + boostedBeat * 0.2   // smooth decay
   }
 
   return Math.max(0, Math.min(1, beatLevel))
 }
-
-let frameCounter = 0
 
 export function renderOneFrame(
   set: CanvasSet,
@@ -83,7 +94,6 @@ export function renderOneFrame(
   layers?: DrawableLayer[]
 ): void {
   if (!set) return
-  frameCounter++
 
   // When engineHost is null, ThreeJsEngine has already rendered to webglCanvas
   // (GPU: bars + bloom). We only need to handle overlay + composite.
@@ -126,9 +136,8 @@ export function renderOneFrame(
   }
 
   // ─── Single beat computation (Tab 10 approach: compute once per frame) ──
-  const beat = (layers && layers.length > 0)
-    ? computeBeat(frame.frequencyData)
-    : 0
+  // Always compute beat to keep EMA current, even if no layers to render
+  const beat = computeBeat(frame.frequencyData, frame.timeSec)
 
   // ─── Beat scaling for image layers ────────────────────────────────────
   let layersToDraw: DrawableLayer[] | undefined = layers

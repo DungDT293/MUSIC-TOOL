@@ -1,4 +1,6 @@
-# Kế Hoạch Tổng Thể: Sửa Visualizer & Parser .viz File
+> ⛔ **ARCHIVED** (2026-04-02) — .viz parser kiến trúc cũ, không còn áp dụng.
+
+# [ARCHIVED] Kế Hoạch Tổng Thể: Sửa Visualizer & Parser .viz File
 
 ## 🎯 Mục Tiêu
 1. **Sóng nhạc phải nhảy theo nhạc** (audio reactive)

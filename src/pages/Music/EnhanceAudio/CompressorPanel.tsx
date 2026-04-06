@@ -8,13 +8,13 @@ interface Props {
 }
 
 const PARAM_DESC: Record<string, string> = {
-  threshold: 'Nguong am luong — am thanh vuot qua muc nay se bi nen lai. Keo xuong de nen nhieu hon (pho bien: -18 den -12 dB)',
-  ratio: 'Ti le nen — cang cao thi phan am vuot nguong cang bi keo xuong manh hon. 2:1 = nhe nhang, 4:1 = pho bien, 10:1 = aggressive, 20:1 = tuong duong limiting',
-  attack: 'Thoi gian phan ung — bao lau compressor bat dau nen sau khi am vuot nguong. Thap = nhanh (cat transient), cao = de transient lot qua (tieng trong "punch" hon)',
-  release: 'Thoi gian nha — bao lau compressor dung nen sau khi am xuong duoi nguong. Thap = nha nhanh (co the nghe bom bom), cao = tu nhien hon',
-  makeup: 'Bu am luong — sau khi nen am bi nho lai, tang tham so nay de bu lai va giu nhac du to. Thuong tang bang luong compressor da nen',
-  knee: 'Do mem cua nguong (Soft Knee) — goc nho = nen dot ngot chinh xac, goc lon = chuyen tiep mem mai hon, tu nhien hon. 2-4 la pho bien',
-  mix: 'Pha tron kho/uot (Parallel Compression) — 1.0 = nen toan bo (wet), 0.3-0.5 = pha tron voi tin hieu goc (kho), giup giu punch va transient tu nhien trong khi van co do nen',
+  threshold: 'Ngưỡng âm lượng — âm thanh vượt qua mức này sẽ bị nén lại. Kéo xuống để nén nhiều hơn (phổ biến: -18 đến -12 dB)',
+  ratio: 'Tỉ lệ nén — càng cao thì phần âm vượt ngưỡng càng bị kéo xuống mạnh hơn. 2:1 = nhẹ nhàng, 4:1 = phổ biến, 10:1 = aggressive, 20:1 = tương đương limiting',
+  attack: 'Thời gian phản ứng — bao lâu compressor bắt đầu nén sau khi âm vượt ngưỡng. Thấp = nhanh (cắt transient), cao = để transient lọt qua (tiếng trống "punch" hơn)',
+  release: 'Thời gian nhả — bao lâu compressor dừng nén sau khi âm xuống dưới ngưỡng. Thấp = nhả nhanh (có thể nghe bùm bùm), cao = tự nhiên hơn',
+  makeup: 'Bù âm lượng — sau khi nén âm bị nhỏ lại, tăng tham số này để bù lại và giữ nhạc đủ to. Thường tăng bằng lượng compressor đã nén',
+  knee: 'Độ mềm của ngưỡng (Soft Knee) — góc nhỏ = nén đột ngột chính xác, góc lớn = chuyển tiếp mềm mại hơn, tự nhiên hơn. 2-4 là phổ biến',
+  mix: 'Pha trộn khô/ướt (Parallel Compression) — 1.0 = nén toàn bộ (wet), 0.3-0.5 = pha trộn với tín hiệu gốc (khô), giúp giữ punch và transient tự nhiên trong khi vẫn có độ nén',
 }
 
 function ParamRow({ label, descKey, min, max, step, value, unit, onChange, disabled, color = '#40a9ff' }: {
@@ -69,8 +69,8 @@ export default function CompressorPanel({ value, onChange, gainReduction = 0, di
       </div>
 
       <div style={{ fontSize: '11px', color: '#555', marginBottom: '10px', lineHeight: '1.4' }}>
-        Tu dong keo xuong nhung doan qua to va nang len nhung doan qua nho — giup am luong deu hon,
-        khong bi giat am hay co doan nho tieng kho nghe. Pho bien trong nhac pop, podcast va phat thanh.
+        Tự động kéo xuống những đoạn quá to và nâng lên những đoạn quá nhỏ — giúp âm lượng đều hơn,
+        không bị giật âm hay có đoạn nhỏ tiếng khó nghe. Phổ biến trong nhạc pop, podcast và phát thanh.
       </div>
 
       {/* Gain reduction meter */}
@@ -114,7 +114,7 @@ export default function CompressorPanel({ value, onChange, gainReduction = 0, di
               style={{ width: '100%', accentColor: '#d97706' }}
             />
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: '#555' }}>
-              <span>0% (dry/goc)</span><span>50% (blend)</span><span>100% (full wet)</span>
+              <span>0% (dry/gốc)</span><span>50% (blend)</span><span>100% (full wet)</span>
             </div>
           </div>
         </div>
