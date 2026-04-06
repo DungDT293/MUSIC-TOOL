@@ -78,7 +78,7 @@ export async function verifyExecutableIntegrity(): Promise<boolean> {
     return isValid
   } catch (error) {
     console.warn('[TamperDetection] Failed to verify executable integrity:', error)
-    return true // Fail open trong trường hợp lỗi
+    return false // Security: fail closed — treat verification failure as potential tampering
   }
 }
 
@@ -125,7 +125,7 @@ export async function verifyMainJsIntegrity(): Promise<boolean> {
     return isValid
   } catch (error) {
     console.warn('[TamperDetection] Failed to verify main.js integrity:', error)
-    return true
+    return false // Security: fail closed — treat verification failure as potential tampering
   }
 }
 
@@ -167,7 +167,7 @@ export async function verifySelfChecksum(): Promise<boolean> {
     return true
   } catch (error) {
     console.warn('[TamperDetection] Failed to verify self checksum:', error)
-    return true
+    return false // Security: fail closed
   }
 }
 

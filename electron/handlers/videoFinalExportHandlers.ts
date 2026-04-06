@@ -20,7 +20,7 @@ import {
   type FinalExportDonePayload,
   type FinalExportErrorPayload,
 } from '../../shared/videoFinalExportChannels'
-import { getOrInitAuthState } from '../authState'
+import { getOrInitAuthState, isValidAbsolutePath } from '../authState'
 import { confirmResourcesForVideoJob } from './systemHandlers'
 
 // Map: requestId → jobHandle (để cancel)
@@ -81,13 +81,21 @@ async function trackVideoExport(
 }
 
 export function registerVideoFinalExportHandlers(getMainWindow: () => BrowserWindow | null) {
-  // Scan helpers
+  // Scan helpers — validate paths before passing to backend
   ipcMain.handle('video:final-export:scan-audio', async (_event, payload) => {
+    // Validate audio source paths
+    if (payload?.path && !isValidAbsolutePath(payload.path)) {
+      throw new Error('Invalid audio source path')
+    }
     try { return await scanAudioSource(payload) }
     catch (err: any) { throw new Error(err?.message || 'Scan audio source failed') }
   })
 
   ipcMain.handle('video:final-export:scan-video', async (_event, payload) => {
+    // Validate video source paths
+    if (payload?.path && !isValidAbsolutePath(payload.path)) {
+      throw new Error('Invalid video source path')
+    }
     try { return await scanVideoSource(payload) }
     catch (err: any) { throw new Error(err?.message || 'Scan video source failed') }
   })

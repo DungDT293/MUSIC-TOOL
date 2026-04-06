@@ -418,6 +418,34 @@ const api: IPCAPI = {
     get: () => ipcRenderer.invoke('policy:get'),
   },
   on: (channel: string, handler: (...args: any[]) => void) => {
+    // Security: only allow subscribing to known channels
+    const ALLOWED_CHANNELS = new Set([
+      'app:load-error',
+      'autopilot:status',
+      'autopilot:log',
+      'system:disk-info',
+      'jobQueue:update',
+      'song-nhac:export-progress',
+      'song-nhac:export-started',
+      'song-nhac:export-config',
+      'song-nhac:export-cancel',
+      'music:exportProgress',
+      'music:enhance:progress',
+      'music:normalizeProgress',
+      'updater:status',
+      'version-gate-result',
+      'youtube:progress',
+      'youtube:batch-progress',
+      'youtube:ytdlp-auto-updated',
+      'youtube:ytdlp-age-warning',
+      VIDEO_FINAL_EXPORT_PROGRESS,
+      VIDEO_FINAL_EXPORT_DONE,
+      VIDEO_FINAL_EXPORT_ERROR,
+    ])
+    if (!ALLOWED_CHANNELS.has(channel)) {
+      console.warn(`[Preload] Blocked subscription to unknown channel: ${channel}`)
+      return () => {} // no-op unsubscribe
+    }
     const listener = (_event: IpcRendererEvent, ...args: any[]) => handler(...args)
     ipcRenderer.on(channel, listener)
     return () => {

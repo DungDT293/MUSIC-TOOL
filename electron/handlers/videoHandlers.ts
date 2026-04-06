@@ -294,6 +294,7 @@ export function registerVideoHandlers() {
       const { generateClipId, markClipsUsed } = await import('../../backend/autopilot/videoPool')
       const clipIds: string[] = []
       for (const fp of filePaths) {
+        if (!isValidAbsolutePath(fp)) continue
         try {
           const size = fs.statSync(fp).size
           const id = generateClipId(path.basename(fp), size)
@@ -311,6 +312,9 @@ export function registerVideoHandlers() {
   })
 
   ipcMain.handle('video:pool-pick-lru', async (_event, folderPath: string, count: number) => {
+    if (!isValidAbsolutePath(folderPath)) {
+      return { ok: false, error: 'Invalid folder path', filePaths: [] }
+    }
     try {
       const { pickClipsLRU } = await import('../../backend/autopilot/videoPool')
       const VIDEO_EXTS = new Set(['.mp4', '.mkv', '.mov', '.avi', '.webm', '.m4v'])

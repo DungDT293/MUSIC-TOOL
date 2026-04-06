@@ -4,7 +4,9 @@ import path from 'node:path'
 const TICKET_FILE_NAME = 'licenseTicket.json'
 
 function resolveStoragePath(): string {
-  if (process.env.LICENSE_TICKET_PATH) {
+  // Security: only allow env var override in development
+  const isDev = process.env.NODE_ENV === 'development' || !!process.env.ELECTRON_RENDERER_URL
+  if (isDev && process.env.LICENSE_TICKET_PATH) {
     return process.env.LICENSE_TICKET_PATH
   }
   const commonAppData = process.env.PROGRAMDATA || path.join(process.env.SystemDrive || 'C:', 'ProgramData')

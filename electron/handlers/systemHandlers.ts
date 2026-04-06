@@ -97,6 +97,9 @@ export function registerSystemHandlers(mainWindow: Electron.BrowserWindow | null
 
   // FFprobe IPC
   ipcMain.handle('ffmpeg:probe', async (_event, filePath: string) => {
+    if (!isValidAbsolutePath(filePath)) {
+      return { error: 'Invalid file path' }
+    }
     if (!probeFile) {
       const probeModule = await import('../../backend/ffmpeg/probe')
       probeFile = probeModule.probeFile
@@ -115,6 +118,9 @@ export function registerSystemHandlers(mainWindow: Electron.BrowserWindow | null
 
   // Create directory
   ipcMain.handle('system:createDirectory', async (_event, dirPath: string) => {
+    if (!isValidAbsolutePath(dirPath)) {
+      return { success: false, error: 'Invalid directory path' }
+    }
     try {
       await fs.promises.mkdir(dirPath, { recursive: true })
       return { success: true }
@@ -125,6 +131,9 @@ export function registerSystemHandlers(mainWindow: Electron.BrowserWindow | null
 
   // Read file as base64
   ipcMain.handle('system:readFileAsBase64', async (_event, filePath: string) => {
+    if (!isValidAbsolutePath(filePath)) {
+      return { ok: false, error: 'Invalid file path' }
+    }
     try {
       if (!fs.existsSync(filePath)) return { ok: false, error: 'File not found' }
       const buffer = fs.readFileSync(filePath)
@@ -141,9 +150,19 @@ export function registerSystemHandlers(mainWindow: Electron.BrowserWindow | null
     }
   })
 
-  // Open path
+  // Open path — restrict to directories only for safety
   ipcMain.handle('system:openPath', async (_event, pathToOpen: string) => {
+    if (!isValidAbsolutePath(pathToOpen)) {
+      return { success: false, error: 'Invalid path' }
+    }
     try {
+      // Only allow opening directories, not arbitrary executables
+      const stat = await fs.promises.stat(pathToOpen).catch(() => null)
+      if (stat && !stat.isDirectory()) {
+        // For files, show in folder instead of opening directly
+        shell.showItemInFolder(pathToOpen)
+        return { success: true }
+      }
       await shell.openPath(pathToOpen)
       return { success: true }
     } catch (err) {
@@ -324,10 +343,14 @@ export function registerSystemHandlers(mainWindow: Electron.BrowserWindow | null
 
   ipcMain.handle('video:batchLazyProbe', async (_event, paths: string[], concurrency: number = 5) => {
     try {
+      // Security: cap concurrency to prevent renderer from spawning excessive child processes
+      const safeConcurrency = Math.min(Math.max(1, concurrency), 8)
       const validPaths = Array.isArray(paths) ? paths.filter(isValidAbsolutePath) : []
+      // Cap total paths to prevent DoS
+      const cappedPaths = validPaths.slice(0, 500)
       const results: Record<string, VideoFileInfo | null> = {}
-      const queue = [...validPaths]
-      const workers = Array.from({ length: Math.min(concurrency, queue.length || 1) }, async () => {
+      const queue = [...cappedPaths]
+      const workers = Array.from({ length: Math.min(safeConcurrency, queue.length || 1) }, async () => {
         while (queue.length > 0) {
           const p = queue.shift()
           if (!p) break

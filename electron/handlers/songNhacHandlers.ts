@@ -144,6 +144,11 @@ export function registerSongNhacHandlers(getMainWindow: () => BrowserWindow | nu
 
     const VIDEO_EXTENSIONS = new Set(['.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm', '.ts', '.m2ts', '.m4v'])
     const folders = rootVideo.split('\n').map(f => f.trim()).filter(f => f.length > 0)
+
+    // Validate each folder path
+    const validFolders = folders.filter(f => isValidAbsolutePath(f))
+    if (validFolders.length === 0) return { totalFiles: 0, folders: [] }
+
     const result: { totalFiles: number; folders: Array<{ folder: string; count: number }> } = {
       totalFiles: 0,
       folders: [],
@@ -167,7 +172,7 @@ export function registerSongNhacHandlers(getMainWindow: () => BrowserWindow | nu
       return count
     }
 
-    for (const folder of folders) {
+    for (const folder of validFolders) {
       try {
         await fsp.access(folder)
       } catch {
@@ -352,8 +357,8 @@ export function registerSongNhacHandlers(getMainWindow: () => BrowserWindow | nu
           nodeIntegration: false,
           contextIsolation: true,
           sandbox: true,
-          // offscreen rendering not needed — ExportRunner creates its own hidden canvas
-          webSecurity: false, // allow loading app:// URLs for audio
+          // Security: removed webSecurity:false — app:// protocol is already registered as privileged
+          // and can serve local files without disabling same-origin policy
         },
       })
 

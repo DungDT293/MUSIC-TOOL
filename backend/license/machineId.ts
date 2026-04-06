@@ -27,8 +27,9 @@ function resolveProgramDataCacheFile(): string {
   return path.join('/var/lib', '93media', 'machine-id.txt')
 }
 
-// Optional override qua env var
-const ENV_CACHE_FILE = process.env.MACHINE_ID_FILE
+// Security: only allow env var override in development
+const isDev = process.env.NODE_ENV === 'development' || !!process.env.ELECTRON_RENDERER_URL
+const ENV_CACHE_FILE = isDev ? process.env.MACHINE_ID_FILE : undefined
 
 function readCachedMachineHash(): string | null {
   const candidates = [

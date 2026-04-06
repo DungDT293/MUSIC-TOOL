@@ -5,7 +5,9 @@ import type { SessionInfo } from './sessionManager'
 const AUTH_FILE_NAME = 'authState.json'
 
 function resolveStoragePath(): string {
-  if (process.env.AUTH_STATE_PATH) {
+  // Security: only allow env var override in development (prevents production path hijack)
+  const isDev = process.env.NODE_ENV === 'development' || !!process.env.ELECTRON_RENDERER_URL
+  if (isDev && process.env.AUTH_STATE_PATH) {
     return process.env.AUTH_STATE_PATH
   }
   const commonAppData = process.env.PROGRAMDATA || path.join(process.env.SystemDrive || 'C:', 'ProgramData')

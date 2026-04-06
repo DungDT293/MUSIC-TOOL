@@ -351,13 +351,11 @@ export function createWindow() {
     })
   }
 
-  // DevTools
+  // DevTools — only in development, NEVER in production
   if (!app.isPackaged) {
     mainWindow.webContents.openDevTools()
   }
-  if (app.isPackaged && process.env.DEBUG === '1') {
-    mainWindow.webContents.openDevTools()
-  }
+  // Security: Removed DEBUG=1 env var backdoor that allowed DevTools in production builds
 
   // Security: validate URL before openExternal
   mainWindow.webContents.setWindowOpenHandler((details) => {

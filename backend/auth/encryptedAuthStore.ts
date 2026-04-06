@@ -24,7 +24,9 @@ const KEY_LENGTH = 32 // 256 bits
 const EMBEDDED_SALT = Buffer.from('93MediaToolMixNhac2025SecuritySalt!', 'utf8')
 
 function resolveStoragePath(): string {
-  if (process.env.AUTH_STATE_PATH) {
+  // Security: only allow env var override in development
+  const isDev = process.env.NODE_ENV === 'development' || !!process.env.ELECTRON_RENDERER_URL
+  if (isDev && process.env.AUTH_STATE_PATH) {
     return process.env.AUTH_STATE_PATH.replace(/\.json$/, '.enc')
   }
   const commonAppData = process.env.PROGRAMDATA || path.join(process.env.SystemDrive || 'C:', 'ProgramData')

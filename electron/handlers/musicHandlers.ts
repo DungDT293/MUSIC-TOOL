@@ -33,10 +33,18 @@ import { applySeoMetadata, type SeoMetadataRequest } from '../../backend/video/s
 import { jobQueue } from '../../backend/jobQueue/jobQueue'
 import { videoJobManager } from '../../backend/video/videoJobManager'
 import { confirmResourcesForVideoJob } from './systemHandlers'
+import { isValidAbsolutePath } from '../authState'
 
 export function registerMusicHandlers(mainWindow: Electron.BrowserWindow | null) {
   // Music scan
   ipcMain.handle('music:scanFolders', async (_event, payload) => {
+    // Validate folder paths in payload
+    if (payload?.priorityFolder && !isValidAbsolutePath(payload.priorityFolder)) {
+      throw new Error('Invalid priority folder path')
+    }
+    if (payload?.randomFolder && !isValidAbsolutePath(payload.randomFolder)) {
+      throw new Error('Invalid random folder path')
+    }
     console.log('[IPC] music:scanFolders', payload)
     clearPlaylists()
     console.log('[IPC] Cleared old playlists due to new scan')
@@ -79,6 +87,9 @@ export function registerMusicHandlers(mainWindow: Electron.BrowserWindow | null)
   })
 
   ipcMain.handle('music:downloadPlaylistHistory', async (_event, dates: string[], outputDir?: string) => {
+    if (outputDir && !isValidAbsolutePath(outputDir)) {
+      return { success: false, downloadedCount: 0, outputDir: '', error: 'Invalid output directory path' }
+    }
     try {
       const result = downloadHistoryByDates(dates ?? [], outputDir)
       return {
@@ -115,6 +126,9 @@ export function registerMusicHandlers(mainWindow: Electron.BrowserWindow | null)
   })
 
   ipcMain.handle('music:enhance:renderPreview', async (_event, opts) => {
+    if (opts?.inputFile && !isValidAbsolutePath(opts.inputFile)) {
+      return { success: false, error: 'Invalid input file path' }
+    }
     try {
       const reshaped = opts?.loudnorm
         ? opts
@@ -138,6 +152,14 @@ export function registerMusicHandlers(mainWindow: Electron.BrowserWindow | null)
 
   // SEO metadata
   ipcMain.handle('video:seo:apply', async (_event, payload: SeoMetadataRequest) => {
+    // Validate file paths in SEO payload
+    if (payload?.files) {
+      for (const f of payload.files) {
+        if (f?.path && !isValidAbsolutePath(f.path)) {
+          return { error: `Invalid file path: ${f.path}` }
+        }
+      }
+    }
     try {
       return await applySeoMetadata(payload)
     } catch (err: any) {
@@ -150,6 +172,9 @@ export function registerMusicHandlers(mainWindow: Electron.BrowserWindow | null)
   const EXPORT_PROGRESS_CHANNEL = 'music:exportProgress'
 
   ipcMain.handle('music:exportPlaylist', async (event, req: ExportPlaylistRequest) => {
+    if (req.outputDir && !isValidAbsolutePath(req.outputDir)) {
+      return { success: false, error: 'Invalid output directory path', outputPath: '' }
+    }
     console.log('[IPC] music:exportPlaylist', req)
 
     if (mainWindow && !mainWindow.isDestroyed()) {
