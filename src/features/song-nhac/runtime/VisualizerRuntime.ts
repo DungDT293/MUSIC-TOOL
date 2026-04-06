@@ -7,6 +7,13 @@
  * Runtime switch engine khi setBgEngine() được gọi.
  *
  * Fallback: Nếu WebGL không khả dụng → WaveBarsEngine (Canvas 2D).
+ *
+ * V4 audit fixes:
+ * - Async race guard: generation counter prevents stale setBgEngine/_initAltEngine
+ * - Use public accessors on AudioAnalyzerRealtime (no more `as any`)
+ * - Stale blur image onload guard
+ * - Engine leak in catch block
+ * - Cache ThreeJS resize to avoid per-frame GPU churn
  */
 
 import { CanvasHost } from './canvas/CanvasHost'
@@ -16,7 +23,8 @@ import { AudioAnalyzerRealtime } from './audio/AudioAnalyzerRealtime'
 import { ThreeJsEngine } from './engine/threejs/ThreeJsEngine'
 import { EngineHost } from './engine/EngineHost'
 import { WaveBarsEngine } from './engine/wave/WaveBarsEngine'
-import { renderOneFrame } from './export/renderOneFrame'
+import { renderOneFrame, resetBeatState } from './export/renderOneFrame'
+import { resetDrawLayersState, clearAllMediaCaches } from './render/drawLayers'
 import type { PreviewQuality, RuntimeEvents, RuntimeOptions } from './types'
 import type { EngineType, WebGLVisualizerEngine } from './engine/types'
 
@@ -45,12 +53,20 @@ export class VisualizerRuntime {
   /** Alt engine instance (lazy loaded). */
   private altEngine: WebGLVisualizerEngine | null = null
   private altEngineInited = false
+  /** Whether the current webglCanvas has a WebGL context (cannot use 2D). */
+  private canvasHasWebGLContext = false
+
+  /** Generation counter — increments on each setBgEngine call to detect stale async. */
+  private engineGeneration = 0
 
   /** Background mode: dark/blur/gradient. */
   private bgMode: BgMode = 'dark'
   /** Cached blurred image for 'blur' bg mode. */
   private blurImageCache: HTMLCanvasElement | null = null
   private blurImageSrc: string | null = null
+
+  /** Cached ThreeJS render size to avoid resize() every RAF frame. */
+  private lastThreeSize = { width: 0, height: 0 }
 
   mount(container: HTMLElement, options?: RuntimeOptions & RuntimeEvents): void {
     if (this.container) return
@@ -86,6 +102,8 @@ export class VisualizerRuntime {
               height: set.webglCanvas.height,
             })
             this.threeInited = true
+            this.canvasHasWebGLContext = true
+            this.host?.markWebGLContextCreated()
           } catch (e) {
             console.warn('[VisualizerRuntime] ThreeJsEngine init failed, falling back to Canvas 2D:', e)
             this.threeEngine.destroy()
@@ -128,29 +146,30 @@ export class VisualizerRuntime {
           // Nền sạch
           this.renderCleanBackground(set)
           renderOneFrame(set, null, frame, layers)
+        } else if (this.activeBgEngine === 'wave2d') {
+          // Canvas 2D bars (WaveBarsEngine) via engineHost
+          renderOneFrame(set, this.engineHost, frame, layers)
         } else if (this.threeInited && this.threeEngine && this.activeBgEngine === 'threejs') {
-          // ThreeJS path
-          this.threeEngine.resize({
-            width: set.webglCanvas.width,
-            height: set.webglCanvas.height,
-          })
+          // ThreeJS path — only resize when canvas dimensions actually change
+          const tw = set.webglCanvas.width
+          const th = set.webglCanvas.height
+          if (tw !== this.lastThreeSize.width || th !== this.lastThreeSize.height) {
+            this.threeEngine.resize({ width: tw, height: th })
+            this.lastThreeSize = { width: tw, height: th }
+          }
           this.threeEngine.render(frame)
           renderOneFrame(set, null, frame, layers)
         } else if (this.activeBgEngine !== 'threejs') {
-          // Alt engines: render nền sạch + overlay layers
-          // Alt engines render vào canvas riêng, chưa tích hợp composite pipeline
+          // Alt engines (butterchurn/audiomotion/wavejs/vanta):
           this.renderCleanBackground(set)
           if (this.altEngine && this.altEngineInited) {
-            // Alt engine render vào canvas/container riêng → blit vào webglCanvas
             try {
               this.altEngine.render(frame)
-              // Blit alt engine output vào webglCanvas
-              this.blitAltEngineToWebgl(set)
             } catch {}
           }
           renderOneFrame(set, null, frame, layers)
         } else {
-          // Canvas 2D fallback
+          // Canvas 2D fallback (ThreeJS init failed)
           renderOneFrame(set, this.engineHost, frame, layers)
         }
       }
@@ -166,53 +185,15 @@ export class VisualizerRuntime {
    */
   private renderCleanBackground(set: CanvasSet): void {
     const ctx = set.webglCanvas.getContext('2d')
-    if (!ctx) return
+    if (!ctx) {
+      // Canvas may already have WebGL context — cannot get 2d. This is a state-machine bug.
+      console.warn('[VisualizerRuntime] renderCleanBackground: cannot get 2d context on webglCanvas')
+      return
+    }
     const w = set.webglCanvas.width
     const h = set.webglCanvas.height
     ctx.clearRect(0, 0, w, h)
     this.drawBackground(ctx, w, h)
-  }
-
-  /**
-   * Blit alt engine output vào webglCanvas.
-   * Alt engines render vào container/canvas riêng → tìm canvas con và drawImage.
-   */
-  private blitAltEngineToWebgl(set: CanvasSet): void {
-    const ctx = set.webglCanvas.getContext('2d')
-    if (!ctx) return
-    const w = set.webglCanvas.width
-    const h = set.webglCanvas.height
-
-    // Tìm canvas output từ alt engine
-    const engine = this.altEngine as any
-    if (!engine) return
-
-    // AudioMotion: engine.analyzer.canvas
-    if (engine.analyzer?.canvas) {
-      try {
-        ctx.drawImage(engine.analyzer.canvas, 0, 0, w, h)
-      } catch {}
-      return
-    }
-
-    // Vanta: container querySelector('canvas')
-    if (engine._container || engine.container) {
-      const container = engine._container || engine.container
-      const vantaCanvas = container?.querySelector?.('canvas')
-      if (vantaCanvas) {
-        try {
-          ctx.drawImage(vantaCanvas, 0, 0, w, h)
-        } catch {}
-      }
-      return
-    }
-
-    // WaveJs: offscreenCanvas
-    if (engine.offscreenCanvas) {
-      try {
-        ctx.drawImage(engine.offscreenCanvas, 0, 0, w, h)
-      } catch {}
-    }
   }
 
   /**
@@ -244,6 +225,16 @@ export class VisualizerRuntime {
     }
   }
 
+  /** Helper: attach audio source to an engine using public accessors (no `as any`). */
+  private attachAudioToEngine(engine: WebGLVisualizerEngine): void {
+    if (!engine.attachAudioSource || !this.audio) return
+    const source = this.audio.getSourceNode()
+    const ctx = this.audio.getAudioContext()
+    if (source && ctx) {
+      engine.attachAudioSource(source, ctx)
+    }
+  }
+
   attachAudio(audioEl: HTMLAudioElement): void {
     if (this.attachedAudioEl === audioEl) {
       this.audio?.resume()
@@ -252,17 +243,18 @@ export class VisualizerRuntime {
     this.audio?.destroy()
     this.audio = null
     this.attachedAudioEl = audioEl
+
+    // Reset animation state from previous track to prevent ghost artifacts
+    resetBeatState()
+    resetDrawLayersState()
+
     try {
       this.audio = new AudioAnalyzerRealtime(audioEl)
       this.audio.resume()
 
-      // Attach audio source to alt engine
-      if (this.altEngine && this.altEngine.attachAudioSource && this.audio) {
-        const source = (this.audio as any).source
-        const ctx = (this.audio as any).audioCtx || (this.audio as any).ctx
-        if (source && ctx) {
-          this.altEngine.attachAudioSource(source, ctx)
-        }
+      // Attach audio source to alt engine using public accessors
+      if (this.altEngine) {
+        this.attachAudioToEngine(this.altEngine)
       }
     } catch (e) {
       console.error('[VisualizerRuntime] AudioAnalyzerRealtime failed', e)
@@ -275,6 +267,9 @@ export class VisualizerRuntime {
     const prevEngine = this.activeBgEngine
     console.log(`[VisualizerRuntime] Switching engine: ${prevEngine} → ${type}`)
 
+    // Increment generation counter to invalidate any in-flight async from previous calls
+    const gen = ++this.engineGeneration
+
     // Destroy current alt engine
     if (this.altEngine) {
       this.altEngine.destroy()
@@ -282,28 +277,47 @@ export class VisualizerRuntime {
       this.altEngineInited = false
     }
 
-    // Nếu đang chuyển TỪ ThreeJS sang engine khác/none:
-    // ThreeJS đã chiếm WebGL context trên webglCanvas →
-    // phải destroy ThreeJS + tạo canvas mới để có 2D context
-    if (prevEngine === 'threejs' && type !== 'threejs' && this.threeEngine) {
-      console.log('[VisualizerRuntime] Destroying ThreeJS + replacing webglCanvas for 2D context')
-      this.threeEngine.destroy()
-      this.threeEngine = null
-      this.threeInited = false
-      // Tạo canvas mới (canvas cũ đã bị WebGL chiếm, không thể getContext('2d'))
+    // Destroy wave2d engineHost if switching away
+    if (prevEngine === 'wave2d' && this.engineHost) {
+      this.engineHost.destroy()
+      this.engineHost = null
+      this.useCanvas2dFallback = false
+    }
+
+    // Engines that use WebGL directly on the host webglCanvas (cannot co-exist with 2D context)
+    const WEBGL_ENGINES: EngineType[] = ['threejs']
+    const prevUsedWebGL = WEBGL_ENGINES.includes(prevEngine) || this.canvasHasWebGLContext
+    const nextUsesWebGL = WEBGL_ENGINES.includes(type)
+
+    // Nếu đang chuyển TỪ engine WebGL sang engine 2D hoặc none:
+    if (prevUsedWebGL && !nextUsesWebGL) {
+      if (this.threeEngine) {
+        console.log('[VisualizerRuntime] Destroying ThreeJS + replacing webglCanvas for 2D context')
+        this.threeEngine.destroy()
+        this.threeEngine = null
+        this.threeInited = false
+        this.lastThreeSize = { width: 0, height: 0 }
+      }
       if (this.host) {
         this.host.replaceWebglCanvas()
       }
+      this.canvasHasWebGLContext = false
+    }
+    // Nếu chuyển từ 2D engine sang WebGL engine
+    else if (!prevUsedWebGL && nextUsesWebGL && prevEngine !== 'none') {
+      if (this.host) {
+        this.host.replaceWebglCanvas()
+      }
+      this.canvasHasWebGLContext = false
     }
 
     this.activeBgEngine = type
 
     // Nếu chuyển sang ThreeJS → cần init lại
     if (type === 'threejs') {
-      if (!this.threeEngine && this.currentSet?.webglCanvas) {
-        // Tạo canvas mới cho WebGL
+      const set = this.currentSet
+      if (!this.threeEngine && set?.webglCanvas) {
         if (this.host) {
-          // Set threeInited=true TẠM để onRender callback không double-init
           this.threeInited = true
           this.host.replaceWebglCanvas()
           this.threeInited = false
@@ -316,12 +330,15 @@ export class VisualizerRuntime {
             bloomRadius: 0.4,
             bloomThreshold: 0.1,
           })
-          const canvas = this.currentSet.webglCanvas
+          const canvas = this.currentSet!.webglCanvas
           this.threeEngine.initWithCanvas(canvas, {
             width: canvas.width,
             height: canvas.height,
           })
           this.threeInited = true
+          this.canvasHasWebGLContext = true
+          this.lastThreeSize = { width: canvas.width, height: canvas.height }
+          this.host?.markWebGLContextCreated()
           console.log('[VisualizerRuntime] ThreeJS re-initialized')
         } catch (e) {
           console.warn('[VisualizerRuntime] ThreeJS re-init failed:', e)
@@ -331,61 +348,86 @@ export class VisualizerRuntime {
       return
     }
 
-    if (type === 'none' || type === 'wave2d') {
+    if (type === 'none') {
       return
     }
 
-    // Lazy load engine mới
+    // wave2d: dùng EngineHost + WaveBarsEngine (Canvas 2D bars)
+    if (type === 'wave2d') {
+      if (!this.engineHost) {
+        this.engineHost = new EngineHost()
+        this.engineHost.setEngine(new WaveBarsEngine())
+      }
+      return
+    }
+
+    // Lazy load engine mới — with generation guard after each await
     try {
+      let newEngine: WebGLVisualizerEngine | null = null
+
       switch (type) {
         case 'butterchurn': {
           const { ButterchurnEngine } = await import('./engine/butterchurn/ButterchurnEngine')
-          this.altEngine = new ButterchurnEngine()
+          if (gen !== this.engineGeneration) return // stale — another switch happened
+          const { useSongNhacRuntimeStore: bcStore } = await import('../store/songNhacRuntimeStore')
+          newEngine = new ButterchurnEngine({
+            onPresetChange: (name) => bcStore.getState().setButterchurnPreset(name),
+          })
           break
         }
         case 'audiomotion': {
           const { AudioMotionEngine } = await import('./engine/audiomotion/AudioMotionEngine')
-          this.altEngine = new AudioMotionEngine()
+          if (gen !== this.engineGeneration) return
+          newEngine = new AudioMotionEngine()
           break
         }
         case 'wavejs': {
           const { WaveJsEngine } = await import('./engine/wavejs/WaveJsEngine')
-          this.altEngine = new WaveJsEngine()
+          if (gen !== this.engineGeneration) return
+          newEngine = new WaveJsEngine()
           break
         }
         case 'vanta': {
           const { VantaEngine } = await import('./engine/vanta/VantaEngine')
-          this.altEngine = new VantaEngine()
+          if (gen !== this.engineGeneration) return
+          newEngine = new VantaEngine()
           break
         }
       }
 
-      if (this.altEngine && this.currentSet?.webglCanvas) {
-        await this._initAltEngine(this.currentSet.webglCanvas)
+      if (!newEngine) return
+
+      this.altEngine = newEngine
+
+      if (this.currentSet?.webglCanvas) {
+        await this._initAltEngine(this.currentSet.webglCanvas, gen)
       }
     } catch (err) {
       console.error(`[VisualizerRuntime] Failed to load engine "${type}":`, err)
-      this.activeBgEngine = 'none'
+      // Clean up partially constructed engine to prevent leaks
+      if (gen === this.engineGeneration) {
+        this.altEngine?.destroy()
+        this.altEngine = null
+        this.altEngineInited = false
+        this.activeBgEngine = 'none'
+      }
     }
   }
 
-  private async _initAltEngine(canvas: HTMLCanvasElement): Promise<void> {
-    if (!this.altEngine || this.altEngineInited) return
+  private async _initAltEngine(canvas: HTMLCanvasElement, gen: number): Promise<void> {
+    const engine = this.altEngine
+    if (!engine || this.altEngineInited) return
     try {
-      await this.altEngine.initWithCanvas(canvas, {
+      await engine.initWithCanvas(canvas, {
         width: canvas.width,
         height: canvas.height,
       })
+      // Check if another setBgEngine call superseded us during the await
+      if (gen !== this.engineGeneration || this.altEngine !== engine) return
       this.altEngineInited = true
       console.log(`[VisualizerRuntime] Alt engine initialized: ${this.activeBgEngine}`)
 
-      if (this.altEngine.attachAudioSource && this.audio) {
-        const source = (this.audio as any).source
-        const ctx = (this.audio as any).audioCtx || (this.audio as any).ctx
-        if (source && ctx) {
-          this.altEngine.attachAudioSource(source, ctx)
-        }
-      }
+      this.attachAudioToEngine(engine)
     } catch (err) {
       console.error(`[VisualizerRuntime] Alt engine init failed:`, err)
     }
@@ -414,9 +456,12 @@ export class VisualizerRuntime {
     if (imageUrl === this.blurImageSrc) return
     this.blurImageSrc = imageUrl
 
+    const expectedSrc = imageUrl
     const img = new Image()
     img.crossOrigin = 'anonymous'
     img.onload = () => {
+      // Guard: skip if another setBlurImage superseded this one, or runtime destroyed
+      if (this.blurImageSrc !== expectedSrc || !this.container) return
       // Create blurred version
       const c = document.createElement('canvas')
       c.width = 320  // Low res for blur
@@ -455,6 +500,13 @@ export class VisualizerRuntime {
 
   resize(): void {
     this.host?.resize()
+    // Propagate resize to alt engine
+    if (this.altEngine && this.altEngineInited && this.currentSet?.webglCanvas) {
+      this.altEngine.resize({
+        width: this.currentSet.webglCanvas.width,
+        height: this.currentSet.webglCanvas.height,
+      })
+    }
   }
 
   destroy(): void {
@@ -462,6 +514,8 @@ export class VisualizerRuntime {
       cancelAnimationFrame(this.rafId)
       this.rafId = null
     }
+    // Increment generation to invalidate any in-flight async engine init
+    this.engineGeneration++
     this.fpsMeter = null
     this.audio?.destroy()
     this.audio = null
@@ -469,9 +523,11 @@ export class VisualizerRuntime {
     this.threeEngine?.destroy()
     this.threeEngine = null
     this.threeInited = false
+    this.lastThreeSize = { width: 0, height: 0 }
     this.altEngine?.destroy()
     this.altEngine = null
     this.altEngineInited = false
+    this.canvasHasWebGLContext = false
     this.engineHost?.destroy()
     this.engineHost = null
     this.useCanvas2dFallback = false
@@ -481,5 +537,9 @@ export class VisualizerRuntime {
     this.container = null
     this.blurImageCache = null
     this.blurImageSrc = null
+    // Clean up all module-level state and media caches to prevent memory leaks
+    resetBeatState()
+    resetDrawLayersState()
+    clearAllMediaCaches()
   }
 }

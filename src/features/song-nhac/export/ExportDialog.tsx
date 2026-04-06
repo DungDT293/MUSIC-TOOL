@@ -58,9 +58,12 @@ declare const window: Window & {
       }>
       cancelExport: (jobId: string) => Promise<{ ok: boolean }>
       onExportStarted: (cb: (p: { jobId: string }) => void) => () => void
-      onExportProgress: (cb: (frameIndex: number, totalFrames: number) => void) => () => void
+      onExportProgress: (cb: (data: { frameIndex: number; totalFrames: number }) => void) => () => void
     }
     openPath?: (p: string) => Promise<void>
+    dialog?: {
+      saveVideoFile?: (defaultFileName?: string) => Promise<{ canceled: boolean; filePath: string | null }>
+    }
   }
 }
 
@@ -132,6 +135,7 @@ export default function ExportDialog() {
     usedEncoder?: string; avgSpeedFps?: number; totalTimeSec?: number; framesWritten?: number
   } | null>(null)
   const [exportOutPath, setExportOutPath] = useState<string | null>(null)
+  const [customOutputPath, setCustomOutputPath] = useState<string | null>(null)
   const unsubRef = useRef<(() => void)[]>([])
 
   // Sync width/height khi mở dialog hoặc đổi aspect ratio — đảm bảo export đúng tỉ lệ
@@ -149,7 +153,7 @@ export default function ExportDialog() {
     const api = window.api?.songNhac
     if (!api?.onExportStarted || !api?.onExportProgress) return
     const unsubStarted = api.onExportStarted(({ jobId }) => setCurrentJobId(jobId))
-    const unsubProgress = api.onExportProgress((frameIndex, totalFrames) =>
+    const unsubProgress = api.onExportProgress(({ frameIndex, totalFrames }: { frameIndex: number; totalFrames: number }) =>
       setProgress({ frameIndex, totalFrames, timeSec: totalFrames > 0 ? (frameIndex / totalFrames) * (audioDurationSec ?? 0) : 0 })
     )
     unsubRef.current = [unsubStarted, unsubProgress]
@@ -226,14 +230,36 @@ export default function ExportDialog() {
 
     // Snapshot layers + runtime settings for the offscreen export window
     const layers = useSongNhacLayerStore.getState().layers
-      .filter((l) => (l.type === 'image' || l.type === 'text') && l.visible)
+      .filter((l) => (l.type === 'image' || l.type === 'text' || l.type === 'visualizer' || l.type === 'video') && l.visible)
     const rt = useSongNhacRuntimeStore.getState()
     const runtimeSettings: Record<string, unknown> = {
+      // Beat / wave-around
       imageBeatEnabled: rt.imageBeatEnabled,
       imageBeatIntensity: rt.imageBeatIntensity,
       waveAroundImageEnabled: rt.waveAroundImageEnabled,
       waveAroundIntensity: rt.waveAroundIntensity,
       waveAroundStyle: rt.waveAroundStyle,
+      // Background engine
+      bgEngine: rt.bgEngine,
+      bgMode: rt.bgMode,
+      // ThreeJS settings
+      visualizerLayout: rt.visualizerLayout,
+      threejsPreset: rt.threejsPreset,
+      bloomStrength: rt.bloomStrength,
+      bloomRadius: rt.bloomRadius,
+      bloomThreshold: rt.bloomThreshold,
+      barCount: rt.barCount,
+      // AudioMotion settings
+      audiomotionMode: rt.audiomotionMode,
+      audiomotionGradient: rt.audiomotionGradient,
+      audiomotionRadial: rt.audiomotionRadial,
+      audiomotionLedBars: rt.audiomotionLedBars,
+      // Wave.js settings
+      wavejsAnimation: rt.wavejsAnimation,
+      // Vanta settings
+      vantaEffect: rt.vantaEffect,
+      // Butterchurn (MilkDrop) settings
+      butterchurnPreset: rt.butterchurnPreset,
     }
 
     // Map UI quality to backend preset name
@@ -241,6 +267,7 @@ export default function ExportDialog() {
 
     runExport({
       ...cfg,
+      outputPath: customOutputPath ?? undefined,
       layers: JSON.parse(JSON.stringify(layers)),
       runtimeSettings,
       encoderQuality: backendQuality,
@@ -281,6 +308,7 @@ export default function ExportDialog() {
     } else {
       closeExportDialog()
       setHasRetriedOnce(false)
+      setCustomOutputPath(null)
     }
   }
 
@@ -392,13 +420,47 @@ export default function ExportDialog() {
                   <div style={{ color: 'rgba(255,255,255,0.5)' }}>
                     • Dùng CPU encoder (không cần GPU mạnh)<br />
                     • Canvas 2D renderer (thay vì WebGL)<br />
-                    • FFmpeg ultrafast preset + CRF 30<br />
+                    • FFmpeg ultrafast preset + CRF 25<br />
                     • Không B-frames, 1 ref frame → ít RAM<br />
                     • FPS giới hạn 30fps<br />
                     Chất lượng thấp hơn nhưng export được trên mọi máy.
                   </div>
                 </div>
               )}
+            </div>
+            {/* Output path selector */}
+            <div style={{ marginBottom: 8 }}>
+              <div style={{ color: 'rgba(255,255,255,0.5)', fontSize: 11, marginBottom: 4 }}>Lưu vào:</div>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <div style={{
+                  flex: 1, fontSize: 10, color: 'rgba(255,255,255,0.4)',
+                  wordBreak: 'break-all', minHeight: 16, lineHeight: '16px',
+                  overflow: 'hidden', textOverflow: 'ellipsis',
+                }}>
+                  {customOutputPath ?? '(Mặc định — AppData/exports/)'}
+                </div>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const audioName = (audioDisplayName ?? 'export').replace(/[<>:"/\\|?*]/g, '_').slice(0, 60)
+                    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+                    const res = await window.api?.dialog?.saveVideoFile?.(`${audioName}_${timestamp}.mp4`)
+                    if (res && !res.canceled && res.filePath) setCustomOutputPath(res.filePath)
+                  }}
+                  style={{
+                    padding: '3px 10px',
+                    border: '1px solid rgba(255,255,255,0.2)',
+                    borderRadius: 4,
+                    background: 'rgba(255,255,255,0.06)',
+                    color: 'rgba(255,255,255,0.7)',
+                    cursor: 'pointer',
+                    fontSize: 11,
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  Chọn...
+                </button>
+              </div>
             </div>
             {/* File size estimation */}
             {durationSec >= MIN_DURATION_SEC && (

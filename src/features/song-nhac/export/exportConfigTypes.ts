@@ -108,9 +108,9 @@ export const ENCODER_QUALITY_OPTIONS: Record<EncoderQualityId, {
   description: string
 }> = {
   lowend:   { label: 'Máy yếu',    backendPreset: 'lowend',     description: 'Tối ưu cho máy yếu: CPU encoder, CRF cao, nhanh nhất' },
-  speed:    { label: 'Tốc độ',     backendPreset: 'ultra-fast', description: 'Nhanh nhất, file lớn hơn' },
+  speed:    { label: 'Tốc độ',     backendPreset: 'ultra-fast', description: 'Nhanh nhất, chất lượng vừa' },
   balanced: { label: 'Cân bằng',   backendPreset: 'fast',       description: 'Cân bằng tốc độ & chất lượng' },
-  quality:  { label: 'Chất lượng', backendPreset: 'balanced',   description: 'Chất lượng cao, chậm hơn' },
+  quality:  { label: 'Chất lượng', backendPreset: 'balanced',   description: 'Chất lượng cao nhất, file lớn hơn, chậm hơn' },
 }
 
 /**
@@ -126,10 +126,10 @@ export function estimateExportFileSize(
 ): number {
   // Base video bitrate at 1080p 30fps (Mbps)
   const baseMbps: Record<EncoderQualityId, number> = {
-    lowend: 15,
-    speed: 12,
-    balanced: 8,
-    quality: 5,
+    lowend: 5,
+    speed: 8,
+    balanced: 10,
+    quality: 15,
   }
   const pixelRatio = (width * height) / (1920 * 1080)
   const fpsRatio = fps / 30

@@ -171,6 +171,19 @@ export function registerSystemHandlers(mainWindow: Electron.BrowserWindow | null
     return result.filePaths[0]
   })
 
+  // Save video file dialog — used by Export to let user choose output path
+  ipcMain.handle('dialog:saveVideoFile', async (_event, defaultFileName?: string) => {
+    const result = await dialog.showSaveDialog({
+      title: 'Lưu video xuất',
+      defaultPath: defaultFileName,
+      filters: [
+        { name: 'MP4 Video', extensions: ['mp4'] },
+        { name: 'All Files', extensions: ['*'] },
+      ],
+    })
+    return { canceled: result.canceled, filePath: result.filePath ?? null }
+  })
+
   ipcMain.handle('dialog:selectVideoFile', async () => {
     const result = await dialog.showOpenDialog({
       properties: ['openFile'],

@@ -469,7 +469,12 @@ function loadPersistedPlaylists(): PlaylistDefinition[] {
   try {
     const fp = getPlaylistStorePath()
     if (!fs.existsSync(fp)) return []
-    return JSON.parse(fs.readFileSync(fp, 'utf-8')) as PlaylistDefinition[]
+    const list = JSON.parse(fs.readFileSync(fp, 'utf-8')) as PlaylistDefinition[]
+    if (!Array.isArray(list)) return []
+    // Return as-is — validation happens lazily when user selects a track.
+    // We don't validate paths here because fs.existsSync on UNC/network paths
+    // can block for 30+ seconds per directory when network is unavailable.
+    return list
   } catch {
     return []
   }

@@ -1,6 +1,7 @@
 /**
  * Chức năng 13 — Bước 5. Capture composite canvas → buffer cho FFmpeg.
  * v2: JPEG pipe thay vì raw RGBA → IPC nhẹ ~40-80× (8.3MB → ~150KB/frame).
+ * v3: Quality 0.92 (gọi từ ExportRuntime) → gần lossless, tránh JPEG artifact bake vào H.264.
  */
 
 import type { CanvasSet } from '../canvas/CanvasHost'

@@ -14,7 +14,7 @@ export interface DecodedAudio {
 /** Chuyển file:// hoặc app://local-file/?path=... thành đường dẫn file cho main process (ffmpeg/read). */
 function fileUrlToPath(fileUrl: string): string {
   if (!fileUrl) return fileUrl
-  if (fileUrl.startsWith('app://local-file/')) {
+  if (fileUrl.startsWith('app://local-file')) {
     try {
       const u = new URL(fileUrl)
       const p = u.searchParams.get('path')
@@ -22,6 +22,8 @@ function fileUrlToPath(fileUrl: string): string {
     } catch {
       // ignore
     }
+    // Malformed URL (missing ?path=) — cannot extract path
+    console.warn('[decodeAudioFromFileUrl] Malformed app:// URL, cannot extract path:', fileUrl.slice(0, 80))
     return fileUrl
   }
   if (!fileUrl.startsWith('file://')) return fileUrl
@@ -37,7 +39,15 @@ declare const window: Window & {
   api?: {
     songNhac?: {
       readAudioFile: (path: string) => Promise<Uint8Array>
-      decodeAudioForTimeline?: (path: string) => Promise<{ buffer: Uint8Array; sampleRate: number; duration: number }>
+      decodeAudioForTimeline?: (path: string) => Promise<{
+        ok?: boolean
+        info?: any
+        error?: string
+        // Legacy fields (if handler ever returns PCM directly)
+        buffer?: Uint8Array
+        sampleRate?: number
+        duration?: number
+      }>
     }
   }
 }
@@ -53,28 +63,37 @@ export async function decodeAudioFromFileUrl(fileUrl: string): Promise<DecodedAu
   const api = window.api?.songNhac
   if (!api) throw new Error('songNhac API not available')
 
-  // Ưu tiên: decode trong main (ffmpeg) — không dùng Web Audio API trong renderer → tránh crash.
+  // Ưu tiên: lấy metadata từ main (ffprobe) để có duration chính xác.
+  // Sau đó decode PCM bằng Web Audio.
+  let realFileDurationSec: number | undefined
   if (api.decodeAudioForTimeline) {
     try {
       const result = await api.decodeAudioForTimeline(path)
-      const u8 = result.buffer
-      const numSamples = u8.byteLength / 4
-      const channelData = new Float32Array(u8.buffer, u8.byteOffset, numSamples)
-      const duration = result.realFileDurationSec != null && result.realFileDurationSec > 0
-        ? result.realFileDurationSec
-        : result.duration
-      return {
-        channelData,
-        sampleRate: result.sampleRate,
-        duration,
+      if (result.ok && result.info) {
+        // ffprobe returns: { format: { duration: "123.45" }, streams: [{ sample_rate: "44100" }] }
+        const ffDuration = parseFloat(result.info?.format?.duration)
+        if (isFinite(ffDuration) && ffDuration > 0) {
+          realFileDurationSec = ffDuration
+        }
+      }
+      // If handler returned PCM directly (legacy), handle it
+      if (result.buffer && result.buffer.byteLength > 0) {
+        const u8 = result.buffer
+        const numSamples = u8.byteLength / 4
+        const channelData = new Float32Array(u8.buffer, u8.byteOffset, numSamples)
+        const duration = realFileDurationSec ?? result.duration ?? channelData.length / (result.sampleRate ?? 44100)
+        return {
+          channelData,
+          sampleRate: result.sampleRate ?? 44100,
+          duration,
+        }
       }
     } catch (e) {
-      console.warn('[SongNhac] Main decode failed, skipping fallback to avoid crash:', e)
-      throw e
+      console.warn('[SongNhac] decodeAudioForTimeline failed (will use Web Audio fallback):', e)
     }
   }
 
-  // Fallback: đọc bytes + Web Audio (có thể gây crash trên một số máy)
+  // Decode bằng Web Audio API (đọc bytes + decode)
   const bytes = await api.readAudioFile(path)
   if (bytes.byteLength > MAX_DECODE_BYTES) {
     const maxMb = (MAX_DECODE_BYTES / 1024 / 1024).toFixed(0)
@@ -88,7 +107,8 @@ export async function decodeAudioFromFileUrl(fileUrl: string): Promise<DecodedAu
     return {
       channelData,
       sampleRate: decoded.sampleRate,
-      duration: decoded.duration,
+      // Prefer ffprobe duration (more accurate for VBR) over Web Audio duration
+      duration: realFileDurationSec ?? decoded.duration,
     }
   } finally {
     ctx.close()

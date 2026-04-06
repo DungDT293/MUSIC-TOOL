@@ -23,24 +23,14 @@ declare const window: Window & {
     toFileUrl?: (filePath: string) => Promise<string>
     selectAudioFile: () => Promise<string | null>
     selectFolder: () => Promise<string | null>
-    songNhac?: { listAudioInFolder: (folderPath: string) => Promise<{ path: string; fileName: string }[]> }
+    songNhac?: { listAudioInFolder: (folderPath: string) => Promise<{ path: string; name: string }[]> }
   }
 }
 
 async function pathToFileUrl(filePath: string): Promise<string> {
   if (!filePath) return ''
-  try {
-    if (window.api?.toFileUrl) {
-      const url = await window.api.toFileUrl(filePath)
-      if (url) return url
-    }
-    // FIX: Luôn dùng app://local-file/ thay vì file:/// (Chromium chặn file:// trong <audio>)
-    return `app://local-file/?path=${encodeURIComponent(filePath)}`
-  } catch (err) {
-    console.error('[AudioSourceSelector] pathToFileUrl error:', err)
-    // Vẫn fallback về app://local-file/ thay vì file:///
-    return `app://local-file/?path=${encodeURIComponent(filePath)}`
-  }
+  // Luôn dùng app://local-file/ — file:// bị Chromium chặn trong <audio> khi webSecurity=true
+  return `app://local-file/?path=${encodeURIComponent(filePath)}`
 }
 
 function formatDuration(sec: number): string {
@@ -86,7 +76,7 @@ export default function AudioSourceSelector() {
   const [selectedTrackPath, setSelectedTrackPath] = useState<string | null>(null)
   // Từ máy: file đã chọn hoặc thư mục + danh sách file
   const [machineFolderPath, setMachineFolderPath] = useState<string | null>(null)
-  const [machineFiles, setMachineFiles] = useState<{ path: string; fileName: string }[]>([])
+  const [machineFiles, setMachineFiles] = useState<{ path: string; name: string }[]>([])
   const [selectedMachinePath, setSelectedMachinePath] = useState<string | null>(null)
 
   const setAudioSource = useSongNhacAudioStore((s) => s.setAudioSource)
@@ -102,6 +92,12 @@ export default function AudioSourceSelector() {
       if (!raw || audioFileUrl) return
       const parsed = JSON.parse(raw) as PersistedAudio
       if (parsed.audioFileUrl && parsed.displayName) {
+        // Validate URL format — discard old malformed URLs (missing ?path= query)
+        if (parsed.audioFileUrl.startsWith('app://local-file') && !parsed.audioFileUrl.includes('?path=')) {
+          console.warn('[AudioSourceSelector] Discarding malformed cached URL:', parsed.audioFileUrl.slice(0, 80))
+          localStorage.removeItem(PERSIST_KEY)
+          return
+        }
         setSourceKind(parsed.sourceKind)
         setAudioSource({
           audioFileUrl: parsed.audioFileUrl,
@@ -189,13 +185,13 @@ export default function AudioSourceSelector() {
     if (list.length === 1) {
       const one = list[0]
       setSelectedMachinePath(one.path)
-      await setTrackFromPath(one.path, one.fileName)
+      await setTrackFromPath(one.path, one.name)
     }
   }
 
-  const handleSelectMachineTrack = async (path: string, fileName: string) => {
+  const handleSelectMachineTrack = async (path: string, name: string) => {
     setSelectedMachinePath(path)
-    await setTrackFromPath(path, fileName)
+    await setTrackFromPath(path, name)
   }
 
   const handleClear = () => {
@@ -326,13 +322,13 @@ export default function AudioSourceSelector() {
                       return
                     }
                     const f = machineFiles.find((x) => x.path === p)
-                    if (f) handleSelectMachineTrack(f.path, f.fileName)
+                    if (f) handleSelectMachineTrack(f.path, f.name)
                   }}
                   style={{ ...selectStyle, flex: 1 }}
                 >
                   <option value="">— Chọn —</option>
                   {machineFiles.map((f) => (
-                    <option key={f.path} value={f.path}>{f.fileName}</option>
+                    <option key={f.path} value={f.path}>{f.name}</option>
                   ))}
                 </select>
               </div>

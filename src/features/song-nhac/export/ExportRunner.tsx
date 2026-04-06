@@ -1,6 +1,9 @@
 /**
  * Chức năng 13 — Backend wiring. Chạy trong offscreen (hash #export).
  * Không UI; lắng config → runExportRuntime → sendExportFrame / sendExportDone.
+ *
+ * v2: WebCodecs H.264 GPU encoding — skip JPEG entirely when available.
+ *     Fallback to JPEG pipeline nếu WebCodecs không hỗ trợ.
  */
 
 import { useEffect, useRef } from 'react'
@@ -10,7 +13,9 @@ import {
   createAudioSourcePrecomputed,
   type ExportConfig,
 } from '../runtime/export'
+import { resetBeatState } from '../runtime/export/renderOneFrame'
 import { createIpcFrameSink } from './IpcFrameSink'
+import { createWebCodecsFrameSink, isWebCodecsH264Available } from './WebCodecsFrameSink'
 import { songNhacLayersToDrawable } from '../runtime/render/songNhacLayersToDrawable'
 import { useSongNhacRuntimeStore } from '../store/songNhacRuntimeStore'
 import type { SongNhacLayer } from '../types/layerTypes'
@@ -26,12 +31,16 @@ export interface ExportConfigFromMain extends ExportConfig {
   pcmReady?: boolean
   pcmSampleRate?: number
   pcmDuration?: number
+  /** Encoder quality preset from main process. */
+  encoderQuality?: string
+  /** Video bitrate in kbps — forwarded from main process for WebCodecs. */
+  videoBitrateKbps?: number
 }
 
 declare const window: Window & {
   api?: {
     songNhac?: {
-      sendExportReady: () => void
+      sendExportReady: (opts?: { webcodecs?: boolean }) => void
       sendExportConfigAck: (jobId: string) => void
       onExportConfig: (cb: (config: ExportConfigFromMain) => void) => () => void
       onExportCancel: (cb: () => void) => () => void
@@ -58,7 +67,16 @@ export default function ExportRunner() {
       return
     }
 
-    api.sendExportReady()
+    // Detect WebCodecs H.264 support before signaling ready
+    let webCodecsAvailable = false
+    isWebCodecsH264Available(1920, 1080).then(ok => {
+      webCodecsAvailable = ok
+      console.log(`[ExportRunner] WebCodecs H.264: ${ok ? 'AVAILABLE ✓' : 'not available ✗'}`)
+      api.sendExportReady({ webcodecs: ok })
+    }).catch(() => {
+      api.sendExportReady({ webcodecs: false })
+    })
+
     const unsubCancel = api.onExportCancel?.(() => { cancelledRef.current = true }) ?? (() => {})
 
     const unsub = api.onExportConfig((config: ExportConfigFromMain) => {
@@ -66,9 +84,9 @@ export default function ExportRunner() {
       runningRef.current = true
       cancelledRef.current = false
       const { jobId, width, height, fps, durationSec, audioFileUrl, devicePixelRatio = 1, layers: rawLayers, runtimeSettings } = config
-      // startSec: offset vào trong track khi export từ range (e.g. inSec)
       const startSec = (config as any).startSec ?? 0
-      console.log('[ExportRunner] received config', { jobId, width, height, fps, durationSec, layerCount: rawLayers?.length ?? 0 })
+      const forceSoftwareRenderer = (config as any).forceSoftwareRenderer === true
+      console.log('[ExportRunner] received config', { jobId, width, height, fps, durationSec, layerCount: rawLayers?.length ?? 0, forceSoftwareRenderer, webCodecsAvailable })
       api.sendExportConfigAck?.(jobId)
 
       // Hydrate runtime store with wave/beat settings from main window
@@ -79,6 +97,21 @@ export default function ExportRunner() {
         if (typeof runtimeSettings.waveAroundImageEnabled === 'boolean') store.setWaveAroundImageEnabled(runtimeSettings.waveAroundImageEnabled)
         if (typeof runtimeSettings.waveAroundIntensity === 'number') store.setWaveAroundIntensity(runtimeSettings.waveAroundIntensity)
         if (typeof runtimeSettings.waveAroundStyle === 'string') store.setWaveAroundStyle(runtimeSettings.waveAroundStyle as any)
+        if (typeof runtimeSettings.bgEngine === 'string') store.setBgEngine(runtimeSettings.bgEngine as any)
+        if (typeof runtimeSettings.bgMode === 'string') store.setBgMode(runtimeSettings.bgMode as any)
+        if (typeof runtimeSettings.visualizerLayout === 'string') store.setVisualizerLayout(runtimeSettings.visualizerLayout as any)
+        if (runtimeSettings.threejsPreset != null) store.setThreejsPreset(runtimeSettings.threejsPreset as any)
+        if (typeof runtimeSettings.bloomStrength === 'number') store.setBloomStrength(runtimeSettings.bloomStrength)
+        if (typeof runtimeSettings.bloomRadius === 'number') store.setBloomRadius(runtimeSettings.bloomRadius)
+        if (typeof runtimeSettings.bloomThreshold === 'number') store.setBloomThreshold(runtimeSettings.bloomThreshold)
+        if (typeof runtimeSettings.barCount === 'number') store.setBarCount(runtimeSettings.barCount)
+        if (runtimeSettings.audiomotionMode != null) store.setAudiomotionMode(runtimeSettings.audiomotionMode as any)
+        if (typeof runtimeSettings.audiomotionGradient === 'string') store.setAudiomotionGradient(runtimeSettings.audiomotionGradient)
+        if (typeof runtimeSettings.audiomotionRadial === 'boolean') store.setAudiomotionRadial(runtimeSettings.audiomotionRadial)
+        if (typeof runtimeSettings.audiomotionLedBars === 'boolean') store.setAudiomotionLedBars(runtimeSettings.audiomotionLedBars)
+        if (typeof runtimeSettings.wavejsAnimation === 'string') store.setWavejsAnimation(runtimeSettings.wavejsAnimation)
+        if (typeof runtimeSettings.vantaEffect === 'string') store.setVantaEffect(runtimeSettings.vantaEffect)
+        if (typeof runtimeSettings.butterchurnPreset === 'string') store.setButterchurnPreset(runtimeSettings.butterchurnPreset)
       }
 
       // Convert layers to DrawableLayer[] (once, reused every frame)
@@ -89,8 +122,8 @@ export default function ExportRunner() {
 
       const run = async () => {
         try {
-          // Fast path: main process pre-decoded audio via FFmpeg → temp raw PCM file on disk
-          // Offscreen fetches the raw file (no decode needed) → ~1-3s instead of 10+ minutes
+          resetBeatState()
+
           let audioSource: Awaited<ReturnType<typeof createAudioSourcePrecomputed>>['source']
           let decodedDuration: number
 
@@ -99,14 +132,12 @@ export default function ExportRunner() {
           const pcmDur = (config as ExportConfigFromMain).pcmDuration
 
           if (pcmReady && pcmSR && pcmDur && api.getPcmSamples) {
-            // Fast path: PCM is in main process memory. Request 2048 samples per frame via IPC (~8KB each).
             console.log('[ExportRunner] Fast path: IPC per-frame PCM. sampleRate=', pcmSR, 'duration=', pcmDur.toFixed(1))
             const fetchSamples = (timeSec: number) => api.getPcmSamples!(jobId, timeSec)
             const result = createAudioSourceIpc(pcmSR, pcmDur, fetchSamples)
             audioSource = result.source
             decodedDuration = result.duration
           } else {
-            // Fallback: old Web Audio API decode path (slow for large files)
             console.log('[ExportRunner] Fallback: Web Audio decode...', audioFileUrl.slice(0, 80))
             const result = await createAudioSourcePrecomputed(audioFileUrl)
             audioSource = result.source
@@ -124,16 +155,44 @@ export default function ExportRunner() {
             durationSec: duration,
             devicePixelRatio,
             startSec: startSec > 0 ? startSec : undefined,
+            forceSoftwareRenderer: forceSoftwareRenderer || undefined,
           }
-          const frameSink = createIpcFrameSink(totalFrames, {
+
+          // ── Try WebCodecs first, fallback to JPEG ──
+          const ipcOpts = {
             jobId,
             width,
             height,
-            sendFrame: (p) => api.sendExportFrame(p),
-            sendProgress: (p) => api.sendExportProgress(p),
-            sendEnd: (jid) => api.sendExportEnd(jid),
-            waitForDrain: api.waitForDrain ? (jid) => api.waitForDrain!(jid) : undefined,
-          })
+            sendFrame: (p: any) => api.sendExportFrame(p),
+            sendProgress: (p: any) => api.sendExportProgress(p),
+            sendEnd: (jid: string) => api.sendExportEnd(jid),
+            waitForDrain: api.waitForDrain ? (jid: string) => api.waitForDrain!(jid) : undefined,
+          }
+
+          let useWebCodecs = false
+          let frameSink: any
+          let webCodecsSink: Awaited<ReturnType<typeof createWebCodecsFrameSink>> = null
+
+          if (webCodecsAvailable && !forceSoftwareRenderer) {
+            // Use bitrate from main process (based on user's quality selection)
+            // Fallback: estimate from resolution if not provided
+            const bitrateKbps = (config as ExportConfigFromMain).videoBitrateKbps
+              ?? (width >= 1920 ? 15000 : width >= 1280 ? 10000 : 8000)
+            webCodecsSink = await createWebCodecsFrameSink(totalFrames, {
+              ...ipcOpts,
+              fps,
+              bitrateKbps,
+            })
+          }
+
+          if (webCodecsSink) {
+            frameSink = webCodecsSink
+            useWebCodecs = true
+            console.log('[ExportRunner] ★ Using WebCodecs H.264 GPU encoding')
+          } else {
+            frameSink = createIpcFrameSink(totalFrames, ipcOpts)
+            console.log('[ExportRunner] Using JPEG → NVENC/libx264 pipeline')
+          }
 
           await runExportRuntime({
             config: exportConfig,
@@ -143,6 +202,9 @@ export default function ExportRunner() {
             isCancelled: () => cancelledRef.current,
             skipYield: true,
             getLayers: drawableLayers.length > 0 ? () => drawableLayers : undefined,
+            useWebCodecs,
+            // Bind canvasSet to WebCodecs sink when canvas is ready
+            onCanvasReady: webCodecsSink ? (set) => webCodecsSink!.setCanvasSet(set) : undefined,
           })
           if (!cancelledRef.current) api.sendExportDone({ ok: true, framesWritten: totalFrames })
           else api.sendExportDone({ ok: false, error: 'Cancelled' })
@@ -159,8 +221,6 @@ export default function ExportRunner() {
     })
 
     return () => {
-      // Bug #19 fix: signal cancellation so in-progress export stops cleanly
-      // rather than continuing to call IPC after the component unmounts.
       cancelledRef.current = true
       unsub()
       unsubCancel()

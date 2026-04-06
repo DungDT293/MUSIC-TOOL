@@ -93,11 +93,13 @@ export default function SongNhacScreen() {
     el.play().catch((err) => {
       const msg = err?.message || err?.name || 'NotAllowedError'
       console.error('[SongNhac] Play failed:', err?.name, err?.message)
-      setPlayError(
-        msg === 'NotAllowedError'
-          ? 'Trình duyệt chặn phát. Đóng app (thoát hẳn) rồi mở lại, sau đó bấm Play.'
-          : `Không thể phát: ${msg}`
-      )
+      if (msg.includes('no supported sources') || msg.includes('NotSupportedError')) {
+        setPlayError('File audio không tồn tại hoặc không thể đọc. Hãy chọn lại track hoặc scan lại thư mục nhạc.')
+      } else if (msg === 'NotAllowedError') {
+        setPlayError('Trình duyệt chặn phát. Đóng app (thoát hẳn) rồi mở lại, sau đó bấm Play.')
+      } else {
+        setPlayError(`Không thể phát: ${msg}`)
+      }
     })
   }, [])
   const handlePause = useCallback(() => {
@@ -167,6 +169,17 @@ export default function SongNhacScreen() {
         preload="metadata"
         crossOrigin="anonymous"
         style={{ display: 'none' }}
+        onError={(e) => {
+          const el = e.currentTarget
+          const src = el?.src || audioFileUrl || ''
+          const isUNC = src.includes('%5C%5C') || src.includes('\\\\') || decodeURIComponent(src).startsWith('\\\\')
+          console.error('[SongNhac] Audio load error:', el?.error?.message, 'src:', src.slice(0, 120))
+          if (isUNC) {
+            setPlayError('Không thể truy cập file nhạc trên mạng (network share). Kiểm tra kết nối mạng hoặc chọn file từ máy local.')
+          } else {
+            setPlayError('File audio không tồn tại hoặc không thể đọc. Hãy chọn lại track hoặc scan lại thư mục nhạc.')
+          }
+        }}
       />
       <VisualizerLayout
         leftPanel={leftPanel}

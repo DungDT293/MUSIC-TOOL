@@ -20,13 +20,13 @@
 import type * as THREEType from 'three'
 import type { EffectComposer as EffectComposerType } from 'three/examples/jsm/postprocessing/EffectComposer.js'
 import type { UnrealBloomPass as UnrealBloomPassType } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
+import type { ShaderPass as ShaderPassType } from 'three/examples/jsm/postprocessing/ShaderPass.js'
 import { AudioSmoother } from './audioSmoothing'
 import type { Size, EngineRenderFrame } from '../types'
 import { THREEJS_PRESETS, DEFAULT_THREEJS_PRESET, type ThreeJsPresetId, type ThreeJsPreset } from './threejsPresets'
 
 // Cache to avoid re-importing
 let _THREE: typeof THREEType | null = null
-let _EffectComposer: typeof EffectComposerType | null = null
 
 async function getThree() {
   if (!_THREE) {
@@ -36,12 +36,13 @@ async function getThree() {
 }
 
 async function getPostprocessing() {
-  const [THREE, ecMod, rpMod, ubpMod, opMod] = await Promise.all([
+  const [THREE, ecMod, rpMod, ubpMod, opMod, spMod] = await Promise.all([
     getThree(),
     import('three/examples/jsm/postprocessing/EffectComposer.js'),
     import('three/examples/jsm/postprocessing/RenderPass.js'),
     import('three/examples/jsm/postprocessing/UnrealBloomPass.js'),
     import('three/examples/jsm/postprocessing/OutputPass.js'),
+    import('three/examples/jsm/postprocessing/ShaderPass.js'),
   ])
   return {
     THREE,
@@ -49,6 +50,7 @@ async function getPostprocessing() {
     RenderPass: rpMod.RenderPass,
     UnrealBloomPass: ubpMod.UnrealBloomPass,
     OutputPass: opMod.OutputPass,
+    ShaderPass: spMod.ShaderPass,
   }
 }
 
@@ -277,6 +279,86 @@ void main() {
 }
 `
 
+// ─── Chromatic Aberration Post-Processing Shader ─────────────────────────────
+
+const chromaticAberrationShader = {
+  uniforms: {
+    tDiffuse: { value: null as any },
+    uIntensity: { value: 0.003 },
+    uBass: { value: 0 },
+  },
+  vertexShader: /* glsl */ `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: /* glsl */ `
+    uniform sampler2D tDiffuse;
+    uniform float uIntensity;
+    uniform float uBass;
+    varying vec2 vUv;
+    void main() {
+      vec2 center = vUv - 0.5;
+      float dist = length(center);
+      // Intensity increases at edges + bass-reactive boost
+      float strength = uIntensity * (1.0 + dist * 2.0) * (1.0 + uBass * 1.5);
+      vec2 offset = center * strength;
+      float r = texture2D(tDiffuse, vUv + offset).r;
+      float g = texture2D(tDiffuse, vUv).g;
+      float b = texture2D(tDiffuse, vUv - offset).b;
+      float a = texture2D(tDiffuse, vUv).a;
+      gl_FragColor = vec4(r, g, b, a);
+    }
+  `,
+}
+
+// ─── Film Grain + Vignette Post-Processing Shader ────────────────────────────
+
+const filmGrainVignetteShader = {
+  uniforms: {
+    tDiffuse: { value: null as any },
+    uTime: { value: 0 },
+    uGrainIntensity: { value: 0.04 },
+    uVignetteStrength: { value: 0.35 },
+  },
+  vertexShader: /* glsl */ `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: /* glsl */ `
+    uniform sampler2D tDiffuse;
+    uniform float uTime;
+    uniform float uGrainIntensity;
+    uniform float uVignetteStrength;
+    varying vec2 vUv;
+
+    float rand(vec2 co) {
+      return fract(sin(dot(co, vec2(12.9898, 78.233))) * 43758.5453);
+    }
+
+    void main() {
+      vec4 color = texture2D(tDiffuse, vUv);
+
+      // Film grain (subtle)
+      float grain = rand(vUv + fract(uTime * 0.01)) * uGrainIntensity;
+      color.rgb += grain - uGrainIntensity * 0.5;
+
+      // Vignette (darkening at edges)
+      vec2 center = vUv - 0.5;
+      float dist = length(center) * 1.4;
+      float vignette = 1.0 - smoothstep(0.5, 1.1, dist) * uVignetteStrength;
+      color.rgb *= vignette;
+
+      gl_FragColor = color;
+    }
+  `,
+}
+
 // ─── Constants ──────────────────────────────────────────────────────────────
 
 const DEFAULT_BAR_COUNT = 128
@@ -294,6 +376,8 @@ export interface ThreeJsEngineConfig {
   bloomThreshold?: number
   layout?: 'circular' | 'horizontal' | 'mirror'
   preset?: ThreeJsPresetId
+  /** Override devicePixelRatio (e.g., 1 for export). Defaults to window.devicePixelRatio. */
+  devicePixelRatio?: number
 }
 
 interface Particle {
@@ -310,6 +394,8 @@ export class ThreeJsEngine {
   private camera: THREEType.PerspectiveCamera | null = null
   private composer: EffectComposerType | null = null
   private bloomPass: UnrealBloomPassType | null = null
+  private chromaticPass: ShaderPassType | null = null
+  private filmGrainPass: ShaderPassType | null = null
 
   // Bars
   private barMesh: THREEType.InstancedMesh | null = null
@@ -346,6 +432,7 @@ export class ThreeJsEngine {
   private cameraAngle = 0
   private lastBass = 0
   private lastPeak = 0
+  private lastFrameTime = 0
   private currentPreset: ThreeJsPreset
 
   constructor(config: ThreeJsEngineConfig = {}) {
@@ -366,7 +453,7 @@ export class ThreeJsEngine {
     if (this.inited) return
     this.size = size
 
-    const { THREE, EffectComposer, RenderPass, UnrealBloomPass, OutputPass } = await getPostprocessing()
+    const { THREE, EffectComposer, RenderPass, UnrealBloomPass, OutputPass, ShaderPass } = await getPostprocessing()
 
     this.dummy = new THREE.Object3D()
 
@@ -379,7 +466,9 @@ export class ThreeJsEngine {
       alpha: false,
     })
     this.renderer.setSize(size.width, size.height, false)
-    this.renderer.setPixelRatio(1)
+    // Use proper pixel ratio — respect config override (e.g., 1 for export mode)
+    const dpr = this.config.devicePixelRatio ?? Math.min(2, window.devicePixelRatio || 1)
+    this.renderer.setPixelRatio(dpr)
     this.renderer.outputColorSpace = THREE.SRGBColorSpace
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping
     this.renderer.toneMappingExposure = this.currentPreset.toneMappingExposure
@@ -407,6 +496,12 @@ export class ThreeJsEngine {
     pointLight.position.set(0, 10, 0)
     this.scene.add(pointLight)
 
+    // ═══ Secondary SpotLight for rim/depth lighting ═══
+    const spotLight = new THREE.SpotLight(this.currentPreset.pointLightColor, 0.8, 40, Math.PI / 5, 0.5, 1)
+    spotLight.position.set(-8, 12, 8)
+    spotLight.lookAt(0, 0, 0)
+    this.scene.add(spotLight)
+
     // ═══ Frequency DataTexture ═══
     this.freqTexture = new THREE.DataTexture(
       this.freqTextureData,
@@ -417,8 +512,8 @@ export class ThreeJsEngine {
     )
     this.freqTexture.needsUpdate = true
 
-    // ═══ Bar Geometry — CylinderGeometry with rounded caps ═══
-    const barGeo = new THREE.CylinderGeometry(0.12, 0.14, 1, 8, 1, false)
+    // ═══ Bar Geometry — CylinderGeometry with smoother silhouette ═══
+    const barGeo = new THREE.CylinderGeometry(0.12, 0.14, 1, 12, 1, false)
     // Shift pivot to bottom so bars grow upward from Y=0
     barGeo.translate(0, 0.5, 0)
 
@@ -516,6 +611,14 @@ export class ThreeJsEngine {
       this.config.bloomThreshold ?? this.currentPreset.bloomThreshold
     )
     this.composer.addPass(this.bloomPass)
+
+    // ═══ Chromatic Aberration — professional RGB split at edges ═══
+    this.chromaticPass = new ShaderPass(chromaticAberrationShader as any)
+    this.composer.addPass(this.chromaticPass)
+
+    // ═══ Film Grain + Vignette — cinematic polish ═══
+    this.filmGrainPass = new ShaderPass(filmGrainVignetteShader as any)
+    this.composer.addPass(this.filmGrainPass)
 
     this.composer.addPass(new OutputPass())
 
@@ -697,7 +800,10 @@ export class ThreeJsEngine {
     if (!this.inited || !this.composer || !this.barMesh || !this.freqTexture || !this.camera) return
 
     const { frequencyData, timeSec } = frame
-    const dt = 1 / 60  // approximate delta
+    // Real delta time measurement instead of fixed 1/60
+    const now = performance.now()
+    const dt = this.lastFrameTime > 0 ? Math.min((now - this.lastFrameTime) / 1000, 0.1) : 1 / 60
+    this.lastFrameTime = now
 
     // 1. Smooth FFT data
     const smoothed = this.smoother.update(frequencyData)
@@ -798,6 +904,16 @@ export class ThreeJsEngine {
       const baseRadius = this.config.bloomRadius ?? this.currentPreset.bloomRadius
       this.bloomPass.strength = baseStrength + bands.bass * this.currentPreset.bloomBassMultiplier + bands.peak * this.currentPreset.bloomPeakMultiplier
       this.bloomPass.radius = baseRadius + bands.mid * 0.25
+    }
+
+    // 8b. Drive chromatic aberration with bass
+    if (this.chromaticPass) {
+      (this.chromaticPass.uniforms as any).uBass.value = bands.bass
+    }
+
+    // 8c. Drive film grain time
+    if (this.filmGrainPass) {
+      (this.filmGrainPass.uniforms as any).uTime.value = timeSec
     }
 
     // 9. Render
@@ -1094,12 +1210,15 @@ export class ThreeJsEngine {
     this.scene = null
     this.camera = null
     this.bloomPass = null
+    this.chromaticPass = null
+    this.filmGrainPass = null
     this.particles = []
     this.particlePositions = null
     this.particleSizes = null
     this.particleLives = null
     this.particleColors = null
     this.smoother.reset()
+    this.lastFrameTime = 0
     this.inited = false
   }
 }

@@ -377,7 +377,7 @@ const api: IPCAPI = {
       ipcRenderer.on('song-nhac:export-config', listener)
       return () => { ipcRenderer.removeListener('song-nhac:export-config', listener) }
     },
-    sendExportReady: () => ipcRenderer.send('song-nhac:export-ready'),
+    sendExportReady: (opts?: { webcodecs?: boolean }) => ipcRenderer.send('song-nhac:export-ready', opts),
     sendExportConfigAck: (config: any) => ipcRenderer.send('song-nhac:export-config-ack', config),
     // Gửi frame đến main process (channel song-nhac:frame — khớp với ipcMain.on trong export handler)
     sendExportFrame: (frameData: any) => ipcRenderer.send('song-nhac:frame', frameData?.jobId, frameData?.buffer),
@@ -385,11 +385,19 @@ const api: IPCAPI = {
     sendExportDone: (result: any) => ipcRenderer.send('song-nhac:export-done', result),
     // Signal kết thúc frame stream — triggers FFmpeg stdin.end() và unblocks export handler
     sendExportEnd: (jobId: string) => ipcRenderer.send('song-nhac:end', jobId),
+    // ── PCM fast path: fetch 2048 samples from main process for FFT ──
+    // Main process pre-decodes audio via FFmpeg → stores PCM in memory.
+    // Each call returns 8KB Float32Array (2048 samples) — ~0.1ms IPC.
+    getPcmSamples: (jobId: string, timeSec: number) =>
+      ipcRenderer.invoke('song-nhac:pcm-samples', jobId, timeSec) as Promise<Float32Array>,
   },
   dialog: {
     /** Mở dialog chọn file (generic) — trả về { canceled, filePaths } */
     openFile: (options?: { title?: string; filters?: Array<{ name: string; extensions: string[] }>; properties?: string[] }) =>
       ipcRenderer.invoke('dialog:openFile', options) as Promise<{ canceled: boolean; filePaths: string[] }>,
+    /** Mở dialog lưu video — trả về { canceled, filePath } */
+    saveVideoFile: (defaultFileName?: string) =>
+      ipcRenderer.invoke('dialog:saveVideoFile', defaultFileName) as Promise<{ canceled: boolean; filePath: string | null }>,
   },
   app: {
     getVersion: () => ipcRenderer.invoke('app:getVersion') as Promise<string>,

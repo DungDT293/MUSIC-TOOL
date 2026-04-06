@@ -14,7 +14,9 @@
  *  - electron/handlers/index.ts    — tất cả IPC handlers (70+ channels)
  */
 
-import { app, BrowserWindow } from 'electron'
+import { app, BrowserWindow, protocol, net } from 'electron'
+import * as path from 'path'
+import * as fs from 'fs'
 import { getFfmpegPaths } from '../backend/ffmpeg/config'
 import { runFfprobe } from '../backend/ffmpeg/wrapper'
 import { getMachineHash } from '../backend/license/machineId'
@@ -37,6 +39,21 @@ function getMainWindow() { return windowManager.mainWindow }
 // ─── Biến interval ──────────────────────────────────────────────────────────
 let diskInfoRefreshInterval: NodeJS.Timeout | null = null
 let licenseCheckInterval: NodeJS.Timeout | null = null
+
+// ─── Đăng ký app:// scheme là privileged (PHẢI gọi trước app.whenReady) ─────
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'app',
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      stream: true,
+      corsEnabled: true,
+      bypassCSP: false,
+    },
+  },
+])
 
 // ─── Helper: log FFmpeg info ────────────────────────────────────────────────
 async function logFfmpegInfo() {
@@ -67,6 +84,48 @@ process.on('unhandledRejection', (reason, promise) => {
 app.whenReady()
   .then(async () => {
     console.log('[App] Starting initialization...')
+
+    // ── Đăng ký app:// protocol — phục vụ file local cho <audio>/<video>/<img> ──
+    // Chromium chặn file:// trong sandboxed renderer → dùng app://local-file/?path=...
+    try {
+      protocol.handle('app', (request) => {
+        try {
+          const url = new URL(request.url)
+          // app://local-file/?path=<encoded-path>
+          if (url.hostname === 'local-file') {
+            const filePath = url.searchParams.get('path')
+            if (!filePath) {
+              console.warn('[Protocol] Missing path parameter in URL:', request.url.slice(0, 100))
+              return new Response('Missing path parameter', { status: 400 })
+            }
+            const decodedPath = decodeURIComponent(filePath)
+            // Security: chỉ cho phép đọc file thực sự tồn tại
+            if (!fs.existsSync(decodedPath)) {
+              const isUNC = decodedPath.startsWith('\\\\') || decodedPath.startsWith('//')
+              console.warn(`[Protocol] File not found${isUNC ? ' (network path)' : ''}:`, decodedPath)
+              return new Response(
+                isUNC
+                  ? `Network file not accessible: ${decodedPath}. Kiểm tra kết nối mạng hoặc chọn lại thư mục nhạc.`
+                  : `File not found: ${decodedPath}`,
+                { status: 404 }
+              )
+            }
+            // Dùng net.fetch với file:// URL để Electron đọc file an toàn
+            const normalized = decodedPath.replace(/\\/g, '/')
+            const fileUrl = `file:///${normalized.replace(/^\/+/, '')}`
+            return net.fetch(fileUrl)
+          }
+          // Fallback: không xử lý hostname khác
+          return new Response('Unknown app:// host', { status: 404 })
+        } catch (err: any) {
+          console.error('[Protocol] app:// handler error:', err)
+          return new Response(`Protocol error: ${err?.message}`, { status: 500 })
+        }
+      })
+      console.log('[App] app:// protocol handler registered')
+    } catch (err: any) {
+      console.error('[App] Failed to register app:// protocol (critical):', err?.message || err)
+    }
 
     // Đăng ký IPC handlers trước khi tạo window
     try {
