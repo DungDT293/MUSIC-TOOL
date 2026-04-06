@@ -105,6 +105,7 @@ const LOG_BUFFER_LIMIT = 500
 let recentLogs: { timestamp: string; level: 'info' | 'warn' | 'error'; message: string }[] = []
 const SCAN_TIMEOUT_MS = 10 * 60 * 1000 // 10 phút
 const VIDEO_PICK_TIMEOUT_MS = 10 * 60 * 1000 // 10 phút
+const AUDIO_EXPORT_TIMEOUT_MS = 30 * 60 * 1000 // 30 phút per playlist (audio export có thể lâu với crossfade)
 const MAX_PLAYLIST_COUNT_DEFAULT = 200 // cảnh báo
 const MAX_PLAYLIST_COUNT = 500 // giới hạn cứng
 const MAX_LOG_FILES = 5
@@ -1311,16 +1312,31 @@ async function runAutopilotForDay(
       activeAbortControllers.push(controller)
       try {
         // Thêm progress emitter để log real-time
-        await exportPlaylistToFile(
-          { ...req, signal: controller.signal } as ExportPlaylistRequest,
-          (progress) => {
-            const percent = progress.percent?.toFixed(1) ?? '0.0'
-            const timeStr = formatDuration(progress.currentSec ?? 0)
-            const totalTimeStr = formatDuration(progress.totalSec ?? 0)
-            emitLog('info', `[Bước 2]   → Playlist ${i + 1}/${playlists.length}: ${percent}% (${timeStr}/${totalTimeStr})`)
-          },
+        // Wrap with timeout to prevent indefinite hang from stuck FFmpeg
+        await withTimeout(
+          exportPlaylistToFile(
+            { ...req, signal: controller.signal } as ExportPlaylistRequest,
+            (progress) => {
+              const percent = progress.percent?.toFixed(1) ?? '0.0'
+              const timeStr = formatDuration(progress.currentSec ?? 0)
+              const totalTimeStr = formatDuration(progress.totalSec ?? 0)
+              emitLog('info', `[Bước 2]   → Playlist ${i + 1}/${playlists.length}: ${percent}% (${timeStr}/${totalTimeStr})`)
+            },
+          ),
+          AUDIO_EXPORT_TIMEOUT_MS,
+          `Export audio playlist ${i + 1}/${playlists.length}`,
+          () => { controller.abort() },
         )
         emitLog('info', `[Bước 2] ✓ Đã xuất xong playlist ${i + 1}/${playlists.length}: ${fileNameBase}.m4a`)
+        // Verify the exported audio file actually exists
+        const expectedAudioPath = path.join(audioDir, `${fileNameBase}.m4a`)
+        if (!fs.existsSync(expectedAudioPath)) {
+          // Also check .aac extension
+          const altPath = path.join(audioDir, `${fileNameBase}.aac`)
+          if (!fs.existsSync(altPath)) {
+            throw new Error(`Export audio playlist ${i + 1} reported success but output file not found: ${expectedAudioPath}`)
+          }
+        }
         break
       } catch (err: any) {
         lastError = err

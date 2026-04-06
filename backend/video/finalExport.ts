@@ -657,8 +657,12 @@ export async function executeFinalExport(
       // 2. Create concat list file
       // Dùng job.jobIndex để đảm bảo temp file name unique và consistent
       const videoListFile = path.join(tempDir, `video_${job.jobIndex}.txt`)
+      // Thêm 'duration' cho mỗi clip → FFmpeg concat demuxer tính PTS tích lũy chính xác
+      // Không có 'duration' → FFmpeg dùng PTS gốc từ bitstream → timestamp jump → freeze frame
+      // 'inpoint 0' → force concat demuxer seek đến keyframe đầu mỗi clip
+      //   → tránh bắt đầu bằng P-frame (gây freeze cho đến keyframe tiếp theo)
       const listContent = videoPlaylist
-        .map(c => `file '${escapePathForFfmpegList(c.path)}'`)
+        .map(c => `file '${escapePathForFfmpegList(c.path)}'\ninpoint 0\nduration ${c.durationSec.toFixed(6)}`)
         .join('\n')
       await fsp.writeFile(videoListFile, listContent, 'utf-8')
       
@@ -973,6 +977,241 @@ function getFfmpegExecutable(): string {
   return ffmpeg
 }
 
+// ═══════════════════════════════════════════════════════════════
+// 2-PASS PRE-TRANSCODE: Giải quyết triệt để vấn đề "dừng hình" (frame freeze)
+// ═══════════════════════════════════════════════════════════════
+//
+// VẤN ĐỀ GỐC:
+//   Khi concat demuxer ghép hàng trăm clip video bằng 1 lệnh FFmpeg duy nhất
+//   (concat → re-encode), mỗi khi chuyển clip:
+//     • Decoder phải reinit vì stream parameters thay đổi (SPS/PPS, resolution, pixel format)
+//     • Filter chain bị flush → frame cuối bị repeat → DỪNG HÌNH (freeze frame)
+//   Đây là giới hạn kiến trúc của FFmpeg concat demuxer, KHÔNG thể fix bằng flags.
+//
+// GIẢI PHÁP:
+//   Pass 1: Transcode TỪNG clip riêng lẻ → cùng format (resolution, FPS, codec, pixel format)
+//   Pass 2: Concat COPY các clip đã chuẩn hóa + mux với audio → output final
+//   → Clip đã uniform → concat copy KHÔNG cần reinit decoder → KHÔNG freeze
+//
+// ═══════════════════════════════════════════════════════════════
+
+interface PreTranscodeClipsOptions {
+  /** Danh sách clip video gốc (path + duration) */
+  clips: Array<{ path: string; durationSec: number }>
+  /** Thư mục temp để lưu clip đã transcode */
+  tempDir: string
+  /** VF filter chuẩn hóa (resolution + FPS + pad + format) */
+  vfFilter: string
+  /** GPU encoding choice */
+  useGpuEncoding?: 'gpu' | 'cpu' | 'auto'
+  /** Request ID để cancel */
+  requestId: string
+  /** Callback emit progress (percent 0-70 cho pass 1) */
+  onProgress?: (percent: number, speedX?: number | null) => void
+}
+
+/**
+ * Pass 1: Pre-transcode từng clip video riêng lẻ thành format chuẩn hóa.
+ *
+ * Mỗi clip được encode ĐỘC LẬP:
+ * - Decode clip gốc (dù SPS/PPS, resolution khác nhau → không ảnh hưởng clip khác)
+ * - Apply vf filter (scale, pad, fps, format) → output cùng chính xác resolution + FPS + pixel format
+ * - Encode bằng GPU (NVENC) hoặc CPU (libx264)
+ * - Output: H.264 Baseline, yuv420p, CFR, keyframe ở frame 0
+ *
+ * Kết quả: tất cả clip output có stream parameters GIỐNG HỆT NHAU
+ * → concat copy ở Pass 2 KHÔNG cần reinit decoder → KHÔNG freeze frame.
+ *
+ * @returns Danh sách path đến clip đã transcode (theo đúng thứ tự input)
+ */
+async function preTranscodeClips(opts: PreTranscodeClipsOptions): Promise<string[]> {
+  const { clips, tempDir, vfFilter, useGpuEncoding, requestId, onProgress } = opts
+  const ffmpegPath = getFfmpegExecutable()
+  const transcodedPaths: string[] = []
+  let lastSpeedX: number | null = null
+
+  // Build encoder args một lần (tất cả clip dùng cùng encoder)
+  const encoderChoice = useGpuEncoding || 'auto'
+  const { args: rawEncoderArgs, usedEncoder, gpuInfo } = await buildVideoEncoderArgsWithChoice(
+    true, // needsReencode
+    encoderChoice,
+    'fast'
+  )
+
+  if (usedEncoder === 'gpu' && gpuInfo) {
+    console.log(`[PreTranscode] Using ${(gpuInfo as any).encoder?.toUpperCase()} encoder (${(gpuInfo as any).name || 'GPU'})`)
+  } else {
+    console.log(`[PreTranscode] Using CPU encoder (libx264)`)
+  }
+
+  // Sanitize encoder args:
+  // 1. Strip -hwaccel khi có software vf filter (frames phải ở CPU memory)
+  // 2. Replace -vsync 2 (VFR) → -vsync cfr cho stable timestamps
+  const sanitizedArgs: string[] = []
+  for (let i = 0; i < rawEncoderArgs.length; i++) {
+    if (rawEncoderArgs[i] === '-hwaccel') {
+      i++ // skip -hwaccel + value
+      continue
+    }
+    if (rawEncoderArgs[i] === '-vsync' && rawEncoderArgs[i + 1] === '2') {
+      sanitizedArgs.push('-vsync', 'cfr')
+      i++
+      continue
+    }
+    sanitizedArgs.push(rawEncoderArgs[i])
+  }
+
+  console.log(`[PreTranscode] Starting pre-transcode of ${clips.length} clips to uniform format...`)
+  console.log(`[PreTranscode] vf filter: ${vfFilter}`)
+
+  for (let i = 0; i < clips.length; i++) {
+    // Check cancel
+    if (videoJobManager.isCancelled(requestId)) {
+      throw new Error('Đã dừng bởi người dùng')
+    }
+
+    const clip = clips[i]
+    const outputFile = path.join(tempDir, `pre_${String(i).padStart(5, '0')}.mp4`)
+
+    await new Promise<void>((resolve, reject) => {
+      let settled = false
+      const safeResolve = () => { if (!settled) { settled = true; resolve() } }
+      const safeReject = (err: Error) => { if (!settled) { settled = true; reject(err) } }
+
+      const args = [
+        '-hide_banner',
+        '-y',
+        '-fflags', '+genpts+igndts+discardcorrupt',
+        '-i', clip.path,
+        '-vf', vfFilter,
+        ...sanitizedArgs,
+        '-map', '0:v:0',
+        // Không cần audio — audio sẽ được mux từ file audio riêng ở Pass 2
+        '-an',
+        '-avoid_negative_ts', 'make_zero',
+        '-movflags', '+faststart',
+        outputFile,
+      ]
+
+      const proc = spawn(ffmpegPath, args, { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] })
+
+      // Register để cancel
+      const childRequestId = `${requestId}-pretranscode-${i}`
+      videoJobManager.registerJob(childRequestId, proc)
+
+      // Per-clip wall-clock timeout: 10 minutes max per clip
+      const CLIP_TIMEOUT_MS = 10 * 60 * 1000
+      const clipTimer = setTimeout(() => {
+        if (!proc.killed) {
+          console.warn(`[PreTranscode] Clip ${i + 1}/${clips.length} timed out after ${CLIP_TIMEOUT_MS / 1000}s, killing...`)
+          proc.kill('SIGTERM')
+          setTimeout(() => { if (!proc.killed) proc.kill('SIGKILL') }, 2000)
+          safeReject(new Error(`[PreTranscode] Clip ${i + 1}/${clips.length} timed out after ${CLIP_TIMEOUT_MS / 60000} phút: ${path.basename(clip.path)}`))
+        }
+      }, CLIP_TIMEOUT_MS)
+
+      proc.stderr?.on('data', (data: Buffer) => {
+        if (videoJobManager.isCancelled(requestId)) {
+          if (!proc.killed) {
+            proc.kill('SIGTERM')
+            setTimeout(() => { if (!proc.killed) proc.kill('SIGKILL') }, 1000)
+          }
+          safeReject(new Error('Đã dừng bởi người dùng'))
+          return
+        }
+
+        const text = data.toString('utf-8')
+        const speedMatch = text.match(/speed=\s*([0-9.]+)x/i)
+        if (speedMatch) {
+          const speed = parseFloat(speedMatch[1])
+          if (!isNaN(speed) && speed > 0) {
+            lastSpeedX = speed
+          }
+        }
+
+        // Emit progress: pass 1 chiếm 0-70% tổng tiến trình
+        if (onProgress) {
+          const clipProgress = (i / clips.length) * 70
+          onProgress(clipProgress, lastSpeedX)
+        }
+      })
+
+      proc.on('error', (err) => { clearTimeout(clipTimer); safeReject(err) })
+      proc.on('close', (code) => {
+        clearTimeout(clipTimer)
+        if (videoJobManager.isCancelled(requestId)) {
+          safeReject(new Error('Đã dừng bởi người dùng'))
+          return
+        }
+        if (code === 0 && fs.existsSync(outputFile)) {
+          safeResolve()
+        } else {
+          safeReject(new Error(`[PreTranscode] Failed clip ${i + 1}/${clips.length}: ${path.basename(clip.path)} (code ${code})`))
+        }
+      })
+    })
+
+    transcodedPaths.push(outputFile)
+
+    // Log progress mỗi 50 clip hoặc clip cuối
+    if ((i + 1) % 50 === 0 || i === clips.length - 1) {
+      console.log(`[PreTranscode] Completed ${i + 1}/${clips.length} clips`)
+    }
+
+    if (onProgress) {
+      onProgress(((i + 1) / clips.length) * 70, lastSpeedX)
+    }
+  }
+
+  console.log(`[PreTranscode] ✓ All ${clips.length} clips pre-transcoded to uniform format`)
+  return transcodedPaths
+}
+
+/**
+ * Parse danh sách clip (path + duration) từ concat list file.
+ * Format concat list: "file 'path'\ninpoint 0\nduration X.XXXXXX"
+ */
+function parseClipsFromConcatList(listContent: string): Array<{ path: string; durationSec: number }> {
+  const clips: Array<{ path: string; durationSec: number }> = []
+  const lines = listContent.split('\n').map(l => l.trim()).filter(Boolean)
+
+  let currentPath: string | null = null
+  let currentDuration = 0
+
+  for (const line of lines) {
+    const fileMatch = line.match(/^file\s+'(.+?)'\s*$/)
+    if (fileMatch) {
+      // Nếu đang có clip trước đó, push nó
+      if (currentPath !== null) {
+        clips.push({ path: currentPath, durationSec: currentDuration })
+      }
+      // Unescape path: FFmpeg concat list dùng \' cho single quote
+      // và forward slash (đã normalize từ Windows backslash)
+      let filePath = fileMatch[1].replace(/\\'/g, "'")
+      // On Windows, convert forward slashes back to backslashes for fs access
+      if (process.platform === 'win32') {
+        filePath = filePath.replace(/\//g, '\\')
+      }
+      currentPath = filePath
+      currentDuration = 0
+      continue
+    }
+
+    const durationMatch = line.match(/^duration\s+([0-9.]+)\s*$/)
+    if (durationMatch && currentPath !== null) {
+      currentDuration = parseFloat(durationMatch[1]) || 0
+    }
+    // 'inpoint 0' và các directive khác → bỏ qua
+  }
+
+  // Push clip cuối cùng
+  if (currentPath !== null) {
+    clips.push({ path: currentPath, durationSec: currentDuration })
+  }
+
+  return clips
+}
+
 interface RunFinalCommandOptions {
   requestId: string
   totalDurationSec: number
@@ -1007,30 +1246,35 @@ async function runFinalCommand(opts: RunFinalCommandOptions): Promise<void> {
 
   const codec = audioCodec?.toLowerCase() ?? null
   const needAudioEncode = !codec || (codec !== 'aac' && codec !== 'mp3')
-
-  // vf filter implies re-encode (can't copy-stream with filter)
   const needsReencode = forceReencode || needAudioEncode || normalizeAudio || !!normalizeVfFilter
+
+  // ═══════════════════════════════════════════════════════════════
+  // STRATEGY:
+  //   Khi có normalizeVfFilter (re-encode + scale/fps filter):
+  //     → Dùng 2-PASS APPROACH để tránh frame freeze triệt để
+  //     Pass 1: Pre-transcode từng clip riêng lẻ → uniform format
+  //     Pass 2: Concat COPY + mux audio → final output
+  //
+  //   Khi KHÔNG có vf filter (copy-stream hoặc re-encode đơn giản):
+  //     → Dùng single-step approach (cũ)
+  // ═══════════════════════════════════════════════════════════════
+  if (normalizeVfFilter) {
+    console.log('[FinalExport] *** 2-PASS MODE *** vf filter active → pre-transcode từng clip để tránh frame freeze')
+    await runFinalCommand_TwoPass(opts)
+    return
+  }
+
+  // ─── SINGLE-STEP APPROACH (copy-stream hoặc re-encode đơn giản không có vf filter) ───
   const encoderChoice = useGpuEncoding || 'auto'
   const { args: rawVideoCodecArgs, usedEncoder, gpuInfo } = needsReencode
     ? await buildVideoEncoderArgsWithChoice(true, encoderChoice, 'fast')
     : { args: ['-c:v', 'copy'], usedEncoder: 'cpu' as const, gpuInfo: null }
 
-  // Sanitize codec args for smooth output:
-  // 1. When software -vf filter is used, frames MUST be in CPU memory → strip -hwaccel
-  //    (h264_nvenc + -hwaccel nvdec keeps frames on GPU → software scale/pad/fps silently skipped)
-  // 2. Always replace -vsync 2 (VFR passthrough) with -vsync cfr when re-encoding so that
-  //    concat clips with different FPS produce stable timestamps (prevents black frames / tearing
-  //    at every scene transition).
   let videoCodecArgs = rawVideoCodecArgs
   if (needsReencode) {
+    // Replace -vsync 2 → cfr
     const sanitized: string[] = []
     for (let i = 0; i < rawVideoCodecArgs.length; i++) {
-      // Strip -hwaccel + value when software vf filter is active
-      if (normalizeVfFilter && rawVideoCodecArgs[i] === '-hwaccel') {
-        i++ // skip -hwaccel AND its value (e.g. 'nvdec', 'd3d11va', 'cuda')
-        continue
-      }
-      // Always replace VFR passthrough with CFR for stable timestamps
       if (rawVideoCodecArgs[i] === '-vsync' && rawVideoCodecArgs[i + 1] === '2') {
         sanitized.push('-vsync', 'cfr')
         i++
@@ -1039,33 +1283,317 @@ async function runFinalCommand(opts: RunFinalCommandOptions): Promise<void> {
       sanitized.push(rawVideoCodecArgs[i])
     }
     videoCodecArgs = sanitized
-    if (normalizeVfFilter) {
-      console.log('[FinalExport] vf filter active → stripped -hwaccel, using -vsync cfr')
-    } else {
-      console.log('[FinalExport] re-encode mode → using -vsync cfr for stable timestamps')
-    }
+    console.log('[FinalExport] re-encode mode (no vf filter) → using -vsync cfr')
+  } else {
+    videoCodecArgs = ['-c:v', 'copy', '-fps_mode', 'passthrough']
+    console.log('[FinalExport] copy-stream mode → -fps_mode passthrough + concat duration metadata')
   }
 
   if (needsReencode) {
     if (usedEncoder === 'gpu' && gpuInfo) {
-      console.log(`[FinalExport] Using ${(gpuInfo as any).encoder?.toUpperCase()} encoder for video encoding`)
+      console.log(`[FinalExport] Using ${(gpuInfo as any).encoder?.toUpperCase()} encoder`)
     } else {
       console.log(`[FinalExport] Using CPU encoder (libx264)`)
     }
   }
 
-  // Single-step export
+  // Single-step FFmpeg command
+  await runFinalCommand_SingleStep({
+    ffmpegPath,
+    requestId,
+    totalDurationSec,
+    videoListPath,
+    audioPath,
+    outputPath,
+    videoCodecArgs,
+    needsReencode,
+    forceReencode,
+    needAudioEncode,
+    normalizeAudio,
+    normalizeVfFilter: null, // single-step không dùng vf filter (đã xử lý ở trên)
+    emitProgress,
+  })
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 2-PASS IMPLEMENTATION
+// ═══════════════════════════════════════════════════════════════
+async function runFinalCommand_TwoPass(opts: RunFinalCommandOptions): Promise<void> {
+  const {
+    requestId,
+    totalDurationSec,
+    videoListPath,
+    audioPath,
+    outputPath,
+    audioCodec,
+    forceReencode = false,
+    normalizeAudio = false,
+    emitProgress,
+    useGpuEncoding,
+    normalizeVfFilter,
+  } = opts
+  const ffmpegPath = getFfmpegExecutable()
+
+  // Đọc concat list để lấy danh sách clip
+  const listContent = await fsp.readFile(videoListPath, 'utf-8')
+  const clips = parseClipsFromConcatList(listContent)
+
+  if (clips.length === 0) {
+    throw new Error('[FinalExport 2-Pass] Concat list rỗng, không có clip nào để transcode')
+  }
+
+  console.log(`[FinalExport 2-Pass] Parsed ${clips.length} clips from concat list`)
+
+  // Tạo temp dir cho pre-transcoded clips
+  const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'finalexport-pretranscode-'))
+  console.log(`[FinalExport 2-Pass] Temp dir: ${tempDir}`)
+
+  try {
+    // ──── PASS 1: Pre-transcode từng clip riêng lẻ ────
+    console.log(`[FinalExport 2-Pass] === PASS 1: Pre-transcoding ${clips.length} clips ===`)
+    emitProgress({
+      requestId,
+      stage: 'export',
+      percent: 0,
+      timeSec: 0,
+      totalDurationSec,
+      status: `Pass 1/2: Đang chuẩn hóa ${clips.length} video clips...`,
+    })
+
+    const transcodedPaths = await preTranscodeClips({
+      clips,
+      tempDir,
+      vfFilter: normalizeVfFilter!,
+      useGpuEncoding: useGpuEncoding || 'auto',
+      requestId,
+      onProgress: (percent, speedX) => {
+        emitProgress({
+          requestId,
+          stage: 'export',
+          percent: Math.min(69, percent),
+          timeSec: (percent / 100) * totalDurationSec,
+          totalDurationSec,
+          speedX: speedX ?? undefined,
+          status: `Pass 1/2: Đang chuẩn hóa video clips (${Math.round(percent)}%)...`,
+        })
+      },
+    })
+
+    // Check cancel
+    if (videoJobManager.isCancelled(requestId)) {
+      throw new Error('Đã dừng bởi người dùng')
+    }
+
+    // ──── PASS 2: Concat COPY + mux audio ────
+    console.log(`[FinalExport 2-Pass] === PASS 2: Concat copy ${transcodedPaths.length} pre-transcoded clips + mux audio ===`)
+    emitProgress({
+      requestId,
+      stage: 'export',
+      percent: 70,
+      timeSec: 0,
+      totalDurationSec,
+      status: `Pass 2/2: Đang ghép video + audio...`,
+    })
+
+    // Build concat list cho các clip đã transcode (KHÔNG cần inpoint/duration vì uniform format)
+    const pass2ListPath = path.join(tempDir, 'concat_pass2.txt')
+    const pass2ListContent = transcodedPaths
+      .map(p => `file '${escapePathForFfmpegList(p)}'`)
+      .join('\n')
+    await fsp.writeFile(pass2ListPath, pass2ListContent, 'utf-8')
+
+    // Audio args
+    const codec = audioCodec?.toLowerCase() ?? null
+    const needAudioEncode = !codec || (codec !== 'aac' && codec !== 'mp3')
+    const shouldEncodeAudio = forceReencode || needAudioEncode || normalizeAudio
+    const audioCodecArgs = shouldEncodeAudio
+      ? ['-c:a', 'aac', '-b:a', '384k', '-ar', '48000', '-ac', '2']
+      : ['-c:a', 'copy']
+    const audioFilterArgs = normalizeAudio
+      ? ['-af', 'loudnorm=I=-16:TP=-1.5:LRA=11']
+      : []
+
+    // Pass 2 FFmpeg: concat copy (video đã uniform) + mux audio
+    const pass2Args = [
+      '-hide_banner', '-loglevel', 'error', '-stats',
+      '-fflags', '+genpts',
+      '-f', 'concat', '-safe', '0',
+      '-i', pass2ListPath,
+      '-i', audioPath,
+      '-map', '0:v:0',
+      '-map', '1:a:0',
+      // COPY video vì đã pre-transcode uniform (cùng resolution, FPS, codec, pixel format)
+      // → concat copy KHÔNG reinit decoder → KHÔNG freeze frame
+      '-c:v', 'copy',
+      ...audioFilterArgs,
+      ...audioCodecArgs,
+      '-max_muxing_queue_size', '2048',
+      '-avoid_negative_ts', 'make_zero',
+      '-movflags', '+faststart',
+      '-t', totalDurationSec.toFixed(3),
+      '-y',
+      outputPath,
+    ]
+
+    await new Promise<void>((resolve, reject) => {
+      let settled = false
+      const safeResolve = () => { if (!settled) { settled = true; resolve() } }
+      const safeReject = (err: Error) => { if (!settled) { settled = true; reject(err) } }
+
+      const child = spawn(ffmpegPath, pass2Args, { windowsHide: true })
+      videoJobManager.registerJob(requestId, child)
+      child.stdout?.resume()
+
+      let lastEmit = 0
+      let lastTimeSec: number | null = null
+      const stderrLines: string[] = []
+
+      child.stderr?.on('data', (chunk: Buffer) => {
+        if (videoJobManager.isCancelled(requestId)) {
+          if (!child.killed) {
+            child.kill('SIGTERM')
+            setTimeout(() => { if (!child.killed) child.kill('SIGKILL') }, 2000)
+          }
+          return
+        }
+
+        const text = chunk.toString('utf-8')
+        stderrLines.push(...text.split(/\r?\n/).filter(Boolean))
+        if (stderrLines.length > 80) stderrLines.splice(0, stderrLines.length - 80)
+
+        const timeSec = parseTimeFromChunk(text)
+        const speedX = parseSpeedFromChunk(text)
+        if (timeSec !== null && totalDurationSec > 0) {
+          // Pass 2 chiếm 70-100% tiến trình tổng
+          const pass2Percent = Math.min(100, (timeSec / totalDurationSec) * 100)
+          const totalPercent = 70 + (pass2Percent / 100) * 30
+          const now = Date.now()
+          if (now - lastEmit > 100) {
+            lastEmit = now
+            const etaSec = speedX && speedX > 0 ? Math.max(0, (totalDurationSec - timeSec) / Math.max(speedX, 0.1)) : undefined
+            emitProgress({
+              requestId,
+              stage: 'export',
+              percent: totalPercent,
+              timeSec,
+              totalDurationSec,
+              speedX: speedX ?? undefined,
+              etaSec,
+              status: `Pass 2/2: Đang ghép video + audio...`,
+            })
+          }
+          lastTimeSec = timeSec
+        }
+      })
+
+      child.on('error', (err) => safeReject(new Error(`FFmpeg Pass 2 spawn error: ${err.message}`)))
+
+      child.on('close', async (code) => {
+        if (videoJobManager.isCancelled(requestId)) {
+          safeReject(new Error('Đã dừng bởi người dùng'))
+          return
+        }
+
+        if (code === 0) {
+          emitProgress({
+            requestId,
+            stage: 'finishing',
+            percent: 100,
+            timeSec: totalDurationSec,
+            totalDurationSec,
+            speedX: undefined,
+            etaSec: 0,
+          })
+          safeResolve()
+        } else {
+          // Kiểm tra output file
+          try {
+            const stats = await fsp.stat(outputPath)
+            if (stats.size > 0) {
+              const stderrText = stderrLines.join('\n')
+              const isBufferQueueWarning = /buffers queued|Error marking filters as finished/i.test(stderrText)
+              if (isBufferQueueWarning) {
+                console.warn(`[FinalExport 2-Pass] Pass 2 exited with code ${code} but file exists (${formatBytes(stats.size)}). Verifying...`)
+                try {
+                  const probeResult = await probeFile(outputPath)
+                  const probeDuration = probeResult?.format?.duration ?? 0
+                  if (probeDuration > 0 && probeDuration >= totalDurationSec * 0.5) {
+                    console.warn(`[FinalExport 2-Pass] Probe OK: duration=${probeDuration.toFixed(1)}s. Accepting.`)
+                    emitProgress({ requestId, stage: 'finishing', percent: 100, timeSec: totalDurationSec, totalDurationSec, speedX: undefined, etaSec: 0 })
+                    safeResolve()
+                    return
+                  }
+                } catch (probeErr) {
+                  console.error(`[FinalExport 2-Pass] Probe failed:`, probeErr)
+                }
+              }
+            }
+          } catch { /* file not found */ }
+
+          const tail = stderrLines.slice(-10).join('\n')
+          safeReject(new Error(`FFmpeg Pass 2 (concat copy) failed với mã ${code}. stderr:\n${tail}`))
+        }
+      })
+    })
+
+    console.log(`[FinalExport 2-Pass] ✓ Export complete: ${outputPath}`)
+  } finally {
+    // Cleanup temp dir
+    try {
+      await fsp.rm(tempDir, { recursive: true, force: true })
+      console.log(`[FinalExport 2-Pass] Cleaned up temp dir`)
+    } catch (cleanupErr) {
+      console.warn(`[FinalExport 2-Pass] Failed to cleanup temp dir:`, cleanupErr)
+    }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// SINGLE-STEP IMPLEMENTATION (giữ lại cho copy-stream / re-encode đơn giản)
+// ═══════════════════════════════════════════════════════════════
+interface RunFinalCommandSingleStepOptions {
+  ffmpegPath: string
+  requestId: string
+  totalDurationSec: number
+  videoListPath: string
+  audioPath: string
+  outputPath: string
+  videoCodecArgs: string[]
+  needsReencode: boolean
+  forceReencode: boolean
+  needAudioEncode: boolean
+  normalizeAudio: boolean
+  normalizeVfFilter: string | null
+  emitProgress: (payload: FinalExportProgressPayload) => void
+}
+
+async function runFinalCommand_SingleStep(opts: RunFinalCommandSingleStepOptions): Promise<void> {
+  const {
+    ffmpegPath,
+    requestId,
+    totalDurationSec,
+    videoListPath,
+    audioPath,
+    outputPath,
+    videoCodecArgs,
+    needsReencode,
+    forceReencode,
+    needAudioEncode,
+    normalizeAudio,
+    normalizeVfFilter,
+    emitProgress,
+  } = opts
+
   await new Promise<void>((resolve, reject) => {
     let settled = false
     const safeResolve = () => { if (!settled) { settled = true; resolve() } }
     const safeReject = (err: Error) => { if (!settled) { settled = true; reject(err) } }
 
-    const shouldNormalizeAudio = normalizeAudio
-    const shouldEncodeAudio = forceReencode || needAudioEncode || shouldNormalizeAudio
+    const shouldEncodeAudio = forceReencode || needAudioEncode || normalizeAudio
     const audioCodecArgs = shouldEncodeAudio
       ? ['-c:a', 'aac', '-b:a', '384k', '-ar', '48000', '-ac', '2']
       : ['-c:a', 'copy']
-    const audioFilterArgs = shouldNormalizeAudio
+    const audioFilterArgs = normalizeAudio
       ? ['-af', 'loudnorm=I=-16:TP=-1.5:LRA=11']
       : []
 
@@ -1074,9 +1602,8 @@ async function runFinalCommand(opts: RunFinalCommandOptions): Promise<void> {
       '-loglevel',
       'error',
       '-stats',
-      // Regenerate PTS from DTS when concat clips have discontinuous/invalid timestamps.
-      // +igndts: bỏ qua DTS không hợp lệ (clip reset PTS về 0) để tránh freeze frame tại điểm chuyển clip.
-      '-fflags', '+genpts+igndts',
+      '-fflags', '+genpts+igndts+discardcorrupt',
+      ...(needsReencode ? ['-reinit_filter', '0'] : []),
       '-f',
       'concat',
       '-safe',
@@ -1091,10 +1618,10 @@ async function runFinalCommand(opts: RunFinalCommandOptions): Promise<void> {
     args.push(
       '-map', '1:a:0',
       ...videoCodecArgs,
-      // vf filter for resolution/FPS normalization (letterbox/pillarbox)
       ...(normalizeVfFilter ? ['-vf', normalizeVfFilter] : []),
       ...audioFilterArgs,
       ...audioCodecArgs,
+      '-max_muxing_queue_size', '2048',
       '-avoid_negative_ts',
       'make_zero',
       '-movflags', '+faststart',
@@ -1106,8 +1633,18 @@ async function runFinalCommand(opts: RunFinalCommandOptions): Promise<void> {
 
     const child = spawn(ffmpegPath, args, { windowsHide: true })
     videoJobManager.registerJob(requestId, child)
-    // Drain stdout để tránh pipe buffer đầy → FFmpeg bị block/treo với file dài
     child.stdout?.resume()
+
+    // Per-job wall-clock timeout: 2 hours max (videos can be long)
+    const JOB_TIMEOUT_MS = 2 * 60 * 60 * 1000
+    const jobTimer = setTimeout(() => {
+      if (!child.killed) {
+        console.warn(`[FinalExport] Job ${requestId} timed out after ${JOB_TIMEOUT_MS / 60000} minutes, killing...`)
+        child.kill('SIGTERM')
+        setTimeout(() => { if (!child.killed) child.kill('SIGKILL') }, 3000)
+        safeReject(new Error(`FFmpeg export timed out after ${JOB_TIMEOUT_MS / 60000} phút`))
+      }
+    }, JOB_TIMEOUT_MS)
 
     let lastEmit = 0
     let lastTimeSec: number | null = null
@@ -1116,7 +1653,6 @@ async function runFinalCommand(opts: RunFinalCommandOptions): Promise<void> {
     let dropWarned = false
 
     child.stderr?.on('data', (chunk: Buffer) => {
-      // Kiểm tra cancel trong quá trình xử lý
       if (videoJobManager.isCancelled(requestId)) {
         if (!child.killed) {
           child.kill('SIGTERM')
@@ -1128,7 +1664,7 @@ async function runFinalCommand(opts: RunFinalCommandOptions): Promise<void> {
         }
         return
       }
-      
+
       const text = chunk.toString('utf-8')
       stderrLines.push(...text.split(/\r?\n/).filter(Boolean))
       if (stderrLines.length > 80) {
@@ -1139,7 +1675,6 @@ async function runFinalCommand(opts: RunFinalCommandOptions): Promise<void> {
       if (timeSec !== null && totalDurationSec > 0) {
         const percent = Math.min(100, (timeSec / totalDurationSec) * 100)
         const now = Date.now()
-        // Giảm debounce từ 200ms xuống 100ms để cập nhật thường xuyên hơn
         if (now - lastEmit > 100) {
           lastEmit = now
           const etaSec =
@@ -1154,11 +1689,9 @@ async function runFinalCommand(opts: RunFinalCommandOptions): Promise<void> {
             etaSec,
           })
         }
-        // Lưu lại timeSec cuối cùng để dùng khi close
         lastTimeSec = timeSec
       }
 
-      // Log drop-frame / retry warnings if FFmpeg báo
       if (!dropWarned && /drop=\d+/i.test(text)) {
         dropWarned = true
         console.warn('[FinalExport] FFmpeg báo drop-frame trong quá trình export:\n', text)
@@ -1176,18 +1709,18 @@ async function runFinalCommand(opts: RunFinalCommandOptions): Promise<void> {
     })
 
     child.on('error', async (error) => {
+      clearTimeout(jobTimer)
       safeReject(new Error(`FFmpeg spawn error: ${error.message}`))
     })
 
     child.on('close', async (code) => {
-      // Check cancel trước — nếu bị cancel thì reject với thông báo rõ ràng
+      clearTimeout(jobTimer)
       if (videoJobManager.isCancelled(requestId)) {
         safeReject(new Error('Đã dừng bởi người dùng'))
         return
       }
 
       if (code === 0) {
-        // Đảm bảo emit progress 100% khi hoàn thành (tránh progress đứng ở ~99%)
         const finalTimeSec = lastTimeSec !== null && lastTimeSec >= totalDurationSec ? totalDurationSec : totalDurationSec
         emitProgress({
           requestId,
@@ -1200,7 +1733,6 @@ async function runFinalCommand(opts: RunFinalCommandOptions): Promise<void> {
         })
         safeResolve()
       } else {
-        // FFmpeg exit code != 0 — kiểm tra xem có phải warning vô hại không
         try {
           const stats = await fsp.stat(outputPath)
           if (stats.size > 0) {
@@ -1208,7 +1740,6 @@ async function runFinalCommand(opts: RunFinalCommandOptions): Promise<void> {
             const isBufferQueueWarning = /buffers queued|Error marking filters as finished/i.test(stderrText)
 
             if (isBufferQueueWarning) {
-              // Warning thường gặp — nhưng phải verify output trước khi accept
               console.warn(
                 `[FinalExport] FFmpeg exited with code ${code}, file tồn tại (${formatBytes(stats.size)}). ` +
                 `Đang probe verify output trước khi accept...`
@@ -1216,7 +1747,6 @@ async function runFinalCommand(opts: RunFinalCommandOptions): Promise<void> {
               try {
                 const probeResult = await probeFile(outputPath)
                 const probeDuration = probeResult?.format?.duration ?? 0
-                // Probe OK + duration hợp lý (>= 50% expected) → accept
                 if (probeDuration > 0 && probeDuration >= totalDurationSec * 0.5) {
                   console.warn(
                     `[FinalExport] Probe OK: duration=${probeDuration.toFixed(1)}s (expected ~${totalDurationSec.toFixed(1)}s). Accepting output.`
@@ -1247,7 +1777,6 @@ async function runFinalCommand(opts: RunFinalCommandOptions): Promise<void> {
           // File không tồn tại hoặc không thể đọc được, tiếp tục reject
         }
 
-        // Reject: file không tồn tại, rỗng, probe fail, hoặc không phải buffer warning
         const tail = stderrLines.slice(-10).join('\n')
         safeReject(new Error(`FFmpeg final export failed với mã ${code}. stderr:\n${tail}`))
       }

@@ -114,7 +114,7 @@ export default function BatchModeTab() {
 
     if (typeof w.api.autopilot.onStatus === 'function') {
       statusUnsub = w.api.autopilot.onStatus((progress: any) => {
-        if (progress.status === 'completed' || progress.status === 'error') {
+        if (progress.status === 'completed' || progress.status === 'completed_with_errors' || progress.status === 'error') {
           // Batch runner sẽ xử lý chuyển genre tiếp theo
           // Dùng ref thay vì closure để tránh stale currentRunIndex
           const idx = currentRunIndexRef.current
@@ -122,7 +122,7 @@ export default function BatchModeTab() {
             if (i !== idx) return b
             return {
               ...b,
-              status: progress.status === 'completed' ? 'completed' : 'error',
+              status: progress.status === 'error' ? 'error' : 'completed',
               error: progress.error,
             }
           }))
@@ -843,11 +843,15 @@ async function waitForAutopilotComplete(w: any, timeoutMs = 4 * 60 * 60 * 1000, 
       }
       try {
         const status = await w.api.autopilot.getStatus()
-        if (status?.status === 'idle' || status?.status === 'completed' || status?.status === 'completed_with_errors' || status?.status === 'error' || status?.status === 'cancelling') {
+        // Only exit on truly terminal states — NOT 'cancelling' (still winding down)
+        if (status?.status === 'idle' || status?.status === 'completed' || status?.status === 'completed_with_errors' || status?.status === 'error') {
           resolve()
           return
         }
-      } catch { /* ignore */ }
+      } catch (err) {
+        // Surface IPC errors — don't swallow silently for hours
+        console.warn('[BatchMode] getStatus poll error:', err)
+      }
       setTimeout(check, 2000)
     }
     // Đợi 3s trước lần check đầu tiên (cho autopilot khởi động)
