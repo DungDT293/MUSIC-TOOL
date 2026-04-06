@@ -419,12 +419,29 @@ export default function PreviewViewport({ onTimelineCompute, audioRef: externalA
     }
   }, [bgEngine])
 
-  // Bước 6: attachAudio — MUST be after mount effect so runtimeRef.current exists.
+  // Bước 6: attachAudio — listen to the <audio> element's 'play' event
+  // so we always call attachAudio at the right moment (user gesture → play()).
+  // This mirrors how handlePlayDemo manually calls attachAudio after play.
+  // Also handles initial audioFileUrl load + re-attach on track change.
   useEffect(() => {
-    if (!audioFileUrl || !externalAudioRef?.current || !runtimeRef.current) return
+    if (!audioFileUrl || !externalAudioRef?.current) return
     const el = externalAudioRef.current
-    runtimeRef.current.attachAudio(el)
-  }, [audioFileUrl, externalAudioRef])
+    // Attach immediately if runtime is ready (for track changes while paused)
+    if (runtimeRef.current) {
+      runtimeRef.current.attachAudio(el)
+    }
+    // Also listen to 'play' event — ensures AudioContext is connected
+    // right when user clicks Play (required for browser autoplay policy)
+    const onPlay = () => {
+      if (runtimeRef.current) {
+        runtimeRef.current.attachAudio(el)
+      }
+    }
+    el.addEventListener('play', onPlay)
+    return () => {
+      el.removeEventListener('play', onPlay)
+    }
+  }, [audioFileUrl]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const el = viewportRef.current

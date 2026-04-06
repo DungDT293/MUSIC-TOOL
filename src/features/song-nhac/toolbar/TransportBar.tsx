@@ -38,13 +38,36 @@ export default function TransportBar({
   const [currentTimeSec, setCurrentTimeSec] = useState(0)
   const [isDragging, setIsDragging] = useState(false)
   const [dragValueSec, setDragValueSec] = useState(0)
+  const [nativeDuration, setNativeDuration] = useState(0)
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const setPlayheadTimeSec = useSongNhacTimelineStore((s) => s.setPlayheadTimeSec)
 
-  const hasDuration = durationSec > 0
+  // Use durationSec (from decode) OR native <audio>.duration as fallback for seek
+  const effectiveDuration = durationSec > 0 ? durationSec : nativeDuration
+  const hasDuration = effectiveDuration > 0
   const hasAudio = hasAudioProp || hasDuration
   const displayCurrent = isDragging ? dragValueSec : currentTimeSec
-  const clampedDuration = Math.max(0, durationSec)
+  const clampedDuration = Math.max(0, effectiveDuration)
+
+  // Listen for <audio> loadedmetadata/durationchange to get native duration immediately
+  useEffect(() => {
+    const el = audioRef.current
+    if (!el) return
+    const onDuration = () => {
+      const d = el.duration
+      if (Number.isFinite(d) && d > 0) {
+        setNativeDuration(d)
+      }
+    }
+    // Check immediately in case already loaded
+    onDuration()
+    el.addEventListener('loadedmetadata', onDuration)
+    el.addEventListener('durationchange', onDuration)
+    return () => {
+      el.removeEventListener('loadedmetadata', onDuration)
+      el.removeEventListener('durationchange', onDuration)
+    }
+  }, [audioRef, hasAudioProp]) // re-run when audio source changes
 
   // Phase 1: Sync timeline playhead with audio.currentTime (interval + on no-audio reset)
   useEffect(() => {

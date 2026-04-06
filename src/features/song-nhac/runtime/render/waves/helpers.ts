@@ -36,6 +36,8 @@ export interface VisualizerColorOptions {
   speed?: number
   /** Number of bars for bars / circlebars styles */
   barCount?: number
+  /** Width of each bar in pixels */
+  barWidth?: number
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

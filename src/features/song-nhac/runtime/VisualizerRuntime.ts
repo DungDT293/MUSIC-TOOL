@@ -331,7 +331,10 @@ export class VisualizerRuntime {
             bloomThreshold: 0.1,
           })
           const canvas = this.currentSet!.webglCanvas
-          this.threeEngine.initWithCanvas(canvas, {
+          // FIX: await initWithCanvas — it's async (loads THREE + postprocessing).
+          // Without await, threeInited is set true before engine is ready,
+          // causing render() to early-return on every frame until imports finish.
+          await this.threeEngine.initWithCanvas(canvas, {
             width: canvas.width,
             height: canvas.height,
           })

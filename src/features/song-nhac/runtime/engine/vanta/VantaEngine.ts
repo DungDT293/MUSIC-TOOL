@@ -166,7 +166,6 @@ export class VantaEngine implements WebGLVisualizerEngine {
       // FIX V2: Use a proper class extends pattern instead of a plain function wrapper.
       // A plain function breaks `new.target`, prototype chain, and instanceof checks.
       const OriginalRenderer = THREE.WebGLRenderer
-      const patchedTHREE = Object.create(THREE)
 
       // Use a class that properly extends the original renderer
       class PatchedWebGLRenderer extends OriginalRenderer {
@@ -176,12 +175,20 @@ export class VantaEngine implements WebGLVisualizerEngine {
           super(params)
         }
       }
-      patchedTHREE.WebGLRenderer = PatchedWebGLRenderer
+
+      // FIX: Use spread instead of Object.create — ESM Module namespace objects
+      // don't expose properties via prototype chain (Vite bundles them as non-enumerable getters).
+      // Object.create(ESM_namespace) → p.MeshPhongMaterial = undefined → crash.
+      const patchedTHREE = { ...THREE, WebGLRenderer: PatchedWebGLRenderer }
 
       // Cấu hình chung cho mọi effect
       const baseConfig: any = {
         el: this.container,
         THREE: patchedTHREE,
+        // FIX: forceAnimate = true — Vanta's internal isOnScreen() returns false
+        // when container is at left:-9999px (offscreen), so renderer.render() never fires.
+        // forceAnimate bypasses this check.
+        forceAnimate: true,
         mouseControls: false,
         touchControls: false,
         gyroControls: false,

@@ -85,6 +85,8 @@ export interface DrawableLayer {
   mirror?: boolean
   /** barCount for bars / circlebars styles */
   barCount?: number
+  /** barWidth for bars (pixel width of each bar) */
+  barWidth?: number
   /** Animation speed multiplier (0–3) */
   speed?: number
   /** Hiệu ứng filter cho image/video/text */
@@ -564,6 +566,7 @@ export function drawLayers(
           glowIntensity: layer.glowIntensity,
           speed: layer.speed,
           barCount: layer.barCount,
+          barWidth: layer.barWidth,
         }
 
         // Mirror: flip horizontally around center — draw normal side first, then mirrored

@@ -89,6 +89,7 @@ export function songNhacLayersToDrawable(layers: SongNhacLayer[]): DrawableLayer
             glowIntensity: viz.glowIntensity,
             mirror: viz.mirror,
             barCount: viz.barCount,
+            barWidth: viz.barWidth,
             speed: viz.speed,
           }
         }
