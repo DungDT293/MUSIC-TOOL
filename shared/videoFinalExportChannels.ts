@@ -197,6 +197,12 @@ export interface FinalExportDonePayload {
     durationSec: number
     tracklistFile?: string
   }[]
+  /** Jobs that failed during export (remaining jobs still completed) */
+  failedJobs?: {
+    jobIndex: number
+    fileName: string
+    error: string
+  }[]
 }
 
 export interface FinalExportErrorPayload {

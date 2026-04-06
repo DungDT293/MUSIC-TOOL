@@ -27,8 +27,9 @@ interface BatchGenre {
   // Overrides (giống Plan Mode — dùng chung type)
   overrides?: DayPlanDetailOverrides
   // Trạng thái chạy
-  status: 'pending' | 'running' | 'completed' | 'error'
+  status: 'pending' | 'running' | 'completed' | 'completed_with_errors' | 'error'
   error?: string
+  message?: string
 }
 
 export const BATCH_STORAGE_KEY = 'autopilotBatchConfigV1'
@@ -122,8 +123,11 @@ export default function BatchModeTab() {
             if (i !== idx) return b
             return {
               ...b,
-              status: progress.status === 'error' ? 'error' : 'completed',
+              status: progress.status === 'error' ? 'error'
+                : progress.status === 'completed_with_errors' ? 'completed_with_errors'
+                : 'completed',
               error: progress.error,
+              message: progress.message,
             }
           }))
         }
@@ -372,8 +376,9 @@ export default function BatchModeTab() {
   // Helpers
   const canStart = batches.length > 0 && batches.some(b => b.name.trim())
 
-  const completedCount = batches.filter(b => b.status === 'completed').length
+  const completedCount = batches.filter(b => b.status === 'completed' || b.status === 'completed_with_errors').length
   const errorCount = batches.filter(b => b.status === 'error').length
+  const partialCount = batches.filter(b => b.status === 'completed_with_errors').length
 
   // ── STYLES ──
   const inputStyle: React.CSSProperties = {
@@ -411,10 +416,12 @@ export default function BatchModeTab() {
         {batches.map((batch, idx) => {
           const isEditing = editingId === batch.id
           const statusColor = batch.status === 'completed' ? '#4ade80'
+            : batch.status === 'completed_with_errors' ? '#fbbf24'
             : batch.status === 'error' ? '#f87171'
             : batch.status === 'running' ? '#60a5fa'
             : '#6b7280'
           const statusIcon = batch.status === 'completed' ? 'Xong'
+            : batch.status === 'completed_with_errors' ? '⚠️'
             : batch.status === 'error' ? 'Lỗi'
             : batch.status === 'running' ? 'Đang chạy'
             : `${idx + 1}.`
@@ -448,7 +455,7 @@ export default function BatchModeTab() {
                   {batch.playlistCount} pl × {batch.minutesPerPlaylist} phút
                 </span>
                 <span style={{ fontSize: '11px', color: statusColor, fontWeight: 500 }}>
-                  {batch.status === 'running' ? 'Đang chạy...' : batch.status === 'completed' ? 'Xong' : batch.status === 'error' ? 'Lỗi' : ''}
+                  {batch.status === 'running' ? 'Đang chạy...' : batch.status === 'completed' ? 'Xong' : batch.status === 'completed_with_errors' ? 'Xong (có lỗi)' : batch.status === 'error' ? 'Lỗi' : ''}
                 </span>
                 {!isRunning && (
                   <div style={{ display: 'flex', gap: '4px' }} onClick={e => e.stopPropagation()}>
@@ -465,6 +472,24 @@ export default function BatchModeTab() {
                 )}
                 <span style={{ fontSize: '14px', color: '#6b7280' }}>{isEditing ? '^' : 'v'}</span>
               </div>
+
+              {/* Error/partial-success message bar */}
+              {(batch.status === 'error' || batch.status === 'completed_with_errors') && (batch.error || batch.message) && (
+                <div
+                  style={{
+                    padding: '6px 12px',
+                    fontSize: '11px',
+                    lineHeight: '1.5',
+                    color: batch.status === 'error' ? '#fca5a5' : '#fde68a',
+                    background: batch.status === 'error' ? 'rgba(239,68,68,0.1)' : 'rgba(251,191,36,0.1)',
+                    borderTop: `1px solid ${batch.status === 'error' ? 'rgba(239,68,68,0.2)' : 'rgba(251,191,36,0.2)'}`,
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word',
+                  }}
+                >
+                  {batch.message || batch.error}
+                </div>
+              )}
 
               {/* Expanded form */}
               {isEditing && (

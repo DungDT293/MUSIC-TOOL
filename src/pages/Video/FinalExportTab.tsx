@@ -264,12 +264,26 @@ function FinalExportTab() {
       isExportingRef.current = false
       setIsExporting(false)
       const totalOutputs = payload.outputs?.length ?? 0
-      setStatusText(
-        totalOutputs <= 1
-          ? 'Đã xuất video hoàn chỉnh.'
-          : `Đã xuất xong ${totalOutputs} video, mỗi video khớp với một audio trong playlist.`
-      )
-      setErrorMessage(null)
+      const failedCount = payload.failedJobs?.length ?? 0
+
+      if (failedCount > 0 && totalOutputs > 0) {
+        // Partial success
+        const failDetails = payload.failedJobs!
+          .map(f => `• Job ${f.jobIndex + 1} (${f.fileName}): ${f.error.slice(0, 100)}`)
+          .join('\n')
+        setStatusText(
+          `⚠️ Đã xuất ${totalOutputs} video thành công, ${failedCount} video thất bại.\n${failDetails}`
+        )
+        setErrorMessage(null)
+      } else {
+        setStatusText(
+          totalOutputs <= 1
+            ? 'Đã xuất video hoàn chỉnh.'
+            : `Đã xuất xong ${totalOutputs} video, mỗi video khớp với một audio trong playlist.`
+        )
+        setErrorMessage(null)
+      }
+
       const lastOutput = payload.outputs?.[payload.outputs.length - 1]
       setProgressState(
         lastOutput

@@ -1087,13 +1087,51 @@ async function runExportVideoWithOptions(
         emitLog('info', `[Bước 4] Đang xuất video ${currentIndex}/${totalOutputs}: ${payload.currentOutputFilename} (${p.toFixed(1)}%)`)
       }
     },
-    done: () => {
-      emit({
-        currentStep: 5,
-        stepPercent: 100,
-        message: `Ngày ${dateCode}: Hoàn tất xuất video hoàn chỉnh.`,
-      })
-      emitLog('info', `[Bước 5] ✓ Ngày ${dateCode}: Hoàn tất xuất ${playlists.length} video hoàn chỉnh!`)
+    done: (payload) => {
+      const failedCount = payload.failedJobs?.length ?? 0
+      const successCount = payload.outputs?.length ?? 0
+      const totalCount = successCount + failedCount
+
+      if (failedCount > 0 && successCount > 0) {
+        // Partial success
+        emit({
+          currentStep: 5,
+          stepPercent: 100,
+          message: `Ngày ${dateCode}: Hoàn tất — ${successCount}/${totalCount} video thành công, ${failedCount} thất bại.`,
+        })
+        emitLog('warn', `[Bước 5] ⚠️ Ngày ${dateCode}: ${successCount}/${totalCount} video thành công, ${failedCount} thất bại.`)
+        for (const f of payload.failedJobs!) {
+          emitLog('error', `[Bước 5]   ✗ Job ${f.jobIndex + 1} (${f.fileName}): ${f.error}`)
+        }
+      } else {
+        emit({
+          currentStep: 5,
+          stepPercent: 100,
+          message: `Ngày ${dateCode}: Hoàn tất xuất video hoàn chỉnh.`,
+        })
+      }
+
+      // Summary report
+      emitLog('info', `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`)
+      emitLog('info', `📊 BÁO CÁO NGÀY ${dateCode}`)
+      emitLog('info', `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`)
+      emitLog('info', `  Tổng số video: ${totalCount}`)
+      emitLog('info', `  ✅ Thành công: ${successCount}`)
+      if (failedCount > 0) {
+        emitLog('info', `  ❌ Thất bại: ${failedCount}`)
+        for (const f of payload.failedJobs!) {
+          emitLog('info', `     • Job ${f.jobIndex + 1} — ${f.fileName}: ${f.error.slice(0, 150)}`)
+        }
+      }
+      if (successCount > 0) {
+        emitLog('info', `  📁 Video output:`)
+        for (const out of payload.outputs) {
+          const fileName = out.videoFile.split(/[\\/]/).pop() || out.videoFile
+          const durMin = (out.durationSec / 60).toFixed(1)
+          emitLog('info', `     • ${fileName} (${durMin} phút)`)
+        }
+      }
+      emitLog('info', `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`)
     },
     error: (err) => {
       emit({
@@ -1705,13 +1743,16 @@ export async function startAutopilot(config: AutopilotConfig): Promise<void> {
       message: `Đã quét ${scanResult.summary.totalCount} bài nhạc (ưu tiên ${scanResult.summary.priorityCount}, random ${scanResult.summary.randomCount}).`,
     })
 
-    const failedDays: string[] = []
+    const failedDays: { dateCode: string; error: string }[] = []
+    const succeededDays: string[] = []
+    const startTime = Date.now()
 
     // Process all days sequentially
     for (let i = 0; i < validPlans.length; i++) {
       if (isCancelling) break
       const plan = validPlans[i]
       const totalDays = validPlans.length
+      const dayStartTime = Date.now()
       emit({
         currentDayIndex: i,
         currentStep: 1,
@@ -1721,6 +1762,9 @@ export async function startAutopilot(config: AutopilotConfig): Promise<void> {
       emitLog('info', `📅 Bắt đầu ngày ${plan.dateCode} (${i + 1}/${totalDays})`)
       try {
         await runAutopilotForDay(plan, i, { ...config, dayPlans: validPlans }, scanResult)
+        const dayElapsed = Math.round((Date.now() - dayStartTime) / 1000)
+        const dayElapsedStr = formatDuration(dayElapsed)
+        succeededDays.push(plan.dateCode)
         const overallPercent = Math.round(((i + 1) / totalDays) * 100)
         emit({
           currentDayIndex: i,
@@ -1728,12 +1772,47 @@ export async function startAutopilot(config: AutopilotConfig): Promise<void> {
           stepPercent: Math.max(currentProgress.stepPercent ?? 0, overallPercent),
           message: `Hoàn tất ngày ${plan.dateCode} (${i + 1}/${totalDays}). Tiến độ tổng: ${overallPercent}%.`,
         })
-        emitLog('info', `✓ Hoàn tất ngày ${plan.dateCode} (${i + 1}/${totalDays}). Tiến độ tổng: ${overallPercent}%.`)
+        emitLog('info', `✓ Hoàn tất ngày ${plan.dateCode} (${i + 1}/${totalDays}) — thời gian: ${dayElapsedStr}. Tiến độ tổng: ${overallPercent}%.`)
       } catch (err: any) {
-        failedDays.push(plan.dateCode || `plan-${i + 1}`)
-        emitLog('error', `[Autopilot] Lỗi ở ngày ${plan.dateCode || i + 1}: ${err?.message || err}`)
+        const dayElapsed = Math.round((Date.now() - dayStartTime) / 1000)
+        const dayElapsedStr = formatDuration(dayElapsed)
+        const errorMsg = err?.message || String(err)
+        failedDays.push({ dateCode: plan.dateCode || `plan-${i + 1}`, error: errorMsg })
+        emitLog('error', `[Autopilot] ❌ Lỗi ở ngày ${plan.dateCode || i + 1} (sau ${dayElapsedStr}): ${errorMsg}`)
         if (isCancelling) break
       }
+    }
+
+    // ── BÁO CÁO TỔNG KẾT ──────────────────────────────────────────────
+    const totalElapsed = Math.round((Date.now() - startTime) / 1000)
+    const totalElapsedStr = formatDuration(totalElapsed)
+    const failedDateCodes = failedDays.map(d => d.dateCode)
+
+    emitLog('info', ``)
+    emitLog('info', `╔══════════════════════════════════════════════════════════╗`)
+    emitLog('info', `║           📊 BÁO CÁO TỔNG KẾT AUTOPILOT               ║`)
+    emitLog('info', `╠══════════════════════════════════════════════════════════╣`)
+    emitLog('info', `║  Tổng số ngày: ${validPlans.length}                                        `)
+    emitLog('info', `║  ✅ Thành công: ${succeededDays.length} ngày ${succeededDays.length > 0 ? `(${succeededDays.join(', ')})` : ''}`)
+    emitLog('info', `║  ❌ Thất bại: ${failedDays.length} ngày ${failedDays.length > 0 ? `(${failedDateCodes.join(', ')})` : ''}`)
+    emitLog('info', `║  ⏱️  Tổng thời gian: ${totalElapsedStr}                    `)
+    if (isCancelling) {
+      emitLog('info', `║  ⚠️  Trạng thái: Đã bị huỷ bởi người dùng             `)
+    }
+    emitLog('info', `╚══════════════════════════════════════════════════════════╝`)
+
+    if (failedDays.length > 0) {
+      emitLog('info', ``)
+      emitLog('info', `📋 CHI TIẾT LỖI:`)
+      for (const fd of failedDays) {
+        emitLog('error', `  • Ngày ${fd.dateCode}: ${fd.error.slice(0, 200)}`)
+      }
+      emitLog('info', ``)
+      emitLog('info', `💡 GỢI Ý XỬ LÝ:`)
+      emitLog('info', `  1. Kiểm tra log chi tiết ở trên để xem lỗi cụ thể từng bước`)
+      emitLog('info', `  2. Nếu lỗi liên quan đến FFmpeg/video → kiểm tra file video nguồn có bị hỏng không`)
+      emitLog('info', `  3. Nếu lỗi timeout → tăng thời gian chờ hoặc giảm số playlist/thời lượng`)
+      emitLog('info', `  4. Có thể chạy lại chỉ các ngày bị lỗi mà không ảnh hưởng ngày đã thành công`)
     }
 
     if (isCancelling) {
@@ -1748,8 +1827,8 @@ export async function startAutopilot(config: AutopilotConfig): Promise<void> {
         status: 'completed_with_errors',
         currentStep: currentProgress.currentStep,
         stepPercent: currentProgress.stepPercent,
-        message: `Autopilot hoàn tất nhưng có ${failedDays.length} ngày lỗi: ${failedDays.join(', ')}`,
-        error: `Ngày lỗi: ${failedDays.join(', ')}`,
+        message: `Autopilot hoàn tất — ${succeededDays.length}/${validPlans.length} ngày thành công, ${failedDays.length} ngày lỗi (${failedDateCodes.join(', ')}). Tổng: ${totalElapsedStr}.`,
+        error: `Ngày lỗi: ${failedDateCodes.join(', ')}`,
       })
     } else {
       // Không có lỗi và không bị cancel → hoàn tất
@@ -1757,7 +1836,7 @@ export async function startAutopilot(config: AutopilotConfig): Promise<void> {
         status: 'completed',
         currentStep: 5,
         stepPercent: 100,
-        message: 'Autopilot đã hoàn tất tất cả ngày trong kế hoạch.',
+        message: `Autopilot đã hoàn tất tất cả ${validPlans.length} ngày trong kế hoạch. Tổng: ${totalElapsedStr}.`,
       })
     }
   } catch (error: any) {

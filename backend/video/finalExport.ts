@@ -837,26 +837,70 @@ export async function executeFinalExport(
     }
 
     // Chạy tuần tự từng job một (không chạy song song)
+    // Wrap mỗi job trong try/catch để 1 job lỗi không chặn các job còn lại
+    const failedJobs: { jobIndex: number; fileName: string; error: string }[] = []
+    const succeededJobs: ExportJob[] = []
+
     for (const job of plan.jobs) {
-      await processJob(job)
+      try {
+        await processJob(job)
+        succeededJobs.push(job)
+      } catch (err: any) {
+        const errorMsg = err?.message || String(err)
+        failedJobs.push({
+          jobIndex: job.jobIndex,
+          fileName: job.outputFileName,
+          error: errorMsg,
+        })
+        console.error(
+          `[FinalExport] ❌ Job ${job.jobIndex + 1}/${plan.totalJobs} thất bại (${job.outputFileName}): ${errorMsg}`
+        )
+        // Emit progress để UI biết job này lỗi, nhưng không dừng pipeline
+        emitter.progress({
+          requestId,
+          stage: 'finishing',
+          percent: ((job.jobIndex + 1) / plan.totalJobs) * 100,
+          timeSec: 0,
+          totalDurationSec: job.audio.durationSec,
+          currentIndex: job.jobIndex + 1,
+          totalOutputs: plan.totalJobs,
+          currentAudioPath: job.audio.path,
+          currentOutputFilename: job.outputFileName,
+          status: `❌ Job ${job.jobIndex + 1}/${plan.totalJobs} thất bại: ${errorMsg.slice(0, 120)}. Tiếp tục các job còn lại...`,
+        })
+      }
     }
 
-    // Emit done event
+    // Nếu TẤT CẢ job lỗi → throw để caller xử lý như error hoàn toàn
+    if (succeededJobs.length === 0 && failedJobs.length > 0) {
+      const summary = failedJobs.map(f => `Job ${f.jobIndex + 1} (${f.fileName}): ${f.error}`).join('; ')
+      throw new Error(`Tất cả ${failedJobs.length} job đều thất bại: ${summary}`)
+    }
+
+    // Emit done event — chỉ gồm các job thành công
     const tracklistPaths: Record<number, string | undefined> = {}
-    for (const job of plan.jobs) {
+    for (const job of succeededJobs) {
       if (job.tracklistText) {
         tracklistPaths[job.jobIndex] = buildTracklistPath(job.outputPath)
       }
     }
-    
+
+    if (failedJobs.length > 0) {
+      const failSummary = failedJobs.map(f => `${f.fileName}: ${f.error.slice(0, 80)}`).join(', ')
+      console.warn(
+        `[FinalExport] ⚠️ ${failedJobs.length}/${plan.totalJobs} job thất bại, ${succeededJobs.length} thành công. Chi tiết: ${failSummary}`
+      )
+    }
+
     emitter.done({
       requestId,
-      outputs: plan.jobs.map(j => ({
+      outputs: succeededJobs.map(j => ({
         audioFile: j.audio.path,
         videoFile: j.outputPath,
         durationSec: j.audio.durationSec,
         tracklistFile: tracklistPaths[j.jobIndex],
       })),
+      failedJobs: failedJobs.length > 0 ? failedJobs : undefined,
     })
     
     // Xóa file audio và video nguồn nếu được yêu cầu
@@ -865,8 +909,8 @@ export async function executeFinalExport(
       const deletedFiles: string[] = []
       const failedFiles: string[] = []
       
-      // Xóa các file audio
-      for (const job of plan.jobs) {
+      // Xóa các file audio (chỉ từ job thành công — job lỗi giữ lại để debug/retry)
+      for (const job of succeededJobs) {
         try {
           if (fs.existsSync(job.audio.path)) {
             fs.unlinkSync(job.audio.path)
