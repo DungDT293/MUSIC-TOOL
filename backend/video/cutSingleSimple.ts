@@ -336,6 +336,8 @@ export async function cutVideoIntoSegmentsSimple(
     if (options?.signal) {
       options.signal.addEventListener('abort', () => {
         console.log(`[cutSingleSimple] Job ${requestId} cancelled via AbortSignal`)
+        // Cleanup file-count progress tracker
+        clearInterval(fileCountInterval)
         // Cleanup progress file watcher
         if (progressFileWatcher) {
           fs.unwatchFile(progressFilePath!)
@@ -356,6 +358,28 @@ export async function cutVideoIntoSegmentsSimple(
     let stderrBuffer = ''
     const progressStartTime = Date.now()
     let lastProgressTime = 0
+
+    // File-count progress tracker: đếm số file output đã tạo để cập nhật currentSegment chính xác
+    // Cần thiết vì FFmpeg -f segment -c copy xuất file rất nhanh nhưng stderr time= rất thưa
+    const partPattern = new RegExp(`^${basename.replace(/[.*+?^${}()|[\]\\\\]/g, '\\\\$&')}_part_\\d+\\.${format.replace('.', '\\\\.')}$`)
+    let lastFileCount = 0
+    const fileCountInterval = setInterval(() => {
+      try {
+        const files = fs.readdirSync(outputDir).filter((f) => partPattern.test(f))
+        const currentFileCount = files.length
+        if (currentFileCount > lastFileCount) {
+          lastFileCount = currentFileCount
+          const percent = expectedSegments > 0 ? Math.min(99, (currentFileCount / expectedSegments) * 100) : 0
+          const elapsedSec = (Date.now() - progressStartTime) / 1000
+          const speedX = elapsedSec > 0 && currentFileCount > 0 ? (currentFileCount * segmentLengthSec) / elapsedSec : null
+          const remainingSegments = Math.max(0, expectedSegments - currentFileCount)
+          const etaSec = speedX && speedX > 0 ? (remainingSegments * segmentLengthSec) / speedX : null
+          emitProgress(onProgress, requestId, percent, currentFileCount, expectedSegments, speedX, currentFileCount * segmentLengthSec, duration, etaSec)
+        }
+      } catch {
+        // ignore readdir errors during cut
+      }
+    }, 500) // Poll every 500ms
 
     const parseTimeToSeconds = (timeString: string): number => {
       const parts = timeString.split(':')
@@ -424,6 +448,8 @@ export async function cutVideoIntoSegmentsSimple(
       // Check nếu job đã bị cancel - kill process ngay lập tức
       if (videoJobManager.isCancelled(requestId) || options?.signal?.aborted) {
         console.log(`[cutSingleSimple] Job ${requestId} cancelled, killing FFmpeg process`)
+        // Cleanup file-count progress tracker
+        clearInterval(fileCountInterval)
         // Cleanup progress file watcher
         if (progressFileWatcher) {
           fs.unwatchFile(progressFilePath!)
@@ -520,6 +546,9 @@ export async function cutVideoIntoSegmentsSimple(
     })
 
     ffmpegProcess.on('close', (exitCode) => {
+      // Cleanup file-count progress tracker
+      clearInterval(fileCountInterval)
+
       // Cleanup progress file watcher
       if (progressFileWatcher) {
         fs.unwatchFile(progressFilePath!)
