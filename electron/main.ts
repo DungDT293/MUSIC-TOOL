@@ -111,8 +111,18 @@ app.whenReady()
               )
             }
             // Dùng net.fetch với file:// URL để Electron đọc file an toàn
+            // UNC paths: \\server\share\file → file://server/share/file (server = authority)
+            // Local paths: E:\folder\file → file:///E:/folder/file (3 slashes, empty authority)
             const normalized = decodedPath.replace(/\\/g, '/')
-            const fileUrl = `file:///${normalized.replace(/^\/+/, '')}`
+            let fileUrl: string
+            if (normalized.startsWith('//')) {
+              // UNC path: //server/share/... → file://server/share/...
+              // RFC 8089: UNC path uses server as authority in file:// URL
+              fileUrl = `file:${normalized}`
+            } else {
+              fileUrl = `file:///${normalized.replace(/^\/+/, '')}`
+            }
+            console.log('[Protocol] Serving:', decodedPath.slice(0, 80), '→', fileUrl.slice(0, 80))
             return net.fetch(fileUrl)
           }
           // Fallback: không xử lý hostname khác

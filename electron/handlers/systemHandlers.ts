@@ -408,7 +408,10 @@ export function registerSystemHandlers(mainWindow: Electron.BrowserWindow | null
     let deleted = 0
     const errors: Array<{ path: string; message: string }> = []
 
-    const safeRoot = rootDir && isValidAbsolutePath(rootDir) ? path.resolve(rootDir) : null
+    // Dùng path.normalize thay vì path.resolve cho UNC paths
+    // path.resolve('\\server\share') → 'E:\server\share' (sai!)
+    // path.normalize('\\server\share') → '\\server\share' (đúng)
+    const safeRoot = rootDir && isValidAbsolutePath(rootDir) ? path.normalize(rootDir) : null
     const pathsToDelete = Array.isArray(filePaths) ? filePaths : []
 
     for (const fp of pathsToDelete) {
@@ -420,8 +423,8 @@ export function registerSystemHandlers(mainWindow: Electron.BrowserWindow | null
 
       // Nếu rootDir được cung cấp, đảm bảo file nằm trong rootDir
       if (safeRoot) {
-        const resolved = path.resolve(fp)
-        if (!resolved.startsWith(safeRoot + path.sep) && resolved !== safeRoot) {
+        const normalized = path.normalize(fp)
+        if (!normalized.startsWith(safeRoot + path.sep) && normalized !== safeRoot) {
           errors.push({ path: fp, message: 'File nằm ngoài thư mục cho phép' })
           continue
         }

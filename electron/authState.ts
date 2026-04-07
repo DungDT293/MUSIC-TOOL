@@ -45,9 +45,23 @@ export { APP_VERSION, AUTH_BASE }
 // ─── Path validation helper ────────────────────────────────────────────────
 /**
  * Kiểm tra filePath/folderPath có hợp lệ không để tránh path traversal.
+ * Hỗ trợ cả local paths (E:\Videos) và UNC/network paths (\\server\share\folder).
  */
 export function isValidAbsolutePath(p: unknown): p is string {
   if (typeof p !== 'string' || !p || p.includes('\0')) return false
+
+  // UNC / network paths: \\server\share\... hoặc //server/share/...
+  // path.resolve() trên Windows sẽ mangle UNC path (bỏ \\ prefix),
+  // nên cần check riêng trước.
+  if (p.startsWith('\\\\') || p.startsWith('//')) {
+    // UNC path phải có ít nhất \\host\share (4+ chars after prefix)
+    const withoutPrefix = p.startsWith('\\\\') ? p.slice(2) : p.slice(2)
+    // Phải có ít nhất 1 separator sau hostname
+    const sepIdx = withoutPrefix.search(/[/\\]/)
+    if (sepIdx < 1) return false // \\\ hoặc \\x (thiếu share name)
+    return true
+  }
+
   const resolved = path.resolve(p)
   if (!path.isAbsolute(resolved)) return false
   return true
