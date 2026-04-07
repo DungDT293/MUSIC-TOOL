@@ -289,8 +289,8 @@ export default function AudioSourceSelector() {
                 style={{ ...selectStyle, flex: 1 }}
               >
                 <option value="">— Chọn —</option>
-                {appTracks.map((t) => (
-                  <option key={t.id} value={t.path}>
+                {appTracks.map((t, idx) => (
+                  <option key={`${t.id}-${idx}`} value={t.path}>
                     {t.fileName} ({formatDuration(t.duration ?? 0)})
                   </option>
                 ))}

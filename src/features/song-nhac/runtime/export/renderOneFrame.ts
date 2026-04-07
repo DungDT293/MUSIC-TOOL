@@ -176,7 +176,15 @@ export function renderOneFrame(
     if (ctx) {
       let waveOptions: WaveOptions | undefined
       const { waveAroundImageEnabled, waveAroundIntensity, waveAroundStyle } = useSongNhacRuntimeStore.getState()
-      if (waveAroundImageEnabled && waveAroundIntensity > 0 && layersToDraw.some((l) => l.type === 'image' && l.waveAroundEnabled)) {
+
+      // Build waveOptions khi:
+      // 1. Có visualizer layer (wave layer luôn cần FFT data) HOẶC
+      // 2. Có image layer bật waveAround
+      const hasVisualizerLayer = layersToDraw.some((l) => l.type === 'visualizer' && l.visible !== false)
+      const hasWaveAroundImage = waveAroundImageEnabled && waveAroundIntensity > 0
+        && layersToDraw.some((l) => l.type === 'image' && l.waveAroundEnabled)
+
+      if (hasVisualizerLayer || hasWaveAroundImage) {
         // Sub-sample time-domain waveform (shape fallback)
         const samples: number[] = []
         const wf = frame.waveformData
@@ -219,7 +227,9 @@ export function renderOneFrame(
         const baseAmplitude = Math.max(0.4, avgEnergy * 2)
         // Beat adds extra punch (like Tab 10's beat glow scaling)
         const beatBoost = 1 + beat * 0.6
-        const amplitude = Math.min(2.5, baseAmplitude * beatBoost) * waveAroundIntensity
+        // For visualizer layer: use full amplitude (1.0 base) even without waveAround settings
+        const intensity = hasWaveAroundImage ? waveAroundIntensity : 1.0
+        const amplitude = Math.min(2.5, baseAmplitude * beatBoost) * intensity
 
         waveOptions = { amplitude, samples, style: waveAroundStyle, spectrum, bands, beat }
       }
