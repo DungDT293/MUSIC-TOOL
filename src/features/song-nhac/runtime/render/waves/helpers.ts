@@ -120,20 +120,34 @@ export function getSpectrumAt(spectrum: number[], i: number, totalSegments: numb
   if (!spectrum || spectrum.length === 0) return 0
   const n = spectrum.length
 
-  // Logarithmic frequency mapping: bass frequencies get more visual bins
+  // Logarithmic frequency mapping – capped at ~5 kHz so all visual segments
+  // land in bins where music actually has energy.  20 kHz bins are nearly
+  // silent in practice and made the top half of the circle invisible.
   const logMin = Math.log10(20)
-  const logMax = Math.log10(20000)
-  const logFreq = logMin + (i / totalSegments) * (logMax - logMin)
+  const logMax = Math.log10(5000) // was 20000 — most music energy < 5 kHz
+  const t = i / totalSegments    // 0→1 across the half-circle
+  const logFreq = logMin + t * (logMax - logMin)
   const bin = Math.min(Math.round(Math.pow(10, logFreq) / 10000 * n), n - 1)
 
   // Read from smoothed buffer when available, otherwise fall back to raw
   const src = smoothedWaveSpectrum && smoothedWaveSpectrum.length === n
     ? smoothedWaveSpectrum
     : null
-  const prev = src ? src[Math.max(0, bin - 1)]! : (spectrum[Math.max(0, bin - 1)] ?? 0) / 255
-  const curr = src ? src[bin]!                  : (spectrum[bin] ?? 0) / 255
-  const next = src ? src[Math.min(n - 1, bin + 1)]! : (spectrum[Math.min(n - 1, bin + 1)] ?? 0) / 255
-  return prev * 0.25 + curr * 0.5 + next * 0.25
+
+  // Wider 5-tap weighted average for smoother visual distribution
+  const readBin = (b: number) => {
+    const cb = Math.max(0, Math.min(n - 1, b))
+    return src ? src[cb]! : (spectrum[cb] ?? 0) / 255
+  }
+  let val = readBin(bin - 2) * 0.1 + readBin(bin - 1) * 0.2
+           + readBin(bin) * 0.4
+           + readBin(bin + 1) * 0.2 + readBin(bin + 2) * 0.1
+
+  // Mild perceptual boost for upper-mid/treble (up to ~1.8× at top end)
+  const boostFactor = 1 + t * 0.8
+  val = Math.min(1, val * boostFactor)
+
+  return val
 }
 
 /** Reset smoothed spectrum — call when switching tracks or destroying runtime. */

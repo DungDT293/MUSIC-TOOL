@@ -68,12 +68,12 @@ function drawWaveCrystalRing(
   const innerPts: [number, number][] = []
   const specValues: number[] = [] // cache for light ray pass
   for (let i = 0; i < ringSegs; i++) {
-    // Full 360°: map spectrum across all segments (no mirror)
+    const mi = i < ringSegs / 2 ? i : ringSegs - 1 - i
     const rawT = spectrum && spectrum.length > 0
-      ? getSpectrumAt(spectrum, i, ringSegs)
-      : getSampleAt(samples, Math.floor((i / ringSegs) * WAVE_SEGMENTS))
+      ? getSpectrumAt(spectrum, mi, ringSegs / 2)
+      : getSampleAt(samples, Math.floor((mi / (ringSegs / 2)) * WAVE_SEGMENTS))
     specValues.push(rawT)
-    const t = Math.pow(rawT, 1.1)
+    const t = Math.pow(rawT, 0.85)
     const angle = (i / ringSegs) * Math.PI * 2 - Math.PI / 2
 
     // Crystal facet effect: slight angular jumps

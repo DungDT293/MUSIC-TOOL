@@ -150,9 +150,9 @@ function drawWaveShockwave(
     const specPts: [number, number][] = []
     for (let i = 0; i < specSegs; i++) {
       const angle = (i / specSegs) * Math.PI * 2 - Math.PI / 2
-      // Full 360°: map spectrum across all segments (no mirror)
+      const mi = i < specSegs / 2 ? i : specSegs - 1 - i
       const specVal = spectrum.length > 0
-        ? (spectrum[Math.floor(i / specSegs * spectrum.length)] ?? 0) / 255
+        ? (spectrum[Math.floor(mi / specSegs * spectrum.length)] ?? 0) / 255
         : 0.3
       const r = specR + specVal * maxOff * 0.15 * amplitude
       specPts.push([Math.cos(angle) * r, Math.sin(angle) * r])

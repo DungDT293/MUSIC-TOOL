@@ -31,11 +31,11 @@ function drawWaveRing(
   const outerPts: [number, number][] = []
   const innerPts: [number, number][] = []
   for (let i = 0; i < ringSegs; i++) {
-    // Full 360°: map spectrum across all segments (no mirror)
+    const mi = i < ringSegs / 2 ? i : ringSegs - 1 - i
     const rawT = spectrum && spectrum.length > 0
-      ? getSpectrumAt(spectrum, i, ringSegs)
-      : getSampleAt(samples, Math.floor((i / ringSegs) * WAVE_SEGMENTS))
-    const t = Math.pow(rawT, 1.15)
+      ? getSpectrumAt(spectrum, mi, ringSegs / 2)
+      : getSampleAt(samples, Math.floor((mi / (ringSegs / 2)) * WAVE_SEGMENTS))
+    const t = Math.pow(rawT, 0.85)
     const outer = baseR + t * maxOff
     const inner = baseR + t * maxOff * 0.15
     const angle = (i / ringSegs) * Math.PI * 2 - Math.PI / 2
@@ -81,10 +81,10 @@ function drawWaveRing(
   const innerRingOff = maxOff * 0.5
   const innerRingPts: [number, number][] = []
   for (let i = 0; i < ringSegs; i++) {
-    // Full 360°: offset into higher spectrum bins for treble ring
-    const specIdx = Math.floor((i / ringSegs) * 64) + Math.floor(ringSegs / 4)
+    // Use higher spectrum bins for treble
+    const mi = i < ringSegs / 2 ? i + ringSegs / 4 : ringSegs - 1 - i + ringSegs / 4
     const rawT = spectrum && spectrum.length > 0
-      ? getSpectrumAt(spectrum, Math.min(specIdx, 63), 64)
+      ? getSpectrumAt(spectrum, Math.min(mi, 63), ringSegs)
       : getSampleAt(samples, Math.floor((i / ringSegs) * WAVE_SEGMENTS))
     const t = Math.pow(rawT, 1.3) * treble * 1.5
     const r = innerRingR + t * innerRingOff
