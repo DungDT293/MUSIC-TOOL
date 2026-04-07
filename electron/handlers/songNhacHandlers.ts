@@ -294,19 +294,21 @@ export function registerSongNhacHandlers(getMainWindow: () => BrowserWindow | nu
       }
 
       // Map encoder quality to FFmpeg preset/CRF
-      // Higher quality → lower CRF + higher bitrate (smaller CRF = better quality)
+      // CRF = constant quality factor: lower = better quality, larger file
+      // 17-18 = visually lossless, 20 = very good, 23 = good, 25 = acceptable
+      // videoBitrate is now only used as maxrate safety ceiling (not target)
       let preset = 'medium'
       let crf = 18
-      let videoBitrate = '8000k'
+      let videoBitrate = '15000k'
       switch (options.encoderQuality) {
         case 'ultra-fast':
-          preset = 'ultrafast'; crf = 23; videoBitrate = '8000k'; break
+          preset = 'ultrafast'; crf = 22; videoBitrate = '12000k'; break
         case 'fast':
-          preset = 'fast'; crf = 20; videoBitrate = '10000k'; break
+          preset = 'fast'; crf = 19; videoBitrate = '15000k'; break
         case 'balanced':
-          preset = 'medium'; crf = 17; videoBitrate = '15000k'; break
+          preset = 'medium'; crf = 17; videoBitrate = '20000k'; break
         case 'lowend':
-          preset = 'veryfast'; crf = 25; videoBitrate = '5000k'; break
+          preset = 'veryfast'; crf = 25; videoBitrate = '8000k'; break
       }
 
       const totalFrames = Math.max(1, Math.floor((options.durationSec ?? 0) * (options.fps ?? 30)))

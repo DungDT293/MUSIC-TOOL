@@ -45,6 +45,9 @@ export interface SongNhacFfmpegPipeResult {
  * Build encoder args based on GPU availability.
  * Pipe input (image2pipe) does NOT need -hwaccel (no GPU decoder needed).
  * But we CAN use h264_nvenc as the OUTPUT encoder — GPU does the heavy lifting.
+ *
+ * Uses quality-based encoding (CRF/CQ) — encoder auto-adjusts bitrate per frame.
+ * Static scenes get low bitrate, complex scenes get high → smaller files, same quality.
  */
 function buildEncoderArgs(
   gpuEncoder: GpuEncoder,
@@ -62,19 +65,23 @@ function buildEncoderArgs(
     else if (preset === 'medium') nvPreset = 'p4'
     else if (preset === 'slow') nvPreset = 'p6'
 
+    // CQ (constant quality) mode — no fixed bitrate cap.
+    // Let encoder decide bitrate based on content complexity.
+    // maxrate as safety ceiling to prevent extreme spikes.
+    const maxBitrate = parseInt(videoBitrate) || 8000
     return {
       encoderArgs: [
         '-c:v', 'h264_nvenc',
         '-preset', nvPreset,
         '-rc', 'vbr',
-        '-cq', String(Math.max(18, crf)), // NVENC CQ ≈ CRF
-        '-b:v', videoBitrate,
-        '-maxrate', videoBitrate,
-        '-bufsize', `${parseInt(videoBitrate) * 2}k`,
+        '-cq', String(Math.max(18, crf)),
+        '-maxrate', `${maxBitrate}k`,
+        '-bufsize', `${maxBitrate * 2}k`,
         '-gpu', '0',
+        '-profile:v', 'high',
         '-pix_fmt', 'yuv420p',
       ],
-      usedEncoder: `h264_nvenc (${nvPreset})`,
+      usedEncoder: `h264_nvenc (${nvPreset}, CQ ${Math.max(18, crf)})`,
     }
   }
 
@@ -93,13 +100,15 @@ function buildEncoderArgs(
     }
   }
 
-  // CPU fallback: libx264
+  // CPU fallback: libx264 — pure CRF mode (no -b:v)
+  // CRF = constant quality factor. Encoder auto-picks bitrate.
+  // Lower CRF = better quality, bigger file. 17-18 is visually lossless.
   return {
     encoderArgs: [
       '-c:v', 'libx264',
       '-preset', preset,
       '-crf', String(crf),
-      '-b:v', videoBitrate,
+      '-profile:v', 'high',
       '-pix_fmt', 'yuv420p',
     ],
     usedEncoder: `libx264 (${preset}, CRF ${crf})`,
