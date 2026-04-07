@@ -132,32 +132,32 @@ void main() {
 
   // Top cap glow: brilliant white-pink tip
   float topGlow = smoothstep(0.85, 1.0, heightFactor) * freq;
-  color += topGlow * vec3(1.0, 0.7, 0.9) * 2.5;
+  color += topGlow * vec3(1.0, 0.7, 0.9) * 1.2;
 
   // View-dependent iridescent Fresnel rim
   vec3 viewDir = normalize(vec3(sin(uTime * 0.12) * 0.4, 0.15, 1.0));
   float rim = 1.0 - abs(dot(normalize(vNormal), viewDir));
   rim = pow(rim, 1.8);
   vec3 rimColor = mix(vec3(1.0, 0.2, 0.8), vec3(0.2, 0.6, 1.0), sin(t * 6.28 + uTime * 0.5) * 0.5 + 0.5);
-  color += rim * 0.9 * rimColor;
+  color += rim * 0.6 * rimColor;
 
-  // Aggressive emissive: bars glow intensely
-  float brightness = 0.7 + freq * 1.6;
-  float emissive = 1.2 + uBass * 3.5 + freq * 2.5 + uPeak * 1.0;
+  // Emissive glow: bars react to audio without blowing out
+  float brightness = 0.6 + freq * 0.8;
+  float emissive = 1.0 + uBass * 1.5 + freq * 1.2 + uPeak * 0.4;
   color *= brightness * emissive;
 
-  // Bass pulse: wave of brightness on bass hits
-  float bassPulse = smoothstep(0.35, 0.75, uBass) * sin(uTime * 10.0 + t * 3.14) * 0.2;
+  // Bass pulse: subtle wave of brightness on bass hits
+  float bassPulse = smoothstep(0.35, 0.75, uBass) * sin(uTime * 10.0 + t * 3.14) * 0.12;
   color += bassPulse * color;
 
-  // Multi-frequency sparkle cascade
-  float sparkle1 = step(0.75, freq) * (sin(uTime * 20.0 + vInstanceId * 13.7) * 0.5 + 0.5) * 0.5;
-  float sparkle2 = step(0.85, freq) * (sin(uTime * 28.0 + vInstanceId * 7.1) * 0.5 + 0.5) * 0.4;
-  float sparkle3 = step(0.93, freq) * (cos(uTime * 35.0 + vInstanceId * 3.3) * 0.5 + 0.5) * 0.6;
+  // Multi-frequency sparkle cascade (reduced intensity)
+  float sparkle1 = step(0.75, freq) * (sin(uTime * 20.0 + vInstanceId * 13.7) * 0.5 + 0.5) * 0.3;
+  float sparkle2 = step(0.85, freq) * (sin(uTime * 28.0 + vInstanceId * 7.1) * 0.5 + 0.5) * 0.25;
+  float sparkle3 = step(0.93, freq) * (cos(uTime * 35.0 + vInstanceId * 3.3) * 0.5 + 0.5) * 0.35;
   color += (sparkle1 + sparkle2 + sparkle3) * vec3(1.0, 0.5, 1.0);
 
   // Inner glow: self-illumination based on energy
-  float innerGlow = freq * freq * 0.25;
+  float innerGlow = freq * freq * 0.15;
   color += innerGlow * neon1;
 
   gl_FragColor = vec4(color, 1.0);
@@ -291,8 +291,8 @@ void main() {
   crystalColor += caustic * 0.12 * vec3(0.5, 0.7, 1.0) * freq;
 
   // Soft emissive with bass reactivity
-  float brightness = 0.85 + freq * 0.6;
-  float emissive = 0.8 + uBass * 1.2 + freq * 0.9 + uPeak * 0.4;
+  float brightness = 0.85 + freq * 0.5;
+  float emissive = 0.8 + uBass * 0.8 + freq * 0.7 + uPeak * 0.3;
   crystalColor *= brightness * emissive;
 
   // Bass pulse: soft wave of light
@@ -443,9 +443,9 @@ void main() {
   vec3 rimColor = mix(vec3(0.0, 1.0, 0.8), vec3(0.3, 0.8, 1.0), sin(t * 8.0 + uTime * 0.4) * 0.5 + 0.5);
   holoColor += rim * 0.8 * rimColor;
 
-  // Emissive with wider dynamic range
-  float brightness = 0.55 + freq * 0.9;
-  float emissive = 1.0 + uBass * 2.2 + freq * 1.6 + uPeak * 0.6;
+  // Emissive with controlled dynamic range
+  float brightness = 0.6 + freq * 0.7;
+  float emissive = 0.8 + uBass * 1.0 + freq * 0.8 + uPeak * 0.3;
   holoColor *= brightness * emissive;
 
   // Bass pulse: digital flicker
@@ -456,17 +456,17 @@ void main() {
   float glitchBase = step(0.65, uBass);
   float glitch1 = glitchBase * step(0.8, fract(sin(floor(uTime * 10.0) * 127.1 + vInstanceId) * 43758.5453));
   float glitch2 = glitchBase * step(0.9, fract(cos(floor(uTime * 15.0) * 91.3 + vInstanceId * 3.0) * 28461.7123));
-  holoColor += glitch1 * vec3(0.0, 2.0, 1.0) * 0.4;
-  holoColor += glitch2 * vec3(0.5, 0.0, 2.0) * 0.3;
+  holoColor += glitch1 * vec3(0.0, 2.0, 1.0) * 0.25;
+  holoColor += glitch2 * vec3(0.5, 0.0, 2.0) * 0.18;
 
   // Multi-layer sparkle
-  float sparkle1 = step(0.80, freq) * pow(sin(uTime * 18.0 + vInstanceId * 9.3) * 0.5 + 0.5, 3.0) * 0.4;
-  float sparkle2 = step(0.90, freq) * pow(cos(uTime * 27.0 + vInstanceId * 5.1) * 0.5 + 0.5, 4.0) * 0.5;
+  float sparkle1 = step(0.80, freq) * pow(sin(uTime * 18.0 + vInstanceId * 9.3) * 0.5 + 0.5, 3.0) * 0.25;
+  float sparkle2 = step(0.90, freq) * pow(cos(uTime * 27.0 + vInstanceId * 5.1) * 0.5 + 0.5, 4.0) * 0.3;
   holoColor += (sparkle1 + sparkle2) * vec3(0.3, 1.0, 0.8);
 
   // Height fade + inner glow
   holoColor *= 0.45 + heightFactor * 0.85;
-  float innerGlow = freq * freq * 0.2;
+  float innerGlow = freq * freq * 0.15;
   holoColor += innerGlow * holo1;
 
   vec3 color = holoColor;
@@ -550,11 +550,11 @@ export const THREEJS_PRESETS: Record<ThreeJsPresetId, ThreeJsPreset> = {
     pointLightColor: 0xff44aa,
     pointLightIntensity: 2.0,
 
-    bloomStrength: 2.0,
-    bloomRadius: 0.5,
+    bloomStrength: 1.4,
+    bloomRadius: 0.4,
     bloomThreshold: 0.08,
-    bloomBassMultiplier: 3.0,
-    bloomPeakMultiplier: 1.5,
+    bloomBassMultiplier: 1.2,
+    bloomPeakMultiplier: 0.5,
 
     cameraOrbitSpeed: 0.1,
     cameraHeightBase: 5.5,
@@ -636,11 +636,11 @@ export const THREEJS_PRESETS: Record<ThreeJsPresetId, ThreeJsPreset> = {
     pointLightColor: 0x00ffaa,
     pointLightIntensity: 1.6,
 
-    bloomStrength: 1.8,
+    bloomStrength: 1.4,
     bloomRadius: 0.45,
     bloomThreshold: 0.1,
-    bloomBassMultiplier: 2.5,
-    bloomPeakMultiplier: 1.2,
+    bloomBassMultiplier: 1.2,
+    bloomPeakMultiplier: 0.5,
 
     cameraOrbitSpeed: 0.07,
     cameraHeightBase: 5.0,
@@ -687,11 +687,11 @@ export const THREEJS_PRESETS: Record<ThreeJsPresetId, ThreeJsPreset> = {
     pointLightColor: 0x6644aa,
     pointLightIntensity: 1.5,
 
-    bloomStrength: 1.8,
+    bloomStrength: 1.4,
     bloomRadius: 0.55,
     bloomThreshold: 0.08,
-    bloomBassMultiplier: 2.0,
-    bloomPeakMultiplier: 1.0,
+    bloomBassMultiplier: 1.2,
+    bloomPeakMultiplier: 0.5,
 
     cameraOrbitSpeed: 0.05,
     cameraHeightBase: 6.5,
@@ -758,7 +758,7 @@ void main() {
 
   // Top cap glow: starlight tip
   float topGlow = smoothstep(0.88, 1.0, heightFactor) * freq;
-  color += topGlow * vec3(0.9, 0.85, 1.0) * 2.0;
+  color += topGlow * vec3(0.9, 0.85, 1.0) * 1.2;
 
   // View-dependent nebula rim
   vec3 viewDir = normalize(vec3(sin(uTime * 0.08) * 0.25, 0.25, 1.0));
@@ -767,8 +767,8 @@ void main() {
   vec3 nebulaRim = mix(vec3(0.4, 0.1, 0.7), vec3(0.1, 0.6, 0.8), sin(t * 4.0 + uTime * 0.3) * 0.5 + 0.5);
   color += rim2 * 0.5 * nebulaRim;
 
-  // Emissive: cosmic glow that rises with audio
-  float emissive = 0.7 + freq * 2.2 + uBass * 2.0 + uPeak * 0.6;
+  // Emissive: cosmic glow that rises with audio (controlled)
+  float emissive = 0.7 + freq * 1.2 + uBass * 1.0 + uPeak * 0.3;
   color *= emissive;
 
   // Bass pulse: nebula pulsation
@@ -777,15 +777,15 @@ void main() {
 
   // Supernova flash on strong beats
   float nova = step(0.65, uBass) * step(0.8, freq);
-  color += vec3(1.0, 0.6, 0.2) * nova * 2.0;
+  color += vec3(1.0, 0.6, 0.2) * nova * 1.0;
 
   // Multi-frequency star sparkle
-  float sparkle2 = step(0.85, freq) * (sin(uTime * 22.0 + vInstanceId * 11.3) * 0.5 + 0.5) * 0.4;
-  float sparkle3 = step(0.92, freq) * (cos(uTime * 30.0 + vInstanceId * 5.7) * 0.5 + 0.5) * 0.6;
+  float sparkle2 = step(0.85, freq) * (sin(uTime * 22.0 + vInstanceId * 11.3) * 0.5 + 0.5) * 0.25;
+  float sparkle3 = step(0.92, freq) * (cos(uTime * 30.0 + vInstanceId * 5.7) * 0.5 + 0.5) * 0.35;
   color += (sparkle2 + sparkle3) * vec3(1.0, 0.95, 0.9);
 
   // Inner glow
-  float innerGlow = freq * freq * 0.2;
+  float innerGlow = freq * freq * 0.15;
   color += innerGlow * nebula1;
 
   gl_FragColor = vec4(color, 1.0);
@@ -827,7 +827,7 @@ void main() {
   color += vec3(0.3, 0.1, 0.5) * nebRingFade * 0.1 * (0.5 + uBass * 1.0);
 
   // Center glow — brighter
-  float centerGlow = (1.0 - dist) * 0.1 * (1.0 + uBass * 2.5);
+  float centerGlow = (1.0 - dist) * 0.1 * (1.0 + uBass * 1.2);
   color += vec3(0.2, 0.08, 0.35) * centerGlow;
 
   // Subtle concentric pulsar rings
@@ -877,11 +877,11 @@ void main() {
     pointLightColor: 0xff4400,
     pointLightIntensity: 2.5,
 
-    bloomStrength: 2.2,
+    bloomStrength: 1.5,
     bloomRadius: 0.5,
     bloomThreshold: 0.06,
-    bloomBassMultiplier: 3.5,
-    bloomPeakMultiplier: 1.8,
+    bloomBassMultiplier: 1.3,
+    bloomPeakMultiplier: 0.6,
 
     cameraOrbitSpeed: 0.09,
     cameraHeightBase: 5.0,
@@ -940,17 +940,17 @@ void main() {
   rim = pow(rim, 1.5);
   color += rim * vec3(1.0, 0.3, 0.0) * 0.8;
 
-  // Emissive: VERY aggressive, fire needs to burn bright
-  float emissive = 1.5 + freq * 3.5 + uBass * 4.0;
+  // Emissive: fire glow — controlled to prevent white-out
+  float emissive = 1.0 + freq * 1.5 + uBass * 1.8;
   color *= emissive;
 
   // Explosion flash on bass drops
   float explosion = step(0.75, uBass) * step(0.7, freq);
-  color += whiteHot * explosion * 2.0;
+  color += whiteHot * explosion * 1.0;
 
   // Top cap glow: white-hot tip
   float topGlow = smoothstep(0.82, 1.0, heightFactor) * freq;
-  color += topGlow * whiteHot * 2.5;
+  color += topGlow * whiteHot * 1.2;
 
   // View-dependent heat rim
   vec3 viewDir = normalize(vec3(sin(uTime * 0.15) * 0.3, 0.2, 1.0));
@@ -966,12 +966,12 @@ void main() {
   float ember1 = step(0.85, freq) * hash(vInstanceId * 13.7 + floor(uTime * 15.0));
   float ember2 = step(0.90, freq) * hash(vInstanceId * 7.1 + floor(uTime * 22.0));
   float ember3 = step(0.95, freq) * hash(vInstanceId * 3.3 + floor(uTime * 30.0));
-  color += vec3(1.0, 0.7, 0.2) * ember1 * 1.2;
-  color += vec3(1.0, 0.5, 0.1) * ember2 * 1.0;
-  color += whiteHot * ember3 * 1.5;
+  color += vec3(1.0, 0.7, 0.2) * ember1 * 0.6;
+  color += vec3(1.0, 0.5, 0.1) * ember2 * 0.5;
+  color += whiteHot * ember3 * 0.7;
 
   // Inner fire glow
-  float innerGlow = freq * freq * 0.3;
+  float innerGlow = freq * freq * 0.18;
   color += innerGlow * fireOrange;
 
   gl_FragColor = vec4(color, 1.0);
@@ -1010,7 +1010,7 @@ void main() {
   color += lavaColor * cracks * (0.3 + uBass * 0.6);
 
   // Ember glow from center
-  float centerGlow = (1.0 - dist) * 0.15 * (1.0 + uBass * 3.0);
+  float centerGlow = (1.0 - dist) * 0.15 * (1.0 + uBass * 1.5);
   color += vec3(1.0, 0.3, 0.05) * centerGlow;
 
   // Expanding heat wave rings
@@ -1019,7 +1019,7 @@ void main() {
   float heatRing2 = fract(uTime * 0.3 + 0.5) * 20.0;
   float hr1 = smoothstep(0.3, 0.0, abs(ringDist - heatRing1)) * smoothstep(20.0, 8.0, heatRing1);
   float hr2 = smoothstep(0.3, 0.0, abs(ringDist - heatRing2)) * smoothstep(20.0, 8.0, heatRing2);
-  color += vec3(1.0, 0.3, 0.0) * (hr1 + hr2) * 0.12 * (0.5 + uBass * 1.5);
+  color += vec3(1.0, 0.3, 0.0) * (hr1 + hr2) * 0.12 * (0.5 + uBass * 0.8);
 
   // Heat shimmer: multi-frequency
   float shimmer1 = sin(dist * 20.0 + uTime * 2.0) * 0.5 + 0.5;
@@ -1071,11 +1071,11 @@ void main() {
     pointLightColor: 0x00ddcc,
     pointLightIntensity: 2.2,
 
-    bloomStrength: 1.9,
+    bloomStrength: 1.4,
     bloomRadius: 0.55,
     bloomThreshold: 0.09,
-    bloomBassMultiplier: 2.5,
-    bloomPeakMultiplier: 1.3,
+    bloomBassMultiplier: 1.2,
+    bloomPeakMultiplier: 0.5,
 
     cameraOrbitSpeed: 0.065,
     cameraHeightBase: 5.8,
@@ -1153,7 +1153,7 @@ void main() {
 
   // Top cap glow: bright cyan-white tip
   float topGlow = smoothstep(0.85, 1.0, heightFactor) * freq;
-  color += topGlow * vec3(0.6, 1.0, 0.95) * 2.2;
+  color += topGlow * vec3(0.6, 1.0, 0.95) * 1.2;
 
   // Fresnel rim: electric blue edge highlight
   vec3 viewDir = normalize(vec3(sin(uTime * 0.1) * 0.3, 0.2, 1.0));
@@ -1162,9 +1162,9 @@ void main() {
   vec3 rimColor = mix(vec3(0.0, 0.7, 1.0), vec3(0.0, 1.0, 0.8), sin(t * 6.28 + uTime * 0.4) * 0.5 + 0.5);
   color += rim * 0.8 * rimColor;
 
-  // Emissive boost
-  float brightness = 0.5 + freq * 1.0;
-  float emissive = 0.9 + uBass * 2.5 + freq * 1.8 + uPeak * 0.7;
+  // Emissive boost (controlled)
+  float brightness = 0.6 + freq * 0.8;
+  float emissive = 0.8 + uBass * 1.2 + freq * 0.9 + uPeak * 0.35;
   color *= brightness * emissive;
 
   // Data pulse: traveling light along the bar ring
@@ -1177,17 +1177,17 @@ void main() {
   color += bassPulse * vec3(0.0, 0.6, 0.5);
 
   // Sparkle nodes at peak frequencies
-  float sparkle1 = step(0.82, freq) * (sin(uTime * 18.0 + vInstanceId * 11.3) * 0.5 + 0.5) * 0.4;
-  float sparkle2 = step(0.90, freq) * (cos(uTime * 27.0 + vInstanceId * 7.7) * 0.5 + 0.5) * 0.5;
-  float sparkle3 = step(0.95, freq) * (sin(uTime * 35.0 + vInstanceId * 3.1) * 0.5 + 0.5) * 0.7;
+  float sparkle1 = step(0.82, freq) * (sin(uTime * 18.0 + vInstanceId * 11.3) * 0.5 + 0.5) * 0.25;
+  float sparkle2 = step(0.90, freq) * (cos(uTime * 27.0 + vInstanceId * 7.7) * 0.5 + 0.5) * 0.3;
+  float sparkle3 = step(0.95, freq) * (sin(uTime * 35.0 + vInstanceId * 3.1) * 0.5 + 0.5) * 0.4;
   color += (sparkle1 + sparkle2 + sparkle3) * vec3(0.5, 1.0, 1.0);
 
   // PCB solder point flash on bass
   float solderFlash = step(0.7, uBass) * step(0.85, freq) * hash(vInstanceId * 19.7 + floor(uTime * 12.0));
-  color += vec3(0.8, 1.0, 0.9) * solderFlash * 2.0;
+  color += vec3(0.8, 1.0, 0.9) * solderFlash * 1.0;
 
   // Inner glow: circuit board energy
-  float innerGlow = freq * freq * 0.2;
+  float innerGlow = freq * freq * 0.15;
   color += innerGlow * circuit1;
 
   gl_FragColor = vec4(color, 1.0);
@@ -1247,7 +1247,7 @@ void main() {
 
   // Node pulsation: each node pulses at a different phase
   float nodePulse = sin(uTime * 2.5 + nodeHash * 20.0) * 0.3 + 0.7;
-  nodeGlow *= nodePulse * (1.0 + uBass * 1.5);
+  nodeGlow *= nodePulse * (1.0 + uBass * 0.8);
   nodeCore *= nodePulse;
 
   color += vec3(0.0, 0.9, 0.85) * nodeGlow;
@@ -1267,7 +1267,7 @@ void main() {
   float powerRing2 = fract(uTime * 0.3 + 0.5) * 22.0;
   float pr1 = smoothstep(0.25, 0.0, abs(ringDist - powerRing1)) * smoothstep(22.0, 10.0, powerRing1);
   float pr2 = smoothstep(0.25, 0.0, abs(ringDist - powerRing2)) * smoothstep(22.0, 10.0, powerRing2);
-  color += vec3(0.0, 0.6, 0.7) * (pr1 + pr2) * 0.1 * (0.5 + uBass * 1.2);
+  color += vec3(0.0, 0.6, 0.7) * (pr1 + pr2) * 0.1 * (0.5 + uBass * 0.6);
 
   // ── COMPONENT PADS (IC chip outlines) ──
   vec2 padCell = floor(vWorldPos.xz * 0.8);
@@ -1281,7 +1281,7 @@ void main() {
   color += vec3(0.0, 0.4, 0.45) * padEdge * 0.08;
 
   // ── CENTER PROCESSOR GLOW ──
-  float cpuGlow = (1.0 - dist) * 0.1 * (1.0 + uBass * 2.0);
+  float cpuGlow = (1.0 - dist) * 0.1 * (1.0 + uBass * 1.0);
   color += vec3(0.0, 0.5, 0.6) * cpuGlow;
 
   // Signal pulse from center on bass

@@ -899,11 +899,15 @@ export class ThreeJsEngine {
     this.camera.lookAt(0, lookY, 0)
 
     // 8. Drive bloom with audio (preset-driven reactivity)
+    // Cap bloom strength to prevent white-out on loud bass hits
     if (this.bloomPass) {
       const baseStrength = this.config.bloomStrength ?? this.currentPreset.bloomStrength
       const baseRadius = this.config.bloomRadius ?? this.currentPreset.bloomRadius
-      this.bloomPass.strength = baseStrength + bands.bass * this.currentPreset.bloomBassMultiplier + bands.peak * this.currentPreset.bloomPeakMultiplier
-      this.bloomPass.radius = baseRadius + bands.mid * 0.25
+      this.bloomPass.strength = Math.min(
+        baseStrength + bands.bass * this.currentPreset.bloomBassMultiplier + bands.peak * this.currentPreset.bloomPeakMultiplier,
+        2.5 // hard cap — above this, UnrealBloom saturates the entire image white
+      )
+      this.bloomPass.radius = Math.min(baseRadius + bands.mid * 0.25, 1.2)
     }
 
     // 8b. Drive chromatic aberration with bass
