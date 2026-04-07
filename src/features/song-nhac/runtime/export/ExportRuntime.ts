@@ -12,7 +12,7 @@ import { ThreeJsEngine } from '../engine/threejs/ThreeJsEngine'
 import { EngineHost } from '../engine/EngineHost'
 import { WaveBarsEngine } from '../engine/wave/WaveBarsEngine'
 import { renderOneFrame } from './renderOneFrame'
-import { captureCompositeToJPEG } from './captureFrame'
+import { captureCompositeToBMP } from './captureFrame'
 import { createFakeAudioForExport, type FakeAudioExportContext } from './fakeAudioForExport'
 import type { DrawableLayer } from '../render/drawLayers'
 import type {
@@ -39,7 +39,7 @@ export interface ExportRuntimeOptions {
   skipYield?: boolean
   getLayers?: () => DrawableLayer[]
   /**
-   * WebCodecs mode: skip captureCompositeToJPEG entirely.
+   * WebCodecs mode: skip BMP capture entirely.
    * The FrameSink reads directly from compositeCanvas via VideoFrame API.
    * frameSink.writeFrame() is called with an empty buffer as a signal.
    */
@@ -224,10 +224,8 @@ export async function runExportRuntime(options: ExportRuntimeOptions): Promise<v
   // If no engine was set up (bgEngine = 'none'), no background engine renders
   // renderOneFrame will still render layers on overlay2dCanvas
 
-  // JPEG quality: 0.92 cho chất lượng tốt — JPEG chỉ là format trung gian,
-  // chất lượng cuối cùng do video codec (h264) quyết định.
-  // 0.92 giữ nét gần như lossless, tránh artifact JPEG bị bake vào H.264.
-  const jpegQuality = 0.92
+  // BMP lossless capture — eliminates JPEG double-compression artifacts.
+  // Output quality now matches preview exactly.
 
   try {
     const BATCH = 30
@@ -282,9 +280,9 @@ export async function runExportRuntime(options: ExportRuntimeOptions): Promise<v
           // No JPEG encode, no CPU readback — GPU-to-GPU pipeline
           await frameSink.writeFrame(new ArrayBuffer(0))
         } else {
-          // JPEG capture: ~100-300KB thay vì 14MB raw RGBA
-          const jpegBuffer = await captureCompositeToJPEG(currentSet, jpegQuality)
-          await frameSink.writeFrame(jpegBuffer)
+          // BMP lossless capture: no compression artifacts, quality = preview
+          const bmpBuffer = captureCompositeToBMP(currentSet)
+          await frameSink.writeFrame(bmpBuffer)
         }
       }
 

@@ -183,7 +183,7 @@ export async function startFfmpegPipe(options: SongNhacExportOptions): Promise<{
     inputArgs = [
       '-y',
       '-f', 'image2pipe',
-      '-vcodec', 'mjpeg',
+      '-vcodec', 'bmp',
       '-r', String(fps),
       '-i', 'pipe:0',
     ]
