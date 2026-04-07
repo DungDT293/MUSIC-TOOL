@@ -52,10 +52,10 @@ function drawWavePlasma(
 
     for (let i = 0; i < segs; i++) {
       const angle = (i / segs) * Math.PI * 2 - Math.PI / 2
-      const mi = i < segs / 2 ? i : segs - 1 - i
+      // Full 360°: no mirror
       const rawT = spectrum && spectrum.length > 0
-        ? getSpectrumAt(spectrum, (bandOff + mi) % 64, segs)
-        : getSampleAt(samples, Math.floor((mi / segs) * WAVE_SEGMENTS))
+        ? getSpectrumAt(spectrum, (bandOff + i) % 64, segs)
+        : getSampleAt(samples, Math.floor((i / segs) * WAVE_SEGMENTS))
       const t = Math.pow(rawT, 1.1)
       const wave = Math.sin(angle * 3 + time * (2 + r)) * 0.3 + 0.7
       const dist = t * wave * ringDist

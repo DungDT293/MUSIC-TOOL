@@ -37,10 +37,11 @@ function drawWaveCircleBars(
   const barData: { amp: number; len: number; cos: number; sin: number; colorT: number }[] = []
   for (let i = 0; i < barCount; i++) {
     const angle = i * angleStep - Math.PI / 2
-    const mi = i < barCount / 2 ? i : barCount - 1 - i
+    // Full 360°: map spectrum across all bars (no mirror)
+    // Low frequencies at top, sweep clockwise through mid to treble and back
     const raw = spectrum && spectrum.length > 0
-      ? getSpectrumAt(spectrum, mi, barCount / 2)
-      : getSampleAt(samples, Math.floor((mi / (barCount / 2)) * WAVE_SEGMENTS))
+      ? getSpectrumAt(spectrum, i, barCount)
+      : getSampleAt(samples, Math.floor((i / barCount) * WAVE_SEGMENTS))
     const amp = Math.pow(raw, 1.3)
     barData.push({
       amp,
