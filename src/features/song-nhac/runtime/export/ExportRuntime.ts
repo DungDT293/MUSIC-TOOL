@@ -254,7 +254,6 @@ export async function runExportRuntime(options: ExportRuntimeOptions): Promise<v
 
         if (threeEngine) {
           // ThreeJS path: WebGL render + overlay layers
-          threeEngine.resize({ width: currentSet.webglCanvas.width, height: currentSet.webglCanvas.height })
           threeEngine.render(frame)
           renderOneFrame(currentSet, null, frame, layers)
         } else if (altEngine && altEngineInited) {
@@ -264,10 +263,6 @@ export async function runExportRuntime(options: ExportRuntimeOptions): Promise<v
           if (bgCtx) {
             drawExportBackground(bgCtx, currentSet.webglCanvas.width, currentSet.webglCanvas.height)
           }
-          altEngine.resize({
-            width: currentSet.webglCanvas.width,
-            height: currentSet.webglCanvas.height,
-          })
           try { altEngine.render(frame) } catch {}
           renderOneFrame(currentSet, null, frame, layers)
         } else if (engineHostFallback) {

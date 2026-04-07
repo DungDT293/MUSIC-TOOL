@@ -52,10 +52,15 @@ export function renderOverlayTestPattern(
 }
 
 /** Composite: webgl + overlay → composite canvas. */
+const _compositeCtxCache = new WeakMap<HTMLCanvasElement, CanvasRenderingContext2D>()
 export function renderComposite(canvases: TestPatternCanvasSet): void {
   const { webglCanvas, overlay2dCanvas, compositeCanvas } = canvases
-  const ctx = compositeCanvas.getContext('2d')
-  if (!ctx) return
+  let ctx = _compositeCtxCache.get(compositeCanvas)
+  if (!ctx) {
+    ctx = compositeCanvas.getContext('2d')!
+    if (!ctx) return
+    _compositeCtxCache.set(compositeCanvas, ctx)
+  }
   const w = compositeCanvas.width
   const h = compositeCanvas.height
   ctx.clearRect(0, 0, w, h)

@@ -129,11 +129,11 @@ export async function createWebCodecsFrameSink(
       if (!encoder || encoder.state === 'closed' || !canvasSet) return
 
       // Back-pressure: wait if encoder queue is full
-      const MAX_QUEUE = 4
+      const MAX_QUEUE = 8
       let waited = 0
       while (encoder.encodeQueueSize > MAX_QUEUE) {
-        await new Promise<void>(r => setTimeout(r, 1))
-        if (++waited > 5000) break // Safety: max 5s wait
+        await new Promise<void>(r => setTimeout(r, 2))
+        if (++waited > 2500) break // Safety: max 5s wait
       }
 
       const isKey = frameIndex === 0 || frameIndex % KEYFRAME_INTERVAL === 0

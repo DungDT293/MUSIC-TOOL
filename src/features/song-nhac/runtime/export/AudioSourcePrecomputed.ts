@@ -159,6 +159,9 @@ export function createAudioSourceIpc(
   const fftImag = new Float32Array(FFT_SIZE)
   // Buffer holding the 2048 samples fetched in last seek()
   let currentSamples = new Float32Array(FFT_SIZE)
+  // Reusable output buffers — avoid GC pressure
+  const freqData = new Uint8Array(HALF)
+  const waveData = new Uint8Array(HALF)
 
   function computeFrameFromSamples(): { frequencyData: Uint8Array; waveformData: Uint8Array } {
     // Apply Hann window to fetched samples → fftReal
@@ -170,7 +173,6 @@ export function createAudioSourceIpc(
     fftInPlace(fftReal, fftImag)
 
     // Frequency data: magnitude → dB → byte
-    const freqData = new Uint8Array(HALF)
     for (let i = 0; i < HALF; i++) {
       const mag = Math.sqrt(fftReal[i] ** 2 + fftImag[i] ** 2) / FFT_SIZE
       const db = mag > 1e-10 ? 20 * Math.log10(mag) : MIN_DB
@@ -178,7 +180,6 @@ export function createAudioSourceIpc(
     }
 
     // Waveform data: PCM [-1,1] → [0,255]
-    const waveData = new Uint8Array(HALF)
     for (let i = 0; i < HALF; i++) {
       waveData[i] = Math.max(0, Math.min(255, Math.round(currentSamples[i] * 128 + 128)))
     }
@@ -219,6 +220,9 @@ function buildSourceFromPcm(
   // ── 3. Reusable FFT buffers (avoid allocation mỗi frame) ──
   const fftReal = new Float32Array(FFT_SIZE)
   const fftImag = new Float32Array(FFT_SIZE)
+  // Reusable output buffers — avoid GC pressure from 2× new Uint8Array(1024) per frame
+  const freqData = new Uint8Array(HALF)
+  const waveData = new Uint8Array(HALF)
 
   function computeFrame(timeSec: number): { frequencyData: Uint8Array; waveformData: Uint8Array } {
     // PCM window centered at timeSec
@@ -235,7 +239,6 @@ function buildSourceFromPcm(
     fftInPlace(fftReal, fftImag)
 
     // ── Frequency data: magnitude → dB → byte (AnalyserNode-compatible) ──
-    const freqData = new Uint8Array(HALF)
     for (let i = 0; i < HALF; i++) {
       const mag = Math.sqrt(fftReal[i] ** 2 + fftImag[i] ** 2) / FFT_SIZE
       const db = mag > 1e-10 ? 20 * Math.log10(mag) : MIN_DB
@@ -243,7 +246,6 @@ function buildSourceFromPcm(
     }
 
     // ── Waveform data: PCM [-1,1] → [0,255] (AnalyserNode-compatible) ──
-    const waveData = new Uint8Array(HALF)
     for (let i = 0; i < HALF; i++) {
       const idx = startSample + i
       const sample = idx < pcm.length ? pcm[idx] : 0
