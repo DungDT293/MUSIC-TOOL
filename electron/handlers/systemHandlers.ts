@@ -58,20 +58,21 @@ export async function confirmResourcesForVideoJob(
 ): Promise<boolean> {
   try {
     const diskSpace = await getDiskSpace(targetDir)
-    const minRequired: Record<string, number> = {
-      'merge': 2 * 1024 * 1024 * 1024,
-      'final-export': 4 * 1024 * 1024 * 1024,
-      'mute': 512 * 1024 * 1024,
+    const minRequiredGiB: Record<string, number> = {
+      'merge': 2,
+      'final-export': 4,
+      'mute': 0.5,
+      'normalize': 1,
     }
-    const required = minRequired[kind] ?? 1 * 1024 * 1024 * 1024
-    const hasEnough = checkMinimumSpace(diskSpace, required)
-    if (!hasEnough) {
+    const requiredGiB = minRequiredGiB[kind] ?? 1
+    const spaceCheck = checkMinimumSpace(diskSpace.free, requiredGiB)
+    if (!spaceCheck.enough) {
       console.warn(
         `[confirmResources] Not enough disk space for ${kind}: ` +
-        `available=${formatBytes(diskSpace.free)}, required=${formatBytes(required)}`
+        `available=${formatBytes(spaceCheck.freeBytes)}, required=${formatBytes(spaceCheck.requiredBytes)}`
       )
     }
-    return hasEnough
+    return spaceCheck.enough
   } catch (err) {
     console.warn('[confirmResources] Could not check disk space:', err)
     return true // Fail open
@@ -385,7 +386,9 @@ export function registerSystemHandlers(mainWindow: Electron.BrowserWindow | null
           if (!p) break
           try {
             const info = await getVideoFileInfo(p)
-            if (info.durationSec && info.durationSec > 0) {
+            const hasUsableDuration = !!(info.durationSec && info.durationSec > 0)
+            const hasUsableVideoStream = !!(info.width && info.height && info.codecName)
+            if (hasUsableDuration && hasUsableVideoStream) {
               valid.push({ ...info, path: p })
             } else {
               invalid.push(p)

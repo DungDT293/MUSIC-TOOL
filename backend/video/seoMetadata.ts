@@ -256,6 +256,11 @@ async function applyWithWindowsPropertySystem(
   const channel = req.channelName
   const source = useGenre ? genreValue : baseTitle
   const stars = 5
+  const tagsValue = (req.tags || '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .join(', ')
 
   const script = `
 param(

@@ -12,10 +12,14 @@ import { isValidAbsolutePath } from '../authState'
 import {
   startAutopilot,
   getAutopilotProgress,
+  getRecentAutopilotLogs,
   onAutopilotProgress,
   cancelAutopilot,
   onAutopilotLog,
+  getAutopilotLogVerbosity,
+  setAutopilotLogVerbosity,
   type AutopilotConfig as AutopilotBackendConfig,
+  type AutopilotLogVerbosity,
   type AutopilotProgress,
 } from '../../backend/autopilot/autopilotRunner'
 
@@ -31,6 +35,7 @@ interface PcmCache {
   duration: number
 }
 const pcmCacheMap = new Map<string, PcmCache>()
+let autopilotStartInFlight = false
 
 /**
  * Decode audio file → mono PCM Float32 using FFmpeg.
@@ -117,19 +122,52 @@ export function registerSongNhacHandlers(getMainWindow: () => BrowserWindow | nu
   })
 
   ipcMain.handle('autopilot:getStatus', async () => getAutopilotProgress())
+  ipcMain.handle('autopilot:getRecentLogs', async (_event, limit?: number) => getRecentAutopilotLogs(limit))
+  ipcMain.handle('autopilot:getLogVerbosity', async () => getAutopilotLogVerbosity())
+  ipcMain.handle('autopilot:setLogVerbosity', async (_event, verbosity: AutopilotLogVerbosity) => {
+    return { ok: true, verbosity: setAutopilotLogVerbosity(verbosity) }
+  })
 
   ipcMain.handle('autopilot:start', async (_event, config: AutopilotBackendConfig) => {
+    if (autopilotStartInFlight) {
+      return { ok: false, error: 'Autopilot đang khởi động. Hãy chờ health-check hiện tại hoàn tất.' }
+    }
+    autopilotStartInFlight = true
     try {
-      if (getAutopilotProgress().status === 'running') {
-        return { ok: false, error: 'Autopilot đang chạy. Hãy dừng job hiện tại trước khi chạy job mới.' }
+      const status = getAutopilotProgress().status
+      if (status === 'running' || status === 'paused' || status === 'cancelling') {
+        return { ok: false, error: 'Autopilot đang chạy hoặc đang dừng. Hãy chờ job hiện tại kết thúc trước khi chạy job mới.' }
       }
-      startAutopilot(config).catch((error: any) => {
+      const { runAutopilotHealthCheck } = await import('../../backend/autopilot/healthCheck')
+      const healthCheck = await runAutopilotHealthCheck(config)
+      if (!healthCheck.ok) {
+        return { ok: false, error: healthCheck.error || 'Autopilot health-check failed.' }
+      }
+
+      const effectiveConfig: AutopilotBackendConfig = {
+        ...config,
+        runtimeOverrides: {
+          ...config.runtimeOverrides,
+          finalExportUseGpuEncoding: healthCheck.recommendedUseGpuEncoding,
+          requireGpuForVideoEncode: config.runtimeOverrides?.requireGpuForVideoEncode,
+          healthCheckNotice: healthCheck.notice,
+          healthCheckNoticeLevel: healthCheck.noticeLevel,
+          resolvedGpuProfile: healthCheck.resolvedGpuProfile,
+          resolvedGpuFfmpegPath: healthCheck.resolvedGpuFfmpegPath,
+          resolvedGpuEncoder: healthCheck.resolvedGpuEncoder,
+          gpuFallbackReason: healthCheck.gpuFallbackReason,
+        },
+      }
+
+      startAutopilot(effectiveConfig).catch((error: any) => {
         console.error('[Autopilot] Pipeline error (background):', error)
       })
       return { ok: true }
     } catch (error: any) {
       console.error('[Autopilot] Failed to start:', error)
       return { ok: false, error: error?.message || String(error) }
+    } finally {
+      autopilotStartInFlight = false
     }
   })
 
@@ -144,6 +182,7 @@ export function registerSongNhacHandlers(getMainWindow: () => BrowserWindow | nu
 
     const VIDEO_EXTENSIONS = new Set(['.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm', '.ts', '.m2ts', '.m4v'])
     const folders = rootVideo.split('\n').map(f => f.trim()).filter(f => f.length > 0)
+    const SCAN_CONCURRENCY = 8
 
     // Validate each folder path
     const validFolders = folders.filter(f => isValidAbsolutePath(f))
@@ -154,21 +193,32 @@ export function registerSongNhacHandlers(getMainWindow: () => BrowserWindow | nu
       folders: [],
     }
 
-    const walkAsync = async (dir: string): Promise<number> => {
+    const walkAsync = async (rootDir: string): Promise<number> => {
       let count = 0
-      try {
-        const entries = await fsp.readdir(dir, { withFileTypes: true })
-        await Promise.all(entries.map(async (entry) => {
-          const fullPath = path.join(dir, entry.name)
+      const queue: string[] = [rootDir]
+
+      const worker = async () => {
+        while (queue.length > 0) {
+          const dir = queue.shift()
+          if (!dir) return
           try {
-            if (entry.isDirectory()) count += await walkAsync(fullPath)
-            else if (entry.isFile()) {
-              const ext = path.extname(entry.name).toLowerCase()
-              if (VIDEO_EXTENSIONS.has(ext)) count++
+            const entries = await fsp.readdir(dir, { withFileTypes: true })
+            for (const entry of entries) {
+              const fullPath = path.join(dir, entry.name)
+              try {
+                if (entry.isDirectory()) {
+                  queue.push(fullPath)
+                } else if (entry.isFile()) {
+                  const ext = path.extname(entry.name).toLowerCase()
+                  if (VIDEO_EXTENSIONS.has(ext)) count++
+                }
+              } catch {}
             }
           } catch {}
-        }))
-      } catch {}
+        }
+      }
+
+      await Promise.all(Array.from({ length: SCAN_CONCURRENCY }, () => worker()))
       return count
     }
 

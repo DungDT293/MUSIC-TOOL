@@ -45,22 +45,26 @@ export async function validateInputFiles(
         while (retryCount <= maxRetries) {
           try {
             const info = await getVideoFileInfo(filePath)
-            
-            // Check if file is valid: must have duration > 0
-            if (info.durationSec && info.durationSec > 0) {
+            const hasUsableDuration = !!(info.durationSec && info.durationSec > 0)
+            const hasUsableVideoStream = !!(info.width && info.height && info.codecName)
+
+            if (hasUsableDuration && hasUsableVideoStream) {
               valid.push({
                 path: filePath,
                 durationSec: info.durationSec,
                 width: info.width ?? undefined,
                 height: info.height ?? undefined,
+                codecName: info.codecName ?? undefined,
+                fps: typeof info.fps === 'number' ? info.fps : undefined,
                 sizeBytes: typeof info.sizeBytes === 'number' ? info.sizeBytes : undefined,
               })
               return // Success, exit retry loop
             } else {
-              // durationSec is null or <= 0
               invalid.push(filePath)
-              console.warn(`[validateInputFiles] Invalid file (duration <= 0 or null): ${filePath}`)
-              return // Invalid duration, no need to retry
+              console.warn(
+                `[validateInputFiles] Invalid file (missing usable duration/video stream): ${filePath}`
+              )
+              return // Invalid video metadata, no need to retry
             }
           } catch (error) {
             retryCount++

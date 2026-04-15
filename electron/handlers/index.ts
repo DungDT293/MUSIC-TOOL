@@ -18,7 +18,7 @@ export function registerAllHandlers(
 ) {
   registerAuthHandlers()
   registerSystemHandlers(mainWindow)
-  registerMusicHandlers(mainWindow)
+  registerMusicHandlers(getMainWindow)
   registerVideoHandlers()
   registerVideoFinalExportHandlers(getMainWindow)
   registerSongNhacHandlers(getMainWindow)

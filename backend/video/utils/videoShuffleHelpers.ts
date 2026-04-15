@@ -11,6 +11,8 @@ export interface ClipItem {
   durationSec: number // đã được probe, > 0
   id?: string // optional, dùng để debug nếu cần
   sizeBytes?: number
+  width?: number
+  height?: number
 }
 
 /**
@@ -45,6 +47,8 @@ export function shuffleOnce(clips: ClipItem[], randomFn: () => number = Math.ran
   
   return result
 }
+
+export const shuffleClipsOnce = shuffleOnce
 
 function createSeededRandom(seed: number): () => number {
   // Cải thiện PRNG để đảm bảo randomness tốt hơn

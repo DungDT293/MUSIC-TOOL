@@ -39,6 +39,7 @@ function getMainWindow() { return windowManager.mainWindow }
 // ─── Biến interval ──────────────────────────────────────────────────────────
 let diskInfoRefreshInterval: NodeJS.Timeout | null = null
 let licenseCheckInterval: NodeJS.Timeout | null = null
+const DISK_INFO_REFRESH_INTERVAL_MS = 30 * 60 * 1000
 
 // ─── Đăng ký app:// scheme là privileged (PHẢI gọi trước app.whenReady) ─────
 protocol.registerSchemesAsPrivileged([
@@ -257,12 +258,12 @@ app.whenReady()
       console.error('[system] Initial disk info scan failed (non-critical):', err)
     )
 
-    // Refresh disk info định kỳ mỗi 30 giây
+    // Refresh disk info định kỳ mỗi 30 phút
     diskInfoRefreshInterval = setInterval(() => {
       refreshDiskInfoAndBroadcast().catch((err) =>
         console.error('[system] Periodic disk info refresh failed:', err)
       )
-    }, 30_000)
+    }, DISK_INFO_REFRESH_INTERVAL_MS)
 
     // License check định kỳ mỗi 30 phút
     licenseCheckInterval = setInterval(async () => {
@@ -336,7 +337,15 @@ app.on('before-quit', async () => {
 // ─── Auto-updater ─────────────────────────────────────────────────────────────
 ;(async () => {
   try {
+    if (!app.isPackaged) {
+      console.log('[Updater] Skipping autoUpdater setup in development mode')
+      return
+    }
     const { autoUpdater } = await import('electron-updater')
+    if (!autoUpdater) {
+      console.warn('[Updater] electron-updater did not expose autoUpdater')
+      return
+    }
     autoUpdater.logger = null
     autoUpdater.autoDownload = true
     autoUpdater.autoInstallOnAppQuit = true

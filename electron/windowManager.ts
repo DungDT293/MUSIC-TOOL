@@ -225,8 +225,8 @@ export function createWindow() {
     }
   })
 
-  mainWindow.webContents.on('crashed', (_event, killed) => {
-    console.error('[Window] Renderer process crashed:', { killed })
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    console.error('[Window] Renderer process crashed:', { reason: details.reason, exitCode: details.exitCode })
     if (mainWindow && !mainWindow.isDestroyed()) {
       setTimeout(() => {
         if (mainWindow && !mainWindow.isDestroyed()) {

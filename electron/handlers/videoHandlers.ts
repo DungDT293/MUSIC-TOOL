@@ -31,7 +31,6 @@ export function getActiveMuteRequestId() { return activeMuteRequestId }
 export function getActiveNormalizeRequestId() { return activeNormalizeRequestId }
 
 export function registerVideoHandlers() {
-  // Video probe
   ipcMain.handle('video:probeFile', async (_event, filePath: string) => {
     try {
       console.log('[IPC] video:probeFile', filePath)
@@ -43,7 +42,6 @@ export function registerVideoHandlers() {
     }
   })
 
-  // Get video file info with timeout
   ipcMain.handle('video:getFileInfo', async (_event, filePath: string) => {
     try {
       if (!isValidAbsolutePath(filePath)) return { durationSec: 0, filePath }
@@ -63,9 +61,30 @@ export function registerVideoHandlers() {
     }
   })
 
-  // Cut single video
   ipcMain.handle('video:cutSingleSimple', async (event, req: CutSingleSimpleRequest) => {
     const sender = event.sender
+    if (!isValidAbsolutePath(req.inputPath)) {
+      return {
+        requestId: req.requestId || randomUUID(),
+        outputFiles: [],
+        segmentCount: 0,
+        elapsedMs: 0,
+        avgSpeed: 0,
+        success: false,
+        error: 'Đường dẫn video đầu vào không hợp lệ.',
+      }
+    }
+    if (!isValidAbsolutePath(req.outputDir)) {
+      return {
+        requestId: req.requestId || randomUUID(),
+        outputFiles: [],
+        segmentCount: 0,
+        elapsedMs: 0,
+        avgSpeed: 0,
+        success: false,
+        error: 'Đường dẫn thư mục xuất không hợp lệ.',
+      }
+    }
     const jobHandle = jobQueue.enqueue({
       type: 'video:cut-single',
       payload: { inputPath: req.inputPath, segmentLengthSec: req.segmentLengthSec },
@@ -76,17 +95,25 @@ export function registerVideoHandlers() {
           (progress) => {
             const percent = progress.percent ?? 0
             ctx.updateProgress(percent, `Cutting video (${percent.toFixed(1)}%)`)
-            sender.send(VIDEO_PROGRESS_CHANNEL, { ...progress, requestId: ctx.jobId, mode: 'single-cut' as const })
+            if (!sender.isDestroyed()) {
+              sender.send(VIDEO_PROGRESS_CHANNEL, { ...progress, requestId: ctx.jobId, mode: 'single-cut' as const })
+            }
           },
           { signal: ctx.signal }
         )
         if (result.success) {
-          sender.send(VIDEO_PROGRESS_CHANNEL, {
-            requestId: ctx.jobId, mode: 'single-cut', completed: true,
-            outputFiles: result.outputFiles, segmentCount: result.segmentCount,
-            avgSpeed: result.avgSpeed, elapsedMs: result.elapsedMs,
-          })
-        } else {
+          if (!sender.isDestroyed()) {
+            sender.send(VIDEO_PROGRESS_CHANNEL, {
+              requestId: ctx.jobId,
+              mode: 'single-cut',
+              completed: true,
+              outputFiles: result.outputFiles,
+              segmentCount: result.segmentCount,
+              avgSpeed: result.avgSpeed,
+              elapsedMs: result.elapsedMs,
+            })
+          }
+        } else if (!sender.isDestroyed()) {
           sender.send(VIDEO_PROGRESS_CHANNEL, { requestId: ctx.jobId, mode: 'single-cut', error: result.error })
         }
         return result
@@ -96,7 +123,6 @@ export function registerVideoHandlers() {
     catch (err) { console.error('[IPC] video:cutSingleSimple error', err); throw err }
   })
 
-  // Split many videos
   ipcMain.handle('video:splitManySimple', async (event, req: SplitManySimpleRequest) => {
     const sender = event.sender
     const jobHandle = jobQueue.enqueue({
@@ -120,13 +146,17 @@ export function registerVideoHandlers() {
           (progress) => {
             const percent = progress.overallPercent ?? progress.percent ?? 0
             ctx.updateProgress(percent, `Splitting videos (${percent.toFixed(1)}%)`)
-            sender.send(VIDEO_PROGRESS_CHANNEL, { ...progress, requestId: ctx.jobId, mode: 'multi-cut' as const })
+            if (!sender.isDestroyed()) {
+              sender.send(VIDEO_PROGRESS_CHANNEL, { ...progress, requestId: ctx.jobId, mode: 'multi-cut' as const })
+            }
           },
           { signal: ctx.signal }
         )
         console.log('[IPC] video:splitManySimple - Task completed:', {
-          success: result.success, totalFiles: result.totalFiles,
-          successCount: result.successCount, failCount: result.failCount,
+          success: result.success,
+          totalFiles: result.totalFiles,
+          successCount: result.successCount,
+          failCount: result.failCount,
         })
         return result
       },
@@ -135,36 +165,43 @@ export function registerVideoHandlers() {
     catch (err) { console.error('[IPC] video:splitManySimple error', err); throw err }
   })
 
-  // Merge videos
   ipcMain.handle('video:mergeSimple', async (event, req: MergeVideosSimpleRequest) => {
     const sender = event.sender
+    const requestId = req.requestId || randomUUID()
     try {
-      const proceed = await confirmResourcesForVideoJob('merge', req.outputDir)
-      if (!proceed) {
-        return { requestId: '', outputPaths: [], totalDurationSec: 0, success: false, error: 'Job đã bị hủy sau cảnh báo tài nguyên.' }
+      if (activeMergeRequestId && activeMergeRequestId !== requestId) {
+        return {
+          requestId,
+          outputPaths: [],
+          totalDurationSec: 0,
+          success: false,
+          error: 'Đã có một job ghép video đang chạy. Vui lòng đợi job hiện tại hoàn thành hoặc hủy trước khi chạy job mới.',
+        }
       }
 
-      const requestId = req.requestId || randomUUID()
+      const proceed = await confirmResourcesForVideoJob('merge', req.outputDir)
+      if (!proceed) {
+        return {
+          requestId,
+          outputPaths: [],
+          totalDurationSec: 0,
+          success: false,
+          error: 'Job đã bị hủy sau cảnh báo tài nguyên.',
+        }
+      }
+
       activeMergeRequestId = requestId
       try {
-        const result = await mergeVideosSimple(
+        return await mergeVideosSimple(
           { ...req, requestId },
-          (progress) => { sender.send(VIDEO_PROGRESS_CHANNEL, progress) }
-        )
-        return result
-      } finally {
-        if (!videoJobManager.hasJob(requestId)) {
-          activeMergeRequestId = null
-        } else {
-          let ticks = 0
-          const checkInterval = setInterval(() => {
-            ticks++
-            if (!videoJobManager.hasJob(requestId) || ticks > 600) {
-              clearInterval(checkInterval)
-              activeMergeRequestId = null
+          (progress) => {
+            if (!sender.isDestroyed()) {
+              sender.send(VIDEO_PROGRESS_CHANNEL, { ...progress, requestId, mode: 'merge' as const })
             }
-          }, 500)
-        }
+          }
+        )
+      } finally {
+        activeMergeRequestId = null
       }
     } catch (err) {
       console.error('[IPC] video:mergeSimple error', err)
@@ -172,61 +209,93 @@ export function registerVideoHandlers() {
     }
   })
 
-  // Mute audio
   ipcMain.handle('video:muteAudio', async (event, req: MuteVideoAudioRequest) => {
     const sender = event.sender
+    const requestId = req.requestId || randomUUID()
     try {
-      const proceed = await confirmResourcesForVideoJob('mute', req.outputDir)
-      if (!proceed) {
-        return { requestId: '', outputPaths: [], success: false, error: 'Job đã bị hủy sau cảnh báo tài nguyên.', processed: 0, failed: 0 }
+      if (activeMuteRequestId && activeMuteRequestId !== requestId) {
+        return {
+          requestId,
+          outputPaths: [],
+          success: false,
+          error: 'Đã có một job tắt âm thanh đang chạy. Vui lòng đợi job hiện tại hoàn thành hoặc hủy trước khi chạy job mới.',
+          processed: 0,
+          failed: 0,
+        }
       }
 
-      const requestId = req.requestId || randomUUID()
+      const proceed = await confirmResourcesForVideoJob('mute', req.outputDir)
+      if (!proceed) {
+        return {
+          requestId,
+          outputPaths: [],
+          success: false,
+          error: 'Job đã bị hủy sau cảnh báo tài nguyên.',
+          processed: 0,
+          failed: 0,
+        }
+      }
+
       activeMuteRequestId = requestId
       try {
-        const result = await muteVideoAudio(
+        return await muteVideoAudio(
           { ...req, requestId },
-          (progress) => { sender.send(VIDEO_PROGRESS_CHANNEL, { ...progress, requestId, mode: 'mute-audio' }) }
-        )
-        return result
-      } finally {
-        if (!videoJobManager.hasJob(requestId)) {
-          activeMuteRequestId = null
-        } else {
-          let ticks = 0
-          const checkInterval = setInterval(() => {
-            ticks++
-            if (!videoJobManager.hasJob(requestId) || ticks > 600) {
-              clearInterval(checkInterval)
-              activeMuteRequestId = null
+          (progress) => {
+            if (!sender.isDestroyed()) {
+              sender.send(VIDEO_PROGRESS_CHANNEL, { ...progress, requestId, mode: 'mute-audio' })
             }
-          }, 500)
-        }
+          }
+        )
+      } finally {
+        activeMuteRequestId = null
       }
     } catch (err: any) {
       console.error('[IPC] video:muteAudio error', err)
       return {
-        requestId: req.requestId || randomUUID(), outputPaths: [], success: false,
-        error: err?.message || 'Lỗi không xác định khi tắt âm thanh video', processed: 0, failed: 0,
+        requestId,
+        outputPaths: [],
+        success: false,
+        error: err?.message || 'Lỗi không xác định khi tắt âm thanh video',
+        processed: 0,
+        failed: 0,
       }
     }
   })
 
   ipcMain.handle('video:getActiveMuteJobId', async () => activeMuteRequestId)
 
-  // Normalize video
   ipcMain.handle('video:normalize', async (event, req: NormalizeVideoRequest) => {
     const sender = event.sender
+    const requestId = req.requestId || randomUUID()
     try {
-      const proceed = await confirmResourcesForVideoJob('normalize', req.outputDir)
-      if (!proceed) {
-        return { requestId: '', outputPaths: [], success: false, error: 'Job đã bị hủy sau cảnh báo tài nguyên.', processed: 0, failed: 0, usedGpu: false }
+      if (activeNormalizeRequestId && activeNormalizeRequestId !== requestId) {
+        return {
+          requestId,
+          outputPaths: [],
+          success: false,
+          error: 'Đã có một job chuẩn hóa video đang chạy. Vui lòng đợi job hiện tại hoàn thành hoặc hủy trước khi chạy job mới.',
+          processed: 0,
+          failed: 0,
+          usedGpu: false,
+        }
       }
 
-      const requestId = req.requestId || randomUUID()
+      const proceed = await confirmResourcesForVideoJob('normalize', req.outputDir)
+      if (!proceed) {
+        return {
+          requestId,
+          outputPaths: [],
+          success: false,
+          error: 'Job đã bị hủy sau cảnh báo tài nguyên.',
+          processed: 0,
+          failed: 0,
+          usedGpu: false,
+        }
+      }
+
       activeNormalizeRequestId = requestId
       try {
-        const result = await normalizeVideo(
+        return await normalizeVideo(
           { ...req, requestId },
           (progress) => {
             if (!sender.isDestroyed()) {
@@ -234,26 +303,19 @@ export function registerVideoHandlers() {
             }
           }
         )
-        return result
       } finally {
-        if (!videoJobManager.hasJob(requestId)) {
-          activeNormalizeRequestId = null
-        } else {
-          let ticks = 0
-          const checkInterval = setInterval(() => {
-            ticks++
-            if (!videoJobManager.hasJob(requestId) || ticks > 600) {
-              clearInterval(checkInterval)
-              activeNormalizeRequestId = null
-            }
-          }, 500)
-        }
+        activeNormalizeRequestId = null
       }
     } catch (err: any) {
       console.error('[IPC] video:normalize error', err)
       return {
-        requestId: req.requestId || randomUUID(), outputPaths: [], success: false,
-        error: err?.message || 'Lỗi không xác định khi chuẩn hóa video', processed: 0, failed: 0, usedGpu: false,
+        requestId,
+        outputPaths: [],
+        success: false,
+        error: err?.message || 'Lỗi không xác định khi chuẩn hóa video',
+        processed: 0,
+        failed: 0,
+        usedGpu: false,
       }
     }
   })
@@ -265,7 +327,6 @@ export function registerVideoHandlers() {
     return null
   })
 
-  // Cancel / query jobs
   ipcMain.handle('video:cancelJob', async (_event, requestId: string) => {
     try { videoJobManager.cancelJob(requestId); return { success: true } }
     catch (err) { console.error('[IPC] video:cancelJob error', err); return { success: false, error: String(err) } }
@@ -280,7 +341,10 @@ export function registerVideoHandlers() {
     try {
       if (activeMergeRequestId && videoJobManager.hasJob(activeMergeRequestId)) return activeMergeRequestId
       return null
-    } catch (err) { console.error('[IPC] video:getActiveMergeJobId error', err); return null }
+    } catch (err) {
+      console.error('[IPC] video:getActiveMergeJobId error', err)
+      return null
+    }
   })
 
   ipcMain.handle('video:hasJob', async (_event, requestId: string) => {
@@ -288,7 +352,6 @@ export function registerVideoHandlers() {
     catch (err) { console.error('[IPC] video:hasJob error', err); return false }
   })
 
-  // Video Pool integration for manual Merge tab
   ipcMain.handle('video:pool-mark-used', async (_event, filePaths: string[]) => {
     try {
       const { generateClipId, markClipsUsed } = await import('../../backend/autopilot/videoPool')
@@ -319,10 +382,15 @@ export function registerVideoHandlers() {
       const { pickClipsLRU } = await import('../../backend/autopilot/videoPool')
       const VIDEO_EXTS = new Set(['.mp4', '.mkv', '.mov', '.avi', '.webm', '.m4v'])
       const files = fs.readdirSync(folderPath)
-        .filter(f => VIDEO_EXTS.has(path.extname(f).toLowerCase()))
-        .map(f => path.join(folderPath, f))
+        .filter((f) => VIDEO_EXTS.has(path.extname(f).toLowerCase()))
+        .map((f) => path.join(folderPath, f))
       const result = pickClipsLRU(files, count)
-      return { ok: true, filePaths: result.filePaths, reusedCount: result.reusedCount, totalAvailable: result.totalAvailable }
+      return {
+        ok: true,
+        filePaths: result.filePaths,
+        reusedCount: result.reusedCount,
+        totalAvailable: result.totalAvailable,
+      }
     } catch (err: any) {
       console.error('[IPC] video:pool-pick-lru error', err)
       return { ok: false, error: err?.message, filePaths: [] }

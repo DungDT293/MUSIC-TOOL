@@ -16,7 +16,7 @@ import { getFfmpegPaths } from '../ffmpeg/config'
 import { getVideoFileInfo } from './videoInfo'
 import { verifyOutputVideo } from './outputVerification'
 import { buildMergeProgress, type MergeProgress } from './videoProgress'
-import { validateInputFiles } from './videoUtils'
+import { validateInputFiles, type ValidatedInputFile } from './videoUtils'
 import {
   buildRandomPermutations,
   buildPlaylistToFillDuration,
@@ -79,6 +79,21 @@ export interface MergeVideosSimpleResult {
 
 import { buildNormalizeVfFilter } from './utils/normalizeVf'
 
+function shouldRunDeepVerifyForMerge(forceSafeMode: boolean, inputFiles: string[]): boolean {
+  if (forceSafeMode) return true
+  return inputFiles.length > 1
+}
+
+function shouldPreferStableMergePath(forceSafeMode: boolean, validInputs: ValidatedInputFile[]): boolean {
+  if (forceSafeMode) return true
+  if (validInputs.length <= 1) return false
+
+  const baseline = validInputs[0]
+  return validInputs.some(
+    (item) => item.codecName !== baseline.codecName || item.fps !== baseline.fps,
+  )
+}
+
 /**
  * Build concat list content for FFmpeg
  */
@@ -86,8 +101,8 @@ function buildConcatListContent(filePaths: string[]): string {
   // Dùng forward slash cho FFmpeg (cross-platform), không dùng bash-style escape
   return filePaths.map((filePath) => {
     const normalized = filePath.replace(/\\/g, '/')
-    // Escape dấu nháy đơn theo chuẩn FFmpeg concat demuxer (dùng ký tự escape \')
-    const escaped = normalized.replace(/'/g, "\\'")
+    // Escape dấu nháy đơn theo cú pháp ffconcat: đóng quote, escape quote, rồi mở lại.
+    const escaped = normalized.replace(/'/g, "'\\''")
     return `file '${escaped}'`
   }).join('\n')
 }
@@ -951,6 +966,8 @@ async function fallbackTranscodeAndConcat(
           userChoice,
           'fast' // quality preset
         )
+        const selectedFfmpegPath =
+          usedEncoder === 'gpu' && gpuInfo?.ffmpegPath ? gpuInfo.ffmpegPath : ffmpeg
         
         // Log encoder being used (only for first file to avoid spam)
         if (i === 0) {
@@ -1009,7 +1026,7 @@ async function fallbackTranscodeAndConcat(
           '-movflags', '+faststart',
           safeOut,
         ]
-        const proc = spawn(ffmpeg, args, { stdio: ['ignore', 'ignore', 'pipe'] })
+        const proc = spawn(selectedFfmpegPath, args, { stdio: ['ignore', 'ignore', 'pipe'] })
         
         // Register process vào videoJobManager để có thể cancel
         if (requestId) {
@@ -1184,6 +1201,10 @@ export async function mergeVideosSimple(
     
     // D3: validateInputFiles chỉ chạy 1 lần trước job
     const { valid, invalid } = await validateInputFiles(req.inputFiles, 10)
+    const preferStableMergePath = shouldPreferStableMergePath(forceSafeMode, valid)
+    if (!forceSafeMode && preferStableMergePath) {
+      console.log('[mergeVideosSimple] Auto-enable stable merge path because input videos differ in codec/FPS/resolution.')
+    }
     
     // DEBUG: Log sau khi validate
     console.log(`[mergeVideosSimple][DEBUG] After validate: valid=${valid.length}, invalid=${invalid.length}`)
@@ -1565,8 +1586,8 @@ export async function mergeVideosSimple(
         console.log(`[merge][has-target] Starting job ${currentMergeIndex}/${mergeCount}: ${outputFileName}`)
         console.log(`[merge][has-target] Target duration: ${targetDurationSec.toFixed(2)}s`)
         
-        if (forceSafeMode) {
-          await runSafeMerge('Đang ghép ổn định (re-encode)...', targetDurationSec)
+        if (preferStableMergePath) {
+          await runSafeMerge('Đang ghép ổn định để tránh xước hình / dừng hình...', targetDurationSec)
         } else {
           try {
             await runConcatWithCut(
@@ -1663,8 +1684,8 @@ export async function mergeVideosSimple(
       
       console.log(`[merge][no-target] Starting job ${currentMergeIndex}/${mergeCount}: ${outputFileName}`)
       
-      if (forceSafeMode) {
-        await runSafeMerge('Đang ghép ổn định (re-encode)...', null)
+      if (preferStableMergePath) {
+        await runSafeMerge('Đang ghép ổn định để tránh xước hình / dừng hình...', null)
       } else {
         try {
           await runConcat(
@@ -1780,7 +1801,7 @@ export async function mergeVideosSimple(
         }
 
         // Phase 2: Deep verification với ffprobe + decode
-        const shouldRunDeepVerify = forceSafeMode // Chỉ decode khi đang re-encode (Chuẩn hóa)
+        const shouldRunDeepVerify = shouldRunDeepVerifyForMerge(forceSafeMode, filesForMerge)
         if (shouldRunDeepVerify) {
           // Check cancellation trước khi verify (verify có thể mất thời gian)
           if (videoJobManager.isCancelled(requestId)) {
@@ -1829,7 +1850,7 @@ export async function mergeVideosSimple(
             )
           }
         } else {
-          console.log('[mergeVideosSimple][verify] Skip deep verification (copy-stream mode).')
+          console.log('[mergeVideosSimple][verify] Skip deep verification (single-input copy mode).')
         }
 
         outputPaths.push(finalOutputPath)

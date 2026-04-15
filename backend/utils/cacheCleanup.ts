@@ -68,8 +68,8 @@ function compareVersion(a: string, b: string): number {
 }
 
 /**
- * Xóa cache cũ - XÓA TOÀN BỘ kể cả thông tin đăng nhập (authState.enc)
- * Để người dùng đăng nhập lại khi cài version mới
+ * Xóa cache cũ khi nâng cấp version.
+ * Giữ nguyên auth/license state để update app không làm mất đăng nhập.
  */
 async function clearOldCache(): Promise<void> {
   try {
@@ -117,47 +117,7 @@ async function clearOldCache(): Promise<void> {
       }
     }
 
-    // XÓA THÔNG TIN ĐĂNG NHẬP - Để người dùng đăng nhập lại
-    // Sử dụng cùng logic với encryptedAuthStore để tìm đúng đường dẫn
-    try {
-      // Import động để tránh circular dependency
-      const { resolveStoragePath } = await import('../auth/encryptedAuthStore')
-      const authStateEncPath = resolveStoragePath()
-      const authFiles = [
-        authStateEncPath, // File encrypted auth state (đường dẫn chính xác)
-        authStateEncPath.replace(/\.enc$/, '.json'), // File plaintext cũ (nếu có)
-        authStateEncPath.replace(/\.enc$/, '.json.backup'), // File backup (nếu có)
-      ]
-
-      for (const authFile of authFiles) {
-        if (fs.existsSync(authFile)) {
-          try {
-            fs.unlinkSync(authFile)
-            console.log(`[cacheCleanup] Deleted auth file: ${authFile}`)
-          } catch (err: any) {
-            console.warn(`[cacheCleanup] Failed to delete ${authFile}:`, err.message)
-          }
-        }
-      }
-    } catch (err: any) {
-      // Fallback: thử xóa với đường dẫn mặc định
-      console.warn('[cacheCleanup] Failed to import resolveStoragePath, using fallback:', err.message)
-      const fallbackAuthFiles = [
-        path.join(userDataPath, 'authState.enc'),
-        path.join(userDataPath, 'authState.json'),
-        path.join(userDataPath, 'authState.json.backup'),
-      ]
-      for (const authFile of fallbackAuthFiles) {
-        if (fs.existsSync(authFile)) {
-          try {
-            fs.unlinkSync(authFile)
-            console.log(`[cacheCleanup] Deleted auth file (fallback): ${authFile}`)
-          } catch (err2: any) {
-            console.warn(`[cacheCleanup] Failed to delete ${authFile}:`, err2.message)
-          }
-        }
-      }
-    }
+    console.log('[cacheCleanup] Preserved auth state during version upgrade')
   } catch (error: any) {
     console.error('[cacheCleanup] Failed to clear cache:', error.message)
   }
@@ -187,7 +147,6 @@ export async function checkAndCleanCacheOnUpdate(): Promise<void> {
     console.error('[cacheCleanup] Error during cache cleanup check:', error.message)
   }
 }
-
 
 
 

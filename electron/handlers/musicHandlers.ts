@@ -35,7 +35,8 @@ import { videoJobManager } from '../../backend/video/videoJobManager'
 import { confirmResourcesForVideoJob } from './systemHandlers'
 import { isValidAbsolutePath } from '../authState'
 
-export function registerMusicHandlers(mainWindow: Electron.BrowserWindow | null) {
+// FIX BUG 28: Dùng getter thay vì tham chiếu cũ để mainWindow luôn được cập nhật
+export function registerMusicHandlers(getMainWindow: () => Electron.BrowserWindow | null) {
   // Music scan
   ipcMain.handle('music:scanFolders', async (_event, payload) => {
     // Validate folder paths in payload
@@ -177,6 +178,7 @@ export function registerMusicHandlers(mainWindow: Electron.BrowserWindow | null)
     }
     console.log('[IPC] music:exportPlaylist', req)
 
+    const mainWindow = getMainWindow()
     if (mainWindow && !mainWindow.isDestroyed()) {
       const proceed = await confirmResourcesForVideoJob('final-export', req.outputDir)
       if (!proceed) {
@@ -189,19 +191,25 @@ export function registerMusicHandlers(mainWindow: Electron.BrowserWindow | null)
     }
 
     const sender = event.sender
+    const reqWithMeta = req as ExportPlaylistRequest & Partial<{
+      outputPath: string
+      playlistName: string
+      currentIndex: number
+      totalCount: number
+    }>
     const jobHandle = jobQueue.enqueue<ExportPlaylistResult>({
       type: 'music:export-playlist',
       payload: {
         playlistId: req.playlistId,
-        outputPath: (req as any)?.outputPath,
-        playlistName: (req as any)?.playlistName,
-        currentIndex: (req as any)?.currentIndex,
-        totalCount: (req as any)?.totalCount,
+        outputPath: reqWithMeta.outputPath,
+        playlistName: reqWithMeta.playlistName,
+        currentIndex: reqWithMeta.currentIndex,
+        totalCount: reqWithMeta.totalCount,
       },
       onCancel: (jobId) => { videoJobManager.cancelJob(jobId) },
       task: async (ctx) => {
         const result = await exportPlaylistToFile(
-          { ...req, requestId: ctx.jobId, signal: ctx.signal } as any,
+          { ...req, requestId: ctx.jobId, signal: ctx.signal },
           (progress) => {
             const progressPercent =
               progress.percent ??
@@ -209,7 +217,9 @@ export function registerMusicHandlers(mainWindow: Electron.BrowserWindow | null)
                 ? (progress.currentSec / progress.totalSec) * 100
                 : undefined)
             ctx.updateProgress(progressPercent, 'Exporting playlist')
-            sender.send(EXPORT_PROGRESS_CHANNEL, { ...progress, requestId: ctx.jobId })
+            if (!sender.isDestroyed()) {
+              sender.send(EXPORT_PROGRESS_CHANNEL, { ...progress, requestId: ctx.jobId })
+            }
           }
         )
         return result
@@ -256,7 +266,10 @@ export function registerMusicHandlers(mainWindow: Electron.BrowserWindow | null)
     const progressChannel = 'music:normalizeAudio:progress'
     try {
       return await normalizeAudio(req, (progress: NormalizeAudioProgress) => {
-        sender.send(progressChannel, progress)
+        // FIX BUG 26: Check isDestroyed trước khi send progress
+        if (!sender.isDestroyed()) {
+          sender.send(progressChannel, progress)
+        }
       })
     } catch (err: any) {
       console.error('[IPC] music:normalizeAudio error', err)

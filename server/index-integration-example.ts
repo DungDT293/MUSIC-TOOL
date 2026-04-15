@@ -52,7 +52,8 @@ export default {
                 timestamp: Date.now(),
               }),
             }),
-            env
+            env,
+            { trustedSource: true },
           ).catch(() => {}) // Ignore errors khi report
           
           return json({ error: 'Invalid request signature' }, 401)
@@ -188,7 +189,8 @@ async function handleCheck(request: Request, env: Env) {
           timestamp: now,
         }),
       }),
-      env
+      env,
+      { trustedSource: true },
     ).catch(() => {})
 
     // Auto-block nếu > 3 machineIds
@@ -299,4 +301,3 @@ async function handleDashboardAPI(request: Request, env: Env) {
 
 // Cleanup old nonces định kỳ (có thể chạy trong scheduled event)
 // await cleanupOldNonces(env)
-

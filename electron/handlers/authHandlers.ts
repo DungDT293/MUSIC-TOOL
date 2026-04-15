@@ -24,6 +24,14 @@ import {
   clearEncryptedAuthState,
 } from '../../backend/auth/encryptedAuthStore'
 import { loginRateLimiter, LOGIN_RATE_LIMIT_CONFIG } from '../../backend/security/rateLimiter'
+import { clearGpuCache } from '../../backend/utils/gpuDetection'
+import {
+  getGpuFfmpegProfileSetting,
+  getLegacyGpuFfmpegPathSetting,
+  setGpuFfmpegProfileSetting,
+  setLegacyGpuFfmpegPathSetting,
+  type AppGpuFfmpegProfile,
+} from '../../backend/app/appSettings'
 
 // Chia sẻ licenseState với main.ts
 let licenseState: LicenseState = { status: 'checking', machineHash: '' }
@@ -182,6 +190,7 @@ export function registerAuthHandlers() {
         setAuthState(newState)
 
         if (payload.remember !== false) {
+          const persistedToken = res.device_token || res.token
           await writeEncryptedAuthState({
             status: newState.status,
             username: newState.username,
@@ -192,7 +201,8 @@ export function registerAuthHandlers() {
             latestVersion: newState.latestVersion,
             downloadUrl: newState.downloadUrl,
             // V2: device_token / refresh_token, V1: token / refreshToken
-            token: res.device_token || res.token,
+            token: persistedToken,
+            deviceToken: persistedToken,
             refreshToken: res.refresh_token || res.refreshToken,
             remember: true,
           })
@@ -297,9 +307,11 @@ export function registerAuthHandlers() {
 
         const stored = await readEncryptedAuthState()
         if (stored?.remember) {
+          const persistedToken = res.device_token || res.token
           await writeEncryptedAuthState({
             ...newState,
-            token: res.device_token || res.token,
+            token: persistedToken,
+            deviceToken: persistedToken,
             refreshToken: res.refresh_token || res.refreshToken,
             remember: true,
           })
@@ -369,27 +381,67 @@ export function registerAuthHandlers() {
         version: APP_VERSION,
       })
 
-      if (res.status === 'CHO_PHEP' || res.status === 'allowed') {
-        const newState = {
+      if (res.status === 'approved' || res.status === 'CHO_PHEP' || res.status === 'allowed') {
+        setAuthState({
           ...base,
-          status: 'allowed' as const,
+          status: 'pending',
           username: data.username,
           activationKey: res.activationKey ?? base.activationKey,
-          message: res.message || 'Tài khoản đã được phê duyệt.',
+          message: res.message || 'Tài khoản đã được phê duyệt. Vui lòng nhập key kích hoạt.',
           latestVersion: res.latestVersion ?? base.latestVersion,
           downloadUrl: res.downloadUrl ?? base.downloadUrl,
+        })
+        return {
+          status: 'approved' as const,
+          message: res.message || 'Tài khoản đã được phê duyệt. Vui lòng nhập key kích hoạt.',
         }
-        setAuthState(newState)
-      } else if (res.status === 'BI_CHAN' || res.status === 'blocked') {
+      }
+
+      if (res.status === 'BI_CHAN' || res.status === 'blocked') {
         setAuthState({ ...base, status: 'blocked', message: res.message || 'Tài khoản đã bị khóa.' })
-      } else {
-        setAuthState({ ...base, status: 'pending', message: res.message || 'Tài khoản vẫn đang chờ phê duyệt.' })
+        return {
+          status: 'blocked' as const,
+          message: res.message || 'Tài khoản đã bị khóa.',
+        }
+      }
+
+      if (res.status === 'locked') {
+        setAuthState({ ...base, status: 'pending', username: data.username, message: res.message || 'Key đã bị khóa.' })
+        return {
+          status: 'locked' as const,
+          message: res.message || 'Key đã bị khóa.',
+        }
+      }
+
+      if (res.status === 'revoked') {
+        setAuthState({ ...base, status: 'pending', username: data.username, message: res.message || 'Key đã bị thu hồi.' })
+        return {
+          status: 'revoked' as const,
+          message: res.message || 'Key đã bị thu hồi.',
+        }
+      }
+
+      if (res.status === 'not_found') {
+        setAuthState({ ...base, status: 'error', message: res.message || 'Không tìm thấy tài khoản.' })
+        return {
+          status: 'not_found' as const,
+          message: res.message || 'Không tìm thấy tài khoản.',
+        }
+      }
+
+      setAuthState({ ...base, status: 'pending', username: data.username, message: res.message || 'Tài khoản vẫn đang chờ phê duyệt.' })
+      return {
+        status: 'pending' as const,
+        message: res.message || 'Tài khoản vẫn đang chờ phê duyệt.',
       }
     } catch (err: any) {
       console.error('[auth:checkStatus] error', err)
       setAuthState({ ...base, status: 'error', message: getFriendlyAuthError(err, 'Không thể kiểm tra trạng thái tài khoản.') })
+      return {
+        status: 'error' as const,
+        message: getFriendlyAuthError(err, 'Không thể kiểm tra trạng thái tài khoản.'),
+      }
     }
-    return authState
   })
 
   ipcMain.handle('auth:validateKey', async (_event, data: { username: string; key: string }) => {
@@ -431,6 +483,7 @@ export function registerAuthHandlers() {
           password: base.password,
           machineId: newState.machineId,
           activationKey: newState.activationKey,
+          token: res.device_token,
           deviceToken: res.device_token,
           refreshToken: res.refresh_token,
           tokenExpiresAt: res.expires_at,
@@ -441,33 +494,99 @@ export function registerAuthHandlers() {
         return { ...res, message: 'Kích hoạt thành công.' }
       } else {
         const msg = res.message || (res.locked ? 'Key đã bị khóa.' : 'Mã kích hoạt không hợp lệ.')
-        setAuthState({ ...base, status: 'error', message: msg })
+        setAuthState({
+          ...base,
+          status: 'pending',
+          username: data.username,
+          message: msg,
+        })
         return { valid: false, message: msg, locked: res.locked, attempts: res.attempts, action: res.action, tamperCount: res.tamperCount }
       }
     } catch (err: any) {
       console.error('[auth:validateKey] error', err)
       const msg = getFriendlyAuthError(err, 'Không thể kích hoạt.')
-      setAuthState({ ...base, status: 'error', message: msg })
+      setAuthState({
+        ...base,
+        status: 'pending',
+        username: data.username,
+        message: msg,
+      })
       return { valid: false, message: msg }
     }
   })
 
   ipcMain.handle('auth:validateToken', async () => {
     const base = await getOrInitAuthState()
-    if (base.status !== 'allowed' || !base.username) {
-      return { valid: false, status: base.status }
-    }
     try {
       const stored = await readEncryptedAuthState()
-      if (!stored?.token) return { valid: false, status: 'no_token' }
+      const persistedToken = stored?.token ?? stored?.deviceToken
+      if (!stored || !persistedToken) {
+        return { valid: false, status: 'no_token' }
+      }
 
-      type ValidateTokenResponse = { valid: boolean; status?: string; message?: string }
+      type ValidateTokenResponse = {
+        valid: boolean
+        status?: string
+        message?: string
+        error?: string
+        username?: string
+        expires_at?: number
+        action?: string
+      }
       const res = await postJson<ValidateTokenResponse>('/api/auth/validate-token', {
-        token: stored.token,
-        ma_may: base.machineId,
-        version: APP_VERSION,
+        device_token: persistedToken,
+        machine_id: base.machineId,
       })
-      return res
+
+      if (res.valid) {
+        const restoredState = {
+          status: 'allowed' as const,
+          username: res.username ?? stored.username ?? base.username,
+          password: stored.password,
+          machineId: base.machineId,
+          activationKey: stored.activationKey,
+          message: res.message || stored.message || 'Đăng nhập thành công.',
+          preferredView: 'login' as const,
+          latestVersion: stored.latestVersion,
+          downloadUrl: stored.downloadUrl,
+        }
+        setAuthState(restoredState)
+        return {
+          ...res,
+          status: 'allowed',
+          username: restoredState.username,
+        }
+      }
+
+      if (res.action === 'BLOCKED' || res.status === 'blocked') {
+        clearEncryptedAuthState()
+        setAuthState({
+          status: 'blocked',
+          username: stored.username ?? base.username,
+          machineId: base.machineId,
+          activationKey: stored.activationKey,
+          message: res.message || res.error || 'Tài khoản đã bị khóa.',
+          preferredView: 'login',
+          latestVersion: stored.latestVersion,
+          downloadUrl: stored.downloadUrl,
+        })
+      } else {
+        setAuthState({
+          status: 'unregistered',
+          username: stored.username ?? base.username,
+          machineId: base.machineId,
+          activationKey: stored.activationKey,
+          message: res.message || res.error || 'Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.',
+          preferredView: 'login',
+          latestVersion: stored.latestVersion,
+          downloadUrl: stored.downloadUrl,
+        })
+      }
+
+      return {
+        ...res,
+        message: res.message || res.error,
+      }
     } catch (err: any) {
       console.error('[auth:validateToken] error', err)
       return { valid: false, status: 'error', message: getFriendlyAuthError(err, 'Không thể xác thực token.') }
@@ -520,12 +639,67 @@ export function registerAuthHandlers() {
     }
   })
 
-  ipcMain.handle('policy:get', async () => ({
-    latest_version: app.getVersion(),
-    min_supported_version: '3.6.0',
-    blocked_versions: [],
-    recommended_version: app.getVersion(),
-    force_update: false,
-    message: null,
-  }))
+  ipcMain.handle('app:getGpuFfmpegProfile', async () => {
+    try {
+      return { ok: true, profile: getGpuFfmpegProfileSetting() }
+    } catch (err) {
+      return {
+        ok: false,
+        profile: 'auto' as const,
+        error: (err as any)?.message || 'Failed to read GPU FFmpeg profile',
+      }
+    }
+  })
+
+  ipcMain.handle('app:setGpuFfmpegProfile', async (_event, profile: AppGpuFfmpegProfile) => {
+    try {
+      const savedProfile = setGpuFfmpegProfileSetting(profile)
+      clearGpuCache()
+      return { ok: true, profile: savedProfile }
+    } catch (err) {
+      return {
+        ok: false,
+        profile: 'auto' as const,
+        error: (err as any)?.message || 'Failed to save GPU FFmpeg profile',
+      }
+    }
+  })
+
+  ipcMain.handle('app:getLegacyGpuFfmpegPath', async () => {
+    try {
+      return { ok: true, path: getLegacyGpuFfmpegPathSetting() ?? null }
+    } catch (err) {
+      return {
+        ok: false,
+        path: null,
+        error: (err as any)?.message || 'Failed to read legacy GPU FFmpeg path',
+      }
+    }
+  })
+
+  ipcMain.handle('app:setLegacyGpuFfmpegPath', async (_event, binaryPath: string | null) => {
+    try {
+      const savedPath = setLegacyGpuFfmpegPathSetting(binaryPath)
+      clearGpuCache()
+      return { ok: true, path: savedPath ?? null }
+    } catch (err) {
+      return {
+        ok: false,
+        path: null,
+        error: (err as any)?.message || 'Failed to save legacy GPU FFmpeg path',
+      }
+    }
+  })
+
+  ipcMain.handle('policy:get', async () => {
+    const version = app.getVersion()
+    return {
+      latest_version: version,
+      min_supported_version: version,
+      blocked_versions: [],
+      recommended_version: version,
+      force_update: false,
+      message: null,
+    }
+  })
 }

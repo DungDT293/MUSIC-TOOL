@@ -3,16 +3,24 @@
  * Giới hạn số lần thử trong một khoảng thời gian
  */
 
-interface RateLimitConfig {
+export interface RateLimitConfig {
   maxAttempts: number
   windowMs: number
   cooldownMs?: number
 }
 
-interface RateLimitResult {
+export interface RateLimitResult {
   allowed: boolean
   remaining?: number
   resetAt?: number
+}
+
+interface HeadersLike {
+  get(name: string): string | null
+}
+
+interface RequestLike {
+  headers: HeadersLike
 }
 
 /**
@@ -91,6 +99,7 @@ export class RateLimiter {
 // Export instances
 export const loginRateLimiter = new RateLimiter()
 export const securityReportRateLimiter = new RateLimiter()
+export const requestRateLimiter = new RateLimiter()
 
 // Default configs
 export const LOGIN_RATE_LIMIT_CONFIG: RateLimitConfig = {
@@ -105,10 +114,58 @@ export const SECURITY_REPORT_RATE_LIMIT_CONFIG: RateLimitConfig = {
 }
 
 // Cleanup định kỳ (mỗi 10 phút)
-if (typeof setInterval !== 'undefined') {
+export const RateLimitPresets = {
+  STRICT: {
+    maxAttempts: 10,
+    windowMs: 60 * 1000,
+  },
+  NORMAL: {
+    maxAttempts: 30,
+    windowMs: 60 * 1000,
+  },
+} as const satisfies Record<string, RateLimitConfig>
+
+export function getIdentifierFromRequest(request: RequestLike): string {
+  const cfConnectingIp = request.headers.get('cf-connecting-ip')?.trim()
+  if (cfConnectingIp) {
+    return `ip:${cfConnectingIp}`
+  }
+
+  const forwardedFor = request.headers.get('x-forwarded-for')
+  const firstForwardedIp = forwardedFor
+    ?.split(',')
+    .map((value) => value.trim())
+    .find(Boolean)
+  if (firstForwardedIp) {
+    return `ip:${firstForwardedIp}`
+  }
+
+  const realIp = request.headers.get('x-real-ip')?.trim()
+  if (realIp) {
+    return `ip:${realIp}`
+  }
+
+  return 'ip:unknown'
+}
+
+export function requireRateLimit(key: string, config: RateLimitConfig): RateLimitResult {
+  const result = requestRateLimiter.check(key, config)
+  if (!result.allowed) {
+    throw new Error(`RATE_LIMITED:${result.resetAt ?? Date.now()}`)
+  }
+  return result
+}
+
+const isNodeRuntime =
+  typeof process !== 'undefined' &&
+  typeof process.versions === 'object' &&
+  !!process.versions?.node
+
+if (isNodeRuntime && typeof setInterval !== 'undefined') {
   setInterval(() => {
     loginRateLimiter.cleanup()
     securityReportRateLimiter.cleanup()
+    requestRateLimiter.cleanup()
   }, 10 * 60 * 1000)
 }
 

@@ -3,6 +3,7 @@ import path from 'node:path'
 import { randomUUID } from 'crypto'
 import { spawn } from 'child_process'
 import { getFfmpegPaths } from '../ffmpeg/config'
+import { getGpuInfo } from '../utils/gpuDetection'
 import { validateInputFiles } from './videoUtils'
 import { videoJobManager } from './videoJobManager'
 import { buildNormalizeVfFilter } from './utils/normalizeVf'
@@ -94,6 +95,7 @@ export async function normalizeVideo(
 
     // Detect GPU encoder availability (try nvenc first)
     const preferGpu = req.useGpu !== false // default true
+    const gpuInfo = preferGpu ? await getGpuInfo() : null
 
     for (let index = 0; index < valid.length; index++) {
       const fileInfo = valid[index]
@@ -122,6 +124,7 @@ export async function normalizeVideo(
         outputPath,
         vfFilter,
         preferGpu,
+        gpuInfo,
         requestId,
         (gpu) => {
           if (gpu) usedGpu = true
@@ -213,12 +216,18 @@ async function tryEncodeFile(
   outputPath: string,
   vfFilter: string,
   preferGpu: boolean,
+  gpuInfo: Awaited<ReturnType<typeof getGpuInfo>> | null,
   requestId: string,
   onGpuUsed: (used: boolean) => void
 ): Promise<boolean> {
-  if (preferGpu) {
+  const gpuFfmpegPath =
+    preferGpu && gpuInfo?.available && gpuInfo.encoder === 'nvenc'
+      ? gpuInfo.ffmpegPath || ffmpeg
+      : null
+
+  if (preferGpu && gpuFfmpegPath) {
     // Try GPU (nvenc)
-    const gpuOk = await runFfmpegEncode(ffmpeg, inputPath, outputPath, vfFilter, 'gpu', requestId)
+    const gpuOk = await runFfmpegEncode(gpuFfmpegPath, inputPath, outputPath, vfFilter, 'gpu', requestId)
     if (gpuOk) {
       onGpuUsed(true)
       return true
@@ -240,12 +249,18 @@ async function tryEncodeFile(
     }
     onGpuUsed(false)
     return cpuOk
-  } else {
-    // CPU only
-    const ok = await runFfmpegEncode(ffmpeg, inputPath, outputPath, vfFilter, 'cpu', requestId)
-    onGpuUsed(false)
-    return ok
   }
+
+  if (preferGpu && gpuInfo?.available && gpuInfo.encoder !== 'nvenc') {
+    console.log(
+      `[normalizeVideo] GPU encoder ${gpuInfo.encoder.toUpperCase()} is not supported by normalizeVideo fast path. Falling back to CPU for ${path.basename(inputPath)}.`,
+    )
+  }
+
+  // CPU only
+  const ok = await runFfmpegEncode(ffmpeg, inputPath, outputPath, vfFilter, 'cpu', requestId)
+  onGpuUsed(false)
+  return ok
 }
 
 /**

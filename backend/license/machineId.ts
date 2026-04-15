@@ -31,12 +31,26 @@ function resolveProgramDataCacheFile(): string {
 const isDev = process.env.NODE_ENV === 'development' || !!process.env.ELECTRON_RENDERER_URL
 const ENV_CACHE_FILE = isDev ? process.env.MACHINE_ID_FILE : undefined
 
-function readCachedMachineHash(): string | null {
-  const candidates = [
+function getCacheCandidates(): string[] {
+  return [
     ENV_CACHE_FILE,
     resolveDefaultCacheFile(),
     resolveProgramDataCacheFile(),
   ].filter(Boolean) as string[]
+}
+
+export function hasMachineHashCacheFootprint(): boolean {
+  return getCacheCandidates().some((file) => {
+    try {
+      return fs.existsSync(file)
+    } catch {
+      return false
+    }
+  })
+}
+
+function readCachedMachineHash(): string | null {
+  const candidates = getCacheCandidates()
 
   for (const file of candidates) {
     try {
@@ -52,11 +66,7 @@ function readCachedMachineHash(): string | null {
 }
 
 function writeCachedMachineHash(hash: string) {
-  const targets = [
-    ENV_CACHE_FILE,
-    resolveDefaultCacheFile(),
-    resolveProgramDataCacheFile(),
-  ].filter(Boolean) as string[]
+  const targets = getCacheCandidates()
 
   for (const target of targets) {
     try {

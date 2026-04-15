@@ -20,6 +20,15 @@ export interface SegmentTimestamp {
   words?: WordTimestamp[] // Optional word-level timestamps
 }
 
+export interface SubtitleGeneratorOptions {
+  fontSize?: number
+  fontColor?: string
+  highlightColor?: string
+  position?: 'top' | 'center' | 'bottom'
+  style?: 'simple' | 'karaoke' | 'word-by-word' | 'dynamic'
+  leadInSeconds?: number
+}
+
 /**
  * Convert HEX color (#RRGGBB) + alpha (0–255) to ASS ABGR format (&HAABBGGRR)
  */
@@ -365,14 +374,7 @@ export function generateSRT(
 export function generateASS(
   segments: SegmentTimestamp[],
   outputPath: string,
-  options?: {
-    fontSize?: number
-    fontColor?: string
-    highlightColor?: string // Color for karaoke highlight
-    position?: 'top' | 'center' | 'bottom'
-    style?: 'simple' | 'karaoke' | 'word-by-word' | 'dynamic' // Subtitle style
-    leadInSeconds?: number // Show subtitles slightly earlier for readability
-  }
+  options?: SubtitleGeneratorOptions
 ): void {
   const fontSize = options?.fontSize || 48
   const normalizeHex = (c: string) => (c || '').replace('#', '').padStart(6, '0').toUpperCase()
@@ -484,22 +486,23 @@ export function generateASS(
     // Generate subtitle based on style
     // CRITICAL: Log segment info for debugging
     const hasWords = segment.words && Array.isArray(segment.words) && segment.words.length > 0
+    const wordTimestamps: WordTimestamp[] = hasWords ? segment.words ?? [] : []
     console.log(`[SubtitleGenerator] Segment: style=${style}, hasWords=${hasWords}, wordCount=${segment.words?.length || 0}`)
     
     if (style === 'word-by-word' && hasWords) {
       // Word-by-word Pop effect: Each word gets its own dialogue with scale animation
-      console.log(`[SubtitleGenerator] Creating word-by-word pop effect with ${segment.words.length} words`)
-      createWordByWordPopEffect(segment.words, lines, fontColor, highlightColor, segmentStartAdjusted, segment.text)
+      console.log(`[SubtitleGenerator] Creating word-by-word pop effect with ${wordTimestamps.length} words`)
+      createWordByWordPopEffect(wordTimestamps, lines, fontColor, highlightColor, segmentStartAdjusted, segment.text)
     } else if (style === 'karaoke' && hasWords) {
       // Karaoke traditional: All words visible, each word highlights when sung
-      console.log(`[SubtitleGenerator] Creating karaoke effect with ${segment.words.length} words`)
-      const karaokeText = createKaraokeEffect(segment.words, fontColor, highlightColor, segmentStartAdjusted)
+      console.log(`[SubtitleGenerator] Creating karaoke effect with ${wordTimestamps.length} words`)
+      const karaokeText = createKaraokeEffect(wordTimestamps, fontColor, highlightColor, segmentStartAdjusted)
       console.log(`[SubtitleGenerator] Karaoke text preview: ${karaokeText.substring(0, 150)}...`)
       lines.push(`Dialogue: 0,${startTime},${endTime},Default,,0,0,0,,${karaokeText}`)
     } else if (style === 'dynamic' && hasWords) {
       // Dynamic Captions: Bold, stroke, highlight current word
-      console.log(`[SubtitleGenerator] Creating dynamic caption effect with ${segment.words.length} words`)
-      const dynamicText = createDynamicCaptionEffect(segment.words, fontColor, highlightColor)
+      console.log(`[SubtitleGenerator] Creating dynamic caption effect with ${wordTimestamps.length} words`)
+      const dynamicText = createDynamicCaptionEffect(wordTimestamps, fontColor, highlightColor)
       lines.push(`Dialogue: 0,${startTime},${endTime},Default,,0,0,0,,${dynamicText}`)
     } else {
       // Fallback: Simple subtitle without effects
@@ -772,4 +775,3 @@ export async function generateSubtitleFile(
     console.log(`[SubtitleGenerator] ✅ SRT file generated successfully: ${outputPath}`)
   }
 }
-

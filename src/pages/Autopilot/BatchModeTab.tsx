@@ -32,7 +32,25 @@ interface BatchGenre {
   message?: string
 }
 
+type BatchLogEntry = {
+  seq?: number
+  timestamp: string
+  level: 'info' | 'warn' | 'error'
+  message: string
+  verbosity?: 'normal' | 'verbose'
+}
+
+type BatchRunProgress = {
+  status: 'idle' | 'running' | 'cancelling' | 'completed' | 'completed_with_errors' | 'error'
+  currentStep: 1 | 2 | 3 | 4 | 5 | null
+  stepPercent: number
+  message?: string
+  error?: string
+  updatedAt: number | null
+}
+
 export const BATCH_STORAGE_KEY = 'autopilotBatchConfigV1'
+const BATCH_RUNTIME_STORAGE_KEY = 'autopilotBatchRuntimeV1'
 
 let batchIdCounter = 1
 
@@ -59,6 +77,31 @@ function createDefaultBatch(): BatchGenre {
   }
 }
 
+function mergeBatchLogEntries(existing: BatchLogEntry[], incoming: BatchLogEntry[]): BatchLogEntry[] {
+  if (incoming.length === 0) return existing
+  const resetIndex = incoming.findIndex((log) => log.seq === 1)
+  const merged = [
+    ...(resetIndex >= 0 ? [] : existing),
+    ...(resetIndex >= 0 ? incoming.slice(resetIndex) : incoming),
+  ]
+  const deduped: BatchLogEntry[] = []
+  const seen = new Set<string>()
+
+  for (let i = merged.length - 1; i >= 0; i--) {
+    const log = merged[i]
+    const key =
+      typeof log.seq === 'number'
+        ? `seq:${log.seq}`
+        : `${log.timestamp}|${log.level}|${log.verbosity ?? 'normal'}|${log.message}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    deduped.push(log)
+    if (deduped.length >= 500) break
+  }
+
+  return deduped.reverse()
+}
+
 export default function BatchModeTab() {
   const [batches, setBatches] = useState<BatchGenre[]>(() => {
     try {
@@ -74,10 +117,20 @@ export default function BatchModeTab() {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [isRunning, setIsRunning] = useState(false)
   const [currentRunIndex, setCurrentRunIndex] = useState(-1)
-  const [logMessages, setLogMessages] = useState<Array<{ timestamp: string; level: 'info' | 'warn' | 'error'; message: string }>>([])
+  const [logMessages, setLogMessages] = useState<BatchLogEntry[]>([])
   const logRef = useRef<HTMLDivElement>(null)
+  const pendingLogsRef = useRef<BatchLogEntry[]>([])
+  const flushLogsTimerRef = useRef<number | null>(null)
   const [showConfigFor, setShowConfigFor] = useState<string | null>(null)
   const [scanningBatchId, setScanningBatchId] = useState<string | null>(null)
+  const [runProgress, setRunProgress] = useState<BatchRunProgress>({
+    status: 'idle',
+    currentStep: null,
+    stepPercent: 0,
+    message: '',
+    error: undefined,
+    updatedAt: null,
+  })
   // Ref để tránh stale closure trong runBatch (luôn trỏ tới batches mới nhất)
   const batchesRef = useRef(batches)
   // Ref để tránh stale closure trong onStatus listener
@@ -86,11 +139,36 @@ export default function BatchModeTab() {
   const batchCancelledRef = useRef(false)
   const [scanResults, setScanResults] = useState<Record<string, { totalFiles: number; folders: Array<{ folder: string; count: number }> } | null>>({})
   const [lastSaved, setLastSaved] = useState<string | null>(null)
+  const [requireGpuForVideoEncode, setRequireGpuForVideoEncode] = useState<boolean>(() => {
+    try {
+      const raw = window.localStorage.getItem(BATCH_RUNTIME_STORAGE_KEY)
+      if (!raw) return false
+      const parsed = JSON.parse(raw)
+      return !!parsed?.requireGpuForVideoEncode
+    } catch {
+      return false
+    }
+  })
+
+  const flushQueuedLogs = () => {
+    if (pendingLogsRef.current.length === 0) return
+    const logs = pendingLogsRef.current
+    pendingLogsRef.current = []
+    setLogMessages(prev => mergeBatchLogEntries(prev, logs))
+  }
+
+  const queueLog = (log: BatchLogEntry) => {
+    pendingLogsRef.current.push(log)
+    if (flushLogsTimerRef.current !== null) return
+    flushLogsTimerRef.current = window.setTimeout(() => {
+      flushLogsTimerRef.current = null
+      flushQueuedLogs()
+    }, 150)
+  }
 
   // Save to localStorage
   useEffect(() => {
     batchesRef.current = batches  // Luôn sync ref với state mới nhất
-    currentRunIndexRef.current = currentRunIndex  // Sync để tránh stale closure trong onStatus
     try {
       window.localStorage.setItem(BATCH_STORAGE_KEY, JSON.stringify(batches))
       if (batches.length > 0) {
@@ -99,6 +177,21 @@ export default function BatchModeTab() {
       }
     } catch { /* ignore */ }
   }, [batches])
+
+  useEffect(() => {
+    currentRunIndexRef.current = currentRunIndex
+  }, [currentRunIndex])
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        BATCH_RUNTIME_STORAGE_KEY,
+        JSON.stringify({ requireGpuForVideoEncode }),
+      )
+    } catch {
+      // ignore
+    }
+  }, [requireGpuForVideoEncode])
 
   // Auto scroll log
   useEffect(() => {
@@ -112,9 +205,19 @@ export default function BatchModeTab() {
 
     let statusUnsub: (() => void) | undefined
     let logUnsub: (() => void) | undefined
+    let disposed = false
 
     if (typeof w.api.autopilot.onStatus === 'function') {
       statusUnsub = w.api.autopilot.onStatus((progress: any) => {
+        setRunProgress({
+          status: progress.status ?? 'idle',
+          currentStep: progress.currentStep ?? null,
+          stepPercent: typeof progress.stepPercent === 'number' ? progress.stepPercent : 0,
+          message: progress.message,
+          error: progress.error,
+          updatedAt: Date.now(),
+        })
+
         if (progress.status === 'completed' || progress.status === 'completed_with_errors' || progress.status === 'error') {
           // Batch runner sẽ xử lý chuyển genre tiếp theo
           // Dùng ref thay vì closure để tránh stale currentRunIndex
@@ -136,11 +239,30 @@ export default function BatchModeTab() {
 
     if (typeof w.api.autopilot.onLog === 'function') {
       logUnsub = w.api.autopilot.onLog((log: any) => {
-        setLogMessages(prev => [...prev, log].slice(-500))
+        if (disposed) return
+        queueLog(log)
       })
     }
 
+    if (typeof w.api.autopilot.getRecentLogs === 'function') {
+      w.api.autopilot
+        .getRecentLogs(500)
+        .then((logs: BatchLogEntry[]) => {
+          if (disposed || !Array.isArray(logs) || logs.length === 0) return
+          setLogMessages(prev => mergeBatchLogEntries(prev, logs))
+        })
+        .catch((err: any) => {
+          console.warn('[BatchModeTab] getRecentLogs error:', err)
+        })
+    }
+
     return () => {
+      disposed = true
+      if (flushLogsTimerRef.current !== null) {
+        window.clearTimeout(flushLogsTimerRef.current)
+        flushLogsTimerRef.current = null
+      }
+      pendingLogsRef.current = []
       if (statusUnsub) statusUnsub()
       if (logUnsub) logUnsub()
     }
@@ -248,6 +370,19 @@ export default function BatchModeTab() {
     }
 
     setIsRunning(true)
+    setRunProgress({
+      status: 'running',
+      currentStep: null,
+      stepPercent: 0,
+      message: 'Đang khởi động Batch Mode...',
+      error: undefined,
+      updatedAt: Date.now(),
+    })
+    if (flushLogsTimerRef.current !== null) {
+      window.clearTimeout(flushLogsTimerRef.current)
+      flushLogsTimerRef.current = null
+    }
+    pendingLogsRef.current = []
     setLogMessages([])
     batchCancelledRef.current = false  // Reset cancel flag khi bắt đầu
 
@@ -255,7 +390,10 @@ export default function BatchModeTab() {
     const currentBatches = batchesRef.current
 
     // Reset tất cả status
-    setBatches(prev => prev.map(b => ({ ...b, status: 'pending', error: undefined })))
+    setBatches(prev => prev.map(b => ({ ...b, status: 'pending', error: undefined, message: undefined })))
+
+    let hadErrors = false
+    let hadPartials = false
 
     for (let i = 0; i < currentBatches.length; i++) {
       // Kiểm tra cancel trước mỗi batch
@@ -270,11 +408,18 @@ export default function BatchModeTab() {
         continue
       }
 
+      currentRunIndexRef.current = i
       setCurrentRunIndex(i)
-      setBatches(prev => prev.map((b, idx) => idx === i ? { ...b, status: 'running' } : b))
+      setBatches(prev => prev.map((b, idx) => idx === i ? { ...b, status: 'running', error: undefined, message: undefined } : b))
 
       addLog('info', `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`)
       addLog('info', `Bắt đầu batch ${i + 1}/${currentBatches.length}: "${batch.name}"`)
+      addLog(
+        requireGpuForVideoEncode ? 'warn' : 'info',
+        requireGpuForVideoEncode
+          ? 'GPU policy: Bắt buộc. Nếu GPU smoke test fail hoặc thiếu FFmpeg legacy, batch sẽ dừng ngay.'
+          : 'GPU policy: Cho phép fallback CPU nếu GPU không usable.',
+      )
 
       // Tạo config cho Autopilot
       const config = {
@@ -296,13 +441,25 @@ export default function BatchModeTab() {
           priorityVideoFolder: batch.priorityVideoFolder,
           minVideoClipsTarget: batch.minVideoClipsTarget,
         },
+        runtimeOverrides: {
+          requireGpuForVideoEncode,
+        },
       }
 
       try {
         const res = await w.api.autopilot.start(config)
         if (!res?.ok) {
+          hadErrors = true
           addLog('error', `Batch "${batch.name}" lỗi: ${res?.error || 'Không rõ'}`)
           setBatches(prev => prev.map((b, idx) => idx === i ? { ...b, status: 'error', error: res?.error } : b))
+          setRunProgress({
+            status: 'error',
+            currentStep: null,
+            stepPercent: 0,
+            message: `Batch "${batch.name}" không khởi động được.`,
+            error: res?.error || 'Không rõ',
+            updatedAt: Date.now(),
+          })
           // Nếu đã cancel thì dừng luôn
           if (batchCancelledRef.current) break
           continue
@@ -311,21 +468,44 @@ export default function BatchModeTab() {
         // Đợi autopilot hoàn thành (timeout 4 giờ để tránh hang vĩnh viễn)
         await waitForAutopilotComplete(w, 4 * 60 * 60 * 1000, batchCancelledRef)
 
-        // Nếu đã cancel thì dừng, không chạy batch tiếp theo
-        if (batchCancelledRef.current) {
-          setBatches(prev => prev.map((b, idx) => idx === i ? { ...b, status: 'error', error: 'Đã hủy' } : b))
+        // Cập nhật status từ backend
+        const finalStatus = await w.api.autopilot.getStatus()
+        if (batchCancelledRef.current && finalStatus?.status === 'idle') {
+          setBatches(prev => prev.map((b, idx) => idx === i ? { ...b, status: 'error', error: 'Đã hủy', message: finalStatus?.message } : b))
           addLog('warn', `Batch "${batch.name}" đã bị hủy.`)
           break
         }
 
-        // Cập nhật status từ backend
-        const finalStatus = await w.api.autopilot.getStatus()
         if (finalStatus?.status === 'error' || finalStatus?.status === 'cancelling') {
-          setBatches(prev => prev.map((b, idx) => idx === i ? { ...b, status: 'error', error: finalStatus.error } : b))
+          hadErrors = true
+          setBatches(prev => prev.map((b, idx) => idx === i ? { ...b, status: 'error', error: finalStatus.error, message: finalStatus.message } : b))
           addLog('error', `Batch "${batch.name}" kết thúc với lỗi.`)
-        } else {
-          setBatches(prev => prev.map((b, idx) => idx === i ? { ...b, status: 'completed' } : b))
+        } else if (finalStatus?.status === 'completed_with_errors') {
+          hadPartials = true
+          setBatches(prev => prev.map((b, idx) => idx === i ? {
+            ...b,
+            status: 'completed_with_errors',
+            error: finalStatus.error,
+            message: finalStatus.message,
+          } : b))
+          addLog('warn', `Batch "${batch.name}" hoàn thành nhưng có lỗi.`)
+        } else if (finalStatus?.status === 'completed') {
+          setBatches(prev => prev.map((b, idx) => idx === i ? { ...b, status: 'completed', error: undefined, message: finalStatus.message } : b))
           addLog('info', `Batch "${batch.name}" hoàn thành!`)
+        } else {
+          const unexpectedStatus = finalStatus?.status || 'unknown'
+          setBatches(prev => prev.map((b, idx) => idx === i ? {
+            ...b,
+            status: 'error',
+            error: `Trạng thái cuối không hợp lệ: ${unexpectedStatus}`,
+            message: finalStatus?.message,
+          } : b))
+          addLog('error', `Batch "${batch.name}" trả về trạng thái cuối không hợp lệ: ${unexpectedStatus}.`)
+        }
+
+        if (batchCancelledRef.current) {
+          addLog('warn', 'Đã nhận yêu cầu hủy. Batch hiện tại đã đóng, sẽ không chạy batch tiếp theo.')
+          break
         }
       } catch (err: any) {
         if (batchCancelledRef.current) {
@@ -333,8 +513,17 @@ export default function BatchModeTab() {
           addLog('warn', `Batch "${batch.name}" đã bị hủy.`)
           break
         }
+        hadErrors = true
         addLog('error', `Batch "${batch.name}" exception: ${err?.message}`)
         setBatches(prev => prev.map((b, idx) => idx === i ? { ...b, status: 'error', error: err?.message } : b))
+        setRunProgress({
+          status: 'error',
+          currentStep: null,
+          stepPercent: 0,
+          message: `Batch "${batch.name}" bị exception.`,
+          error: err?.message,
+          updatedAt: Date.now(),
+        })
       }
 
       // Nghỉ 2s giữa các batch để cleanup (chỉ khi chưa cancel)
@@ -347,8 +536,25 @@ export default function BatchModeTab() {
     if (!batchCancelledRef.current) {
       addLog('info', `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`)
       addLog('info', `Batch Mode hoàn thành! Đã xử lý ${currentBatches.length} thể loại.`)
+      setRunProgress({
+        status: hadErrors || hadPartials ? 'completed_with_errors' : 'completed',
+        currentStep: 5,
+        stepPercent: 100,
+        message: `Batch Mode hoàn thành. Đã xử lý ${currentBatches.length} thể loại.`,
+        error: undefined,
+        updatedAt: Date.now(),
+      })
+    } else {
+      addLog('warn', 'Batch Mode đã dừng theo yêu cầu người dùng.')
+      setRunProgress((prev) => ({
+        ...prev,
+        status: prev.status === 'error' ? 'error' : 'cancelling',
+        message: 'Batch Mode đã dừng theo yêu cầu người dùng.',
+        updatedAt: Date.now(),
+      }))
     }
     setIsRunning(false)
+    currentRunIndexRef.current = -1
     setCurrentRunIndex(-1)
   }
 
@@ -356,21 +562,25 @@ export default function BatchModeTab() {
     const w = window
     // Đánh dấu cancel ngay lập tức — loop sẽ dừng ở iteration tiếp theo
     batchCancelledRef.current = true
-    addLog('warn', 'Đang dừng Batch Mode...')
+    setRunProgress((prev) => ({
+      ...prev,
+      status: 'cancelling',
+      message: 'Đang dừng Batch Mode, chờ job hiện tại đóng lại...',
+      error: undefined,
+      updatedAt: Date.now(),
+    }))
+    addLog('warn', 'Đang dừng Batch Mode, chờ job hiện tại đóng lại...')
     try {
       // Gửi lệnh cancel xuống backend để dừng autopilot đang chạy
       await w.api?.autopilot?.cancel()
-    } catch { /* ignore */ } finally {
-      setIsRunning(false)
-      setCurrentRunIndex(-1)
-      setBatches(prev => prev.map(b => b.status === 'running' ? { ...b, status: 'error', error: 'Đã hủy' } : b))
-      addLog('warn', 'Đã hủy Batch Mode.')
+    } catch (err: any) {
+      addLog('error', `Không thể gửi yêu cầu hủy Batch Mode: ${err?.message || err}`)
     }
   }
 
   function addLog(level: 'info' | 'warn' | 'error', message: string) {
     const ts = new Date().toLocaleTimeString('vi-VN')
-    setLogMessages(prev => [...prev, { timestamp: ts, level, message }].slice(-500))
+    queueLog({ timestamp: ts, level, message })
   }
 
   // Helpers
@@ -379,6 +589,28 @@ export default function BatchModeTab() {
   const completedCount = batches.filter(b => b.status === 'completed' || b.status === 'completed_with_errors').length
   const errorCount = batches.filter(b => b.status === 'error').length
   const partialCount = batches.filter(b => b.status === 'completed_with_errors').length
+  const currentBatch = currentRunIndex >= 0 ? batches[currentRunIndex] : null
+  const lastProgressAt = runProgress.updatedAt
+    ? new Date(runProgress.updatedAt).toLocaleTimeString('vi-VN')
+    : '—'
+  const statusTone = runProgress.status === 'error'
+    ? '#7f1d1d'
+    : runProgress.status === 'completed_with_errors'
+      ? '#78350f'
+      : runProgress.status === 'completed'
+        ? '#14532d'
+        : runProgress.status === 'running' || runProgress.status === 'cancelling'
+          ? '#0f3a5a'
+          : '#111827'
+  const statusBorder = runProgress.status === 'error'
+    ? '#ef4444'
+    : runProgress.status === 'completed_with_errors'
+      ? '#f59e0b'
+      : runProgress.status === 'completed'
+        ? '#22c55e'
+        : runProgress.status === 'running' || runProgress.status === 'cancelling'
+          ? '#38bdf8'
+          : '#374151'
 
   // ── STYLES ──
   const inputStyle: React.CSSProperties = {
@@ -704,8 +936,68 @@ export default function BatchModeTab() {
         })}
       </div>
 
+      <section
+        style={{
+          border: `1px solid ${statusBorder}`,
+          borderRadius: '8px',
+          padding: '12px',
+          backgroundColor: statusTone,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '6px',
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
+          <strong style={{ fontSize: '14px', color: '#e5e7eb' }}>
+            {isRunning ? 'Batch Mode đang chạy' : 'Trạng thái Batch Mode'}
+          </strong>
+          <span style={{ fontSize: '12px', color: '#cbd5e1' }}>
+            Cập nhật lần cuối: {lastProgressAt}
+          </span>
+        </div>
+        <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', fontSize: '12px', color: '#cbd5e1' }}>
+          <span>Batch hiện tại: <strong style={{ color: '#fff' }}>{currentBatch?.name || '—'}</strong></span>
+          <span>Bước: <strong style={{ color: '#fff' }}>{runProgress.currentStep ?? '—'}</strong></span>
+          <span>Tiến độ bước: <strong style={{ color: '#fff' }}>{Math.round(runProgress.stepPercent || 0)}%</strong></span>
+          <span>Trạng thái: <strong style={{ color: '#fff' }}>{runProgress.status}</strong></span>
+        </div>
+        {(runProgress.message || runProgress.error) && (
+          <div style={{ fontSize: '12px', color: runProgress.error ? '#fecaca' : '#e5e7eb', whiteSpace: 'pre-wrap' }}>
+            {runProgress.error || runProgress.message}
+          </div>
+        )}
+      </section>
+
       {/* Nút thêm + lưu/xuất/nhập + chạy */}
       <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+        <label
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            padding: '8px 10px',
+            borderRadius: '6px',
+            border: '1px solid #334155',
+            backgroundColor: requireGpuForVideoEncode ? '#2b1608' : '#111827',
+            color: requireGpuForVideoEncode ? '#fdba74' : '#cbd5e1',
+            fontSize: '12px',
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={requireGpuForVideoEncode}
+            onChange={(e) => setRequireGpuForVideoEncode(e.target.checked)}
+            disabled={isRunning}
+          />
+          GPU bắt buộc cho batch re-encode
+        </label>
+
+        <span style={{ fontSize: '11px', color: requireGpuForVideoEncode ? '#fdba74' : '#6b7280' }}>
+          {requireGpuForVideoEncode
+            ? 'Nếu GPU/NVENC fail hoặc thiếu FFmpeg legacy, batch sẽ fail sớm thay vì rơi về CPU.'
+            : 'Tắt tùy chọn này nếu bạn vẫn muốn batch tiếp tục bằng CPU khi GPU không usable.'}
+        </span>
+
         <button
           type="button"
           onClick={handleAddBatch}
@@ -856,14 +1148,12 @@ async function waitForAutopilotComplete(w: any, timeoutMs = 4 * 60 * 60 * 1000, 
   return new Promise((resolve, reject) => {
     const startTime = Date.now()
     const check = async () => {
-      // Nếu đã cancel → resolve ngay (không reject, để caller tự xử lý)
-      if (cancelledRef?.current) {
-        resolve()
-        return
-      }
+      const cancelRequested = cancelledRef?.current === true
       // Timeout guard — tránh hang vĩnh viễn
       if (Date.now() - startTime > timeoutMs) {
-        reject(new Error(`Autopilot timeout sau ${Math.round(timeoutMs / 60000)} phút`))
+        reject(new Error(cancelRequested
+          ? `Autopilot đang hủy quá lâu (${Math.round(timeoutMs / 60000)} phút)`
+          : `Autopilot timeout sau ${Math.round(timeoutMs / 60000)} phút`))
         return
       }
       try {

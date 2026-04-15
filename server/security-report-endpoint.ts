@@ -31,11 +31,19 @@ interface Env {
   WEBHOOK_URL?: string
 }
 
+interface HandleSecurityReportOptions {
+  trustedSource?: boolean
+}
+
 /**
  * Handle security report request
  * Export function để có thể import từ file khác
  */
-export async function handleSecurityReport(request: Request, env: Env): Promise<Response> {
+export async function handleSecurityReport(
+  request: Request,
+  env: Env,
+  options: HandleSecurityReportOptions = {},
+): Promise<Response> {
   // Chỉ accept POST requests
   if (request.method !== 'POST') {
     return new Response(JSON.stringify({ error: 'Method not allowed' }), {
@@ -45,6 +53,8 @@ export async function handleSecurityReport(request: Request, env: Env): Promise<
   }
 
   try {
+    const trustedSource = options.trustedSource === true
+
     // Parse request body
     const event: SecurityEvent = await request.json()
 
@@ -63,6 +73,7 @@ export async function handleSecurityReport(request: Request, env: Env): Promise<
     console.log('[Security Alert]', {
       event: event.event,
       severity: event.severity,
+      source: trustedSource ? 'server' : 'client',
       machineId: event.machineId.substring(0, 16) + '...', // Chỉ log một phần để bảo mật
       username: event.username || 'N/A',
       timestamp: new Date(event.timestamp).toISOString(),
@@ -90,7 +101,10 @@ export async function handleSecurityReport(request: Request, env: Env): Promise<
             event.event,
             event.severity,
             event.message,
-            JSON.stringify(event.details || {}),
+            JSON.stringify({
+              ...(event.details || {}),
+              reportSource: trustedSource ? 'server' : 'client',
+            }),
             event.timestamp,
             event.machineId,
             event.username || null,
@@ -117,11 +131,15 @@ export async function handleSecurityReport(request: Request, env: Env): Promise<
       await sendWebhookAlert(event, env.WEBHOOK_URL)
     }
 
-    // Check và auto-block
-    const { checkAndAutoBlock } = await import('./auto-block')
-    const blockResult = await checkAndAutoBlock(event, env)
-    if (blockResult.blocked) {
-      console.warn(`[Auto-Block] ${blockResult.reason}`)
+    let blockResult: { blocked: boolean; reason?: string; action?: string } = { blocked: false }
+    if (trustedSource) {
+      // Only server-detected events may trigger auto-block.
+      // Client-reported events are useful for telemetry, but they are not authoritative.
+      const { checkAndAutoBlock } = await import('./auto-block')
+      blockResult = await checkAndAutoBlock(event, env)
+      if (blockResult.blocked) {
+        console.warn(`[Auto-Block] ${blockResult.reason}`)
+      }
     }
 
     // Return success
@@ -129,6 +147,7 @@ export async function handleSecurityReport(request: Request, env: Env): Promise<
       JSON.stringify({
         ok: true,
         logged: true,
+        source: trustedSource ? 'server' : 'client',
         timestamp: Date.now(),
         autoBlocked: blockResult.blocked || false,
       }),
@@ -273,4 +292,3 @@ async function sendWebhookAlert(event: SecurityEvent, webhookUrl: string): Promi
     console.error('[Webhook Alert Error]', error)
   }
 }
-

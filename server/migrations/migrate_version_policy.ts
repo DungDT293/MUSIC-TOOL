@@ -55,10 +55,10 @@ export async function migrateVersionPolicy(env: Env): Promise<void> {
       
       // Insert default policy
       const defaultPolicy = {
-        latest_version: '3.6.0',
-        min_supported_version: '3.6.0',
+        latest_version: '4.1.0',
+        min_supported_version: '4.1.0',
         blocked_versions: [],
-        recommended_version: '3.6.0',
+        recommended_version: '4.1.0',
         recommended_installer_url: '',
         force_update: false,
         message: ''

@@ -63,7 +63,7 @@ export async function detectVM(): Promise<{ detected: boolean; type?: string }> 
           timeout: 3000,
         } as any)
 
-        const output = stdout.toLowerCase()
+        const output = String(stdout).toLowerCase()
         const vmKeywords: Record<string, string[]> = {
           VMware: ['vmware', 'vmware, inc.'],
           VirtualBox: ['virtualbox', 'innotek', 'oracle'],
@@ -119,7 +119,7 @@ export async function detectSandbox(): Promise<{ detected: boolean; type?: strin
       timeout: 3000,
     } as any)
 
-    const processes = stdout.toLowerCase()
+    const processes = String(stdout).toLowerCase()
     for (const sandbox of sandboxIndicators) {
       for (const processName of sandbox.processNames) {
         if (processes.includes(processName.toLowerCase())) {

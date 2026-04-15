@@ -26,6 +26,18 @@ import {
   ServerUpdateVersionPolicySchema,
 } from '../shared/ipcSchemas'
 
+const DEFAULT_POLICY_VERSION = '4.1.0'
+const DEFAULT_VERSION_POLICY = {
+  latest_version: DEFAULT_POLICY_VERSION,
+  min_supported_version: DEFAULT_POLICY_VERSION,
+  blocked_versions: [],
+  recommended_version: DEFAULT_POLICY_VERSION,
+  recommended_installer_url: '',
+  force_update: false,
+  message: '',
+  channel: 'stable',
+} as const
+
 // =========================
 // Password Hashing (using Web Crypto API - compatible with Cloudflare Workers)
 // =========================
@@ -175,16 +187,7 @@ async function handleVersionPolicy(request: Request, env: Env): Promise<Response
 
     if (!tableExists) {
       // Return default policy if table doesn't exist
-      const defaultPolicy = {
-        latest_version: '3.6.0',
-        min_supported_version: '3.6.0',
-        blocked_versions: [],
-        recommended_version: '3.6.0',
-        recommended_installer_url: '',
-        force_update: false,
-        message: '',
-        channel: 'stable',
-      }
+      const defaultPolicy = { ...DEFAULT_VERSION_POLICY }
       return json(defaultPolicy)
     }
 
@@ -196,16 +199,7 @@ async function handleVersionPolicy(request: Request, env: Env): Promise<Response
 
     if (!row) {
       // Return default policy if not found
-      const defaultPolicy = {
-        latest_version: '3.6.0',
-        min_supported_version: '3.6.0',
-        blocked_versions: [],
-        recommended_version: '3.6.0',
-        recommended_installer_url: '',
-        force_update: false,
-        message: '',
-        channel: 'stable',
-      }
+      const defaultPolicy = { ...DEFAULT_VERSION_POLICY }
       return json(defaultPolicy)
     }
 
@@ -217,15 +211,7 @@ async function handleVersionPolicy(request: Request, env: Env): Promise<Response
       console.error('[handleVersionPolicy] JSON parse error:', parseErr)
       console.warn('[handleVersionPolicy] policy_json is corrupted, returning default policy')
       // Return default policy if JSON is corrupted
-      const defaultPolicy = {
-        latest_version: '3.6.0',
-        min_supported_version: '3.6.0',
-        blocked_versions: [],
-        recommended_version: '3.6.0',
-        recommended_installer_url: '',
-        force_update: false,
-        message: '',
-      }
+      const defaultPolicy = { ...DEFAULT_VERSION_POLICY }
       return json(defaultPolicy)
     }
 
@@ -237,29 +223,13 @@ async function handleVersionPolicy(request: Request, env: Env): Promise<Response
       console.error('[handleVersionPolicy] Policy validation error:', validationErr)
       console.warn('[handleVersionPolicy] policy_json structure is invalid, returning default policy')
       // Return default policy if structure is invalid
-      const defaultPolicy = {
-        latest_version: '3.6.0',
-        min_supported_version: '3.6.0',
-        blocked_versions: [],
-        recommended_version: '3.6.0',
-        recommended_installer_url: '',
-        force_update: false,
-        message: '',
-      }
+      const defaultPolicy = { ...DEFAULT_VERSION_POLICY }
       return json(defaultPolicy)
     }
   } catch (err: any) {
     console.error('[handleVersionPolicy] Error:', err)
     // Return default policy on error (fail-open)
-    const defaultPolicy = {
-      latest_version: '3.6.0',
-      min_supported_version: '3.6.0',
-      blocked_versions: [],
-      recommended_version: '3.6.0',
-      recommended_installer_url: '',
-      force_update: false,
-      message: '',
-    }
+    const defaultPolicy = { ...DEFAULT_VERSION_POLICY }
     return json(defaultPolicy)
   }
 }
@@ -358,12 +328,13 @@ export default {
       // /api/version-policy không cần signature vì là public endpoint (được gọi từ dashboard và client app)
       // /api/migrate/v2 không cần signature vì đã có Admin Token verification riêng
       // ============================================
-      const publicRoutes = ['/api/security/report', '/dashboard', '/', '/api/auth/check', '/api/video/export', '/api/version-policy', '/api/migrate/v2']
+      const publicRoutes = ['/api/security/report', '/dashboard', '/', '/api/video/export', '/api/version-policy', '/api/migrate/v2']
       const isDashboardAPI = pathname.startsWith('/api/admin/')
+      const isPublicAuthRoute = pathname.startsWith('/api/auth/') && !pathname.startsWith('/api/auth/admin/')
       
       // Parse request body once for routes that need signature verification
       let parsedBody: any = null
-      if (!publicRoutes.includes(pathname) && !isDashboardAPI) {
+      if (!publicRoutes.includes(pathname) && !isDashboardAPI && !isPublicAuthRoute) {
         parsedBody = await request.clone().json().catch(() => ({}))
         const verification = await verifyRequestSignature(request, parsedBody, env)
         
@@ -381,7 +352,8 @@ export default {
                 timestamp: Date.now(),
               }),
             }),
-            env
+            env,
+            { trustedSource: true },
           ).catch(() => {}) // Ignore errors khi report
           
           return json({ error: 'Invalid request signature' }, 401)
@@ -744,12 +716,20 @@ async function handleCheck(request: Request, env: Env): Promise<Response> {
           timestamp: now,
         }),
       }),
-      env
+      env,
+      { trustedSource: true },
     ).catch(() => {})
 
     // Auto-block chỉ khi > 5 machineIds (nâng từ 3 lên 5 để tránh false positive
     // do VPN/driver changes gây machineId thay đổi)
     if (machineCount.count > 5) {
+      console.warn('[handleCheck] Multiple machine IDs detected, keeping account active in monitor-only mode:', {
+        username: tai_khoan,
+        machineCount: machineCount.count,
+      })
+    }
+
+    if (false && machineCount.count > 5) {
       await env.DB.prepare(
         'UPDATE registrations SET trang_thai = ? WHERE tai_khoan = ?'
       )
@@ -1496,21 +1476,21 @@ function serveDashboard(): Response {
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px;">
           <div class="form-group">
             <label>Phiên Bản Stable Mới Nhất</label>
-            <input type="text" id="policyLatestVersion" placeholder="3.6.0" pattern="^\\d+\\.\\d+\\.\\d+$">
-            <div style="font-size: 12px; color: #94a3b8; margin-top: 4px;">Format: x.y.z (ví dụ: 3.6.0)</div>
+            <input type="text" id="policyLatestVersion" placeholder="4.1.0" pattern="^\\d+\\.\\d+\\.\\d+$">
+            <div style="font-size: 12px; color: #94a3b8; margin-top: 4px;">Format: x.y.z (ví dụ: 4.1.0)</div>
           </div>
           <div class="form-group">
             <label>Phiên Bản Tối Thiểu Hỗ Trợ</label>
-            <input type="text" id="policyMinSupportedVersion" placeholder="3.6.0" pattern="^\\d+\\.\\d+\\.\\d+$">
+            <input type="text" id="policyMinSupportedVersion" placeholder="4.1.0" pattern="^\\d+\\.\\d+\\.\\d+$">
           </div>
         </div>
         <div class="form-group">
           <label>Phiên Bản Đề Xuất</label>
-          <input type="text" id="policyRecommendedVersion" placeholder="3.6.0" pattern="^\\d+\\.\\d+\\.\\d+$">
+          <input type="text" id="policyRecommendedVersion" placeholder="4.1.0" pattern="^\\d+\\.\\d+\\.\\d+$">
         </div>
         <div class="form-group">
           <label>URL Installer Đề Xuất (Optional)</label>
-          <input type="url" id="policyRecommendedInstallerUrl" placeholder="https://license-updates.pages.dev/win/93 Media - Tool Mix Nhạc-Setup-3.6.0.exe" style="width: 100%;">
+          <input type="url" id="policyRecommendedInstallerUrl" placeholder="https://license-updates.pages.dev/win/93-media-tool-mix-nhac-setup-4.1.0.exe" style="width: 100%;">
         </div>
         <div class="form-group">
           <label>Phiên Bản Bị Chặn (Blocked Versions)</label>

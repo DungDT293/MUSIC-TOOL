@@ -127,7 +127,7 @@ export async function startFfmpegPipe(options: SongNhacExportOptions): Promise<{
   usedEncoder: string
 }> {
   const paths = getFfmpegPaths()
-  const ffmpegPath = (paths as any).ffmpeg ?? (paths as any).ffmpegPath
+  const defaultFfmpegPath = (paths as any).ffmpeg ?? (paths as any).ffmpegPath
 
   const {
     outputPath,
@@ -155,6 +155,7 @@ export async function startFfmpegPipe(options: SongNhacExportOptions): Promise<{
   let usedEncoder: string
   let inputArgs: string[]
   let videoOutputArgs: string[]
+  let ffmpegPath = defaultFfmpegPath
 
   if (webCodecsMode) {
     // ── WebCodecs mode: H.264 Annex B stream from renderer ──
@@ -179,6 +180,7 @@ export async function startFfmpegPipe(options: SongNhacExportOptions): Promise<{
         const gpuInfo = await getGpuInfo()
         if (gpuInfo.available) {
           gpuEncoder = gpuInfo.encoder
+          ffmpegPath = gpuInfo.ffmpegPath || defaultFfmpegPath
           console.log(`[SongNhacFFmpeg] GPU detected: ${gpuInfo.name ?? gpuInfo.encoder}`)
         }
       } catch (err) {

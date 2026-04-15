@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 
+const DISK_INFO_REFRESH_INTERVAL_MS = 30 * 60 * 1000
+
 interface RealtimeStats {
   cpuPercent: number | null
   gpuPercent: number | null
@@ -180,12 +182,12 @@ function TopBarStats() {
       })
     }
 
-    // Refresh định kỳ mỗi 30 giây để đảm bảo có data
+    // Refresh định kỳ mỗi 30 phút để tránh spam disk scan trong lúc app đang chạy dài
     refreshTimer = setInterval(() => {
       if (isMounted) {
         fetchDiskInfo()
       }
-    }, 30_000)
+    }, DISK_INFO_REFRESH_INTERVAL_MS)
 
     return () => {
       isMounted = false
@@ -345,7 +347,6 @@ function TopBarStats() {
 }
 
 export default TopBarStats
-
 
 
 

@@ -126,10 +126,9 @@ function AuditFilesTab() {
     <div style={{ padding: '24px', color: '#e0e0e0', backgroundColor: '#1e1e1e', minHeight: '100%' }}>
       <h3 style={{ marginBottom: '24px', fontSize: '20px', fontWeight: 'bold' }}>Rà soát file</h3>
       <p style={{ marginBottom: '20px', fontSize: '14px', color: '#aaa' }}>
-        Quét <strong>toàn bộ thông số</strong> của mọi file video trong thư mục (codec, định dạng, FPS, bitrate,
-        resolution, duration). Xếp vào <strong>video lỗi</strong>: hỏng / duration &lt;= 0 / probe fail, hoặc{' '}
-        <strong>chênh lệch quá lớn</strong> so với đa số file (khác codec, định dạng, resolution, FPS, bitrate). Sau khi
-        quét xong, có thể xóa những video lỗi nếu bạn xác nhận.
+        Quét thông số kỹ thuật cơ bản của mọi file video trong thư mục (codec, định dạng, FPS, bitrate,
+        resolution, duration). Xếp vào <strong>video lỗi</strong>: probe fail, không đọc được video stream,
+        hoặc duration &lt;= 0. Sau khi quét xong, có thể xóa những video lỗi nếu bạn xác nhận.
       </p>
 
       {/* Thư mục video đã chuẩn hóa */}
@@ -239,8 +238,8 @@ function AuditFilesTab() {
         >
           <div style={{ fontWeight: '500', marginBottom: '8px' }}>Kết quả rà soát</div>
           <div style={{ fontSize: '12px', color: '#888', marginBottom: '8px' }}>
-            Thông số đã quét: codec, định dạng (container), FPS, bitrate, resolution, duration. File chênh lệch quá lớn
-            so với đa số cũng xếp vào video lỗi.
+            Thông số đã quét: codec, định dạng (container), FPS, bitrate, resolution, duration. Mục này giúp phát hiện
+            file probe lỗi / thiếu video stream / duration bất thường; không thay thế hoàn toàn việc phát thử video.
           </div>
           <div style={{ color: '#aaa' }}>
             Video hợp lệ: <strong style={{ color: '#8c8' }}>{validCount}</strong> — Video lỗi:{' '}

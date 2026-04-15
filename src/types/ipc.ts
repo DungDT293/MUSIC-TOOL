@@ -26,6 +26,7 @@ export interface AuthState {
   machineId: string
   activationKey?: string
   message?: string
+  preferredView?: 'register' | 'login'
   latestVersion?: string // Phiên bản mới nhất từ server
   downloadUrl?: string // Link tải bản mới
 }
@@ -78,6 +79,8 @@ export interface UpdaterStatusPayload {
   message?: string
   version?: string
 }
+
+export type GpuFfmpegProfile = 'auto' | 'modern' | 'legacy'
 
 export interface AuthRegisterPayload {
   username: string
@@ -474,6 +477,10 @@ export interface CutSingleSimpleRequest {
   outputDir: string
   segmentLengthSec: number
   format?: 'mp4' | 'mkv'
+  normalizeOutput?: boolean
+  useGpuEncoding?: boolean
+  targetResolution?: string
+  targetFps?: string
 }
 
 export interface CutSingleSimpleResult {
@@ -629,7 +636,8 @@ export interface JobInfo {
   logs: string[]
 }
 
-export type AutopilotStatus = 'idle' | 'running' | 'paused' | 'completed' | 'error' | 'cancelling'
+export type AutopilotStatus = 'idle' | 'running' | 'paused' | 'completed' | 'completed_with_errors' | 'error' | 'cancelling'
+export type AutopilotLogVerbosity = 'normal' | 'verbose'
 
 export interface AutopilotProgress {
   status: AutopilotStatus
@@ -643,9 +651,11 @@ export interface AutopilotProgress {
 }
 
 export interface AutopilotLogEntry {
+  seq: number
   timestamp: string
   level: 'info' | 'warn' | 'error'
   message: string
+  verbosity: AutopilotLogVerbosity
 }
 
 export interface AutopilotDayPlan {
@@ -682,6 +692,10 @@ export interface AutopilotFoldersConfig {
 export interface AutopilotConfig {
   dayPlans: AutopilotDayPlan[]
   folders: AutopilotFoldersConfig
+  runtimeOverrides?: {
+    finalExportUseGpuEncoding?: 'gpu' | 'cpu' | 'auto'
+    requireGpuForVideoEncode?: boolean
+  }
 }
 
 export interface IPCAPI {
@@ -807,6 +821,7 @@ export interface IPCAPI {
   selectImageFile: () => Promise<string | null>
   dialog: {
     openFile: (options: { title?: string; filters?: { name: string; extensions: string[] }[]; properties?: ('openFile' | 'multiSelections' | 'openDirectory')[] }) => Promise<{ canceled: boolean; filePaths: string[] }>
+    saveVideoFile: (defaultFileName?: string) => Promise<{ canceled: boolean; filePath: string | null }>
   }
   selectVideoFilesMulti: () => Promise<string[] | null>
   selectManyVideos: () => Promise<string[] | null>
@@ -826,7 +841,7 @@ export interface IPCAPI {
   listVideosInFolder: (dir: string) => Promise<ListedVideoFile[]>
   listVideosInFolderSimple: (dir: string) => Promise<SimpleVideoFileEntry[]>
   videoAuditFolder: (paths: string[]) => Promise<{
-    valid: Array<{ path: string; durationSec: number; width?: number; height?: number; codecName?: string; fps?: number; sizeBytes?: number }>
+    valid: Array<{ path: string; durationSec: number; width?: number; height?: number; codecName?: string; fps?: number; sizeBytes?: number; formatName?: string; bitrateBps?: number }>
     invalid: string[]
   }>
   videoDeleteFiles: (paths: string[], rootDir: string) => Promise<{ deleted: number; errors: Array<{ path: string; message: string }> }>
@@ -901,6 +916,9 @@ export interface IPCAPI {
   videoHasJob: (requestId: string) => Promise<boolean>
   autopilot?: {
     getStatus: () => Promise<AutopilotProgress>
+    getRecentLogs: (limit?: number) => Promise<AutopilotLogEntry[]>
+    getLogVerbosity: () => Promise<AutopilotLogVerbosity>
+    setLogVerbosity: (verbosity: AutopilotLogVerbosity) => Promise<{ ok: boolean; verbosity: AutopilotLogVerbosity }>
     start: (config: AutopilotConfig) => Promise<{ ok: boolean; error?: string }>
     cancel: () => Promise<{ ok: boolean }>
     onStatus: (handler: (progress: AutopilotProgress) => void) => () => void
@@ -915,6 +933,14 @@ export interface IPCAPI {
   app: {
     getVersion: () => Promise<string>
     checkUpdate?: () => Promise<{ updateAvailable: boolean; version?: string }>
+    getGpuFfmpegProfile?: () => Promise<{ ok: boolean; profile: GpuFfmpegProfile; error?: string }>
+    setGpuFfmpegProfile?: (
+      profile: GpuFfmpegProfile,
+    ) => Promise<{ ok: boolean; profile: GpuFfmpegProfile; error?: string }>
+    getLegacyGpuFfmpegPath?: () => Promise<{ ok: boolean; path: string | null; error?: string }>
+    setLegacyGpuFfmpegPath?: (
+      binaryPath: string | null,
+    ) => Promise<{ ok: boolean; path: string | null; error?: string }>
   }
   policy: {
     get: () => Promise<VersionPolicy>
@@ -1019,6 +1045,7 @@ export interface IPCAPI {
     sendExportProgress: (progress: any) => void
     sendExportDone: (result?: any) => void
     sendExportEnd?: (jobId: string) => void
+    getPcmSamples?: (jobId: string, timeSec: number) => Promise<Float32Array>
     getAudioDuration?: (filePath: string) => Promise<{ ok: boolean; duration?: number; error?: string }>
   }
   videoSeoApply: (payload: any) => Promise<any>

@@ -19,6 +19,6 @@ CREATE INDEX IF NOT EXISTS idx_version_policy_id ON version_policy(id);
 INSERT OR IGNORE INTO version_policy (id, policy_json, updated_at)
 VALUES (
   'global',
-  '{"latest_version":"3.6.0","min_supported_version":"3.6.0","blocked_versions":[],"recommended_version":"3.6.0","recommended_installer_url":"","force_update":false,"message":""}',
+  '{"latest_version":"4.1.0","min_supported_version":"4.1.0","blocked_versions":[],"recommended_version":"4.1.0","recommended_installer_url":"","force_update":false,"message":""}',
   ?1
 );
