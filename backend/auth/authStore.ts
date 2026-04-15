@@ -24,6 +24,10 @@ export interface StoredAuthState {
   password?: string
   machineId: string
   activationKey?: string
+  token?: string
+  deviceToken?: string
+  refreshToken?: string
+  tokenExpiresAt?: number
   message?: string
   latestVersion?: string
   downloadUrl?: string
@@ -62,7 +66,6 @@ export function clearStoredAuthState(): void {
     console.error('[auth] Failed to clear auth state:', error)
   }
 }
-
 
 
 

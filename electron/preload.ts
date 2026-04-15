@@ -1,5 +1,12 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
-import type { AuthLoginPayload, AuthRegisterPayload, AuthState, IPCAPI, LicenseState } from '../src/types/ipc'
+import type {
+  AuthLoginPayload,
+  AuthRegisterPayload,
+  AuthState,
+  GpuFfmpegProfile,
+  IPCAPI,
+  LicenseState,
+} from '../src/types/ipc'
 import {
   VIDEO_FINAL_EXPORT_DONE,
   VIDEO_FINAL_EXPORT_ERROR,
@@ -324,6 +331,9 @@ const api: IPCAPI = {
   videoPoolPickLRU: (folderPath: string, count: number) => ipcRenderer.invoke('video:pool-pick-lru', folderPath, count),
   autopilot: {
     getStatus: () => ipcRenderer.invoke('autopilot:getStatus'),
+    getRecentLogs: (limit?: number) => ipcRenderer.invoke('autopilot:getRecentLogs', limit),
+    getLogVerbosity: () => ipcRenderer.invoke('autopilot:getLogVerbosity'),
+    setLogVerbosity: (verbosity: 'normal' | 'verbose') => ipcRenderer.invoke('autopilot:setLogVerbosity', verbosity),
     start: (config: any) => ipcRenderer.invoke('autopilot:start', config),
     cancel: () => ipcRenderer.invoke('autopilot:cancel'),
     scanVideoFolders: (rootVideo: string) => ipcRenderer.invoke('autopilot:scan-video-folders', rootVideo),
@@ -337,7 +347,7 @@ const api: IPCAPI = {
         ipcRenderer.removeListener(channel, listener)
       }
     },
-    onLog: (handler: (log: { timestamp: string; level: 'info' | 'warn' | 'error'; message: string }) => void) => {
+    onLog: (handler: (log: { seq: number; timestamp: string; level: 'info' | 'warn' | 'error'; message: string; verbosity: 'normal' | 'verbose' }) => void) => {
       const channel = 'autopilot:log'
       const listener = (_event: IpcRendererEvent, payload: any) => handler(payload)
       ipcRenderer.on(channel, listener)
@@ -402,6 +412,30 @@ const api: IPCAPI = {
   app: {
     getVersion: () => ipcRenderer.invoke('app:getVersion') as Promise<string>,
     checkUpdate: () => ipcRenderer.invoke('app:checkUpdate'),
+    getGpuFfmpegProfile: () =>
+      ipcRenderer.invoke('app:getGpuFfmpegProfile') as Promise<{
+        ok: boolean
+        profile: GpuFfmpegProfile
+        error?: string
+      }>,
+    setGpuFfmpegProfile: (profile: GpuFfmpegProfile) =>
+      ipcRenderer.invoke('app:setGpuFfmpegProfile', profile) as Promise<{
+        ok: boolean
+        profile: GpuFfmpegProfile
+        error?: string
+      }>,
+    getLegacyGpuFfmpegPath: () =>
+      ipcRenderer.invoke('app:getLegacyGpuFfmpegPath') as Promise<{
+        ok: boolean
+        path: string | null
+        error?: string
+      }>,
+    setLegacyGpuFfmpegPath: (binaryPath: string | null) =>
+      ipcRenderer.invoke('app:setLegacyGpuFfmpegPath', binaryPath) as Promise<{
+        ok: boolean
+        path: string | null
+        error?: string
+      }>,
   },
   updater: {
     check: () => ipcRenderer.invoke('app:checkUpdate'),

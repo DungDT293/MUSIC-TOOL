@@ -56,7 +56,7 @@ describe('PlaylistEngine — buildPlaylists', () => {
     const { buildPlaylists } = await import('../../backend/music/playlistEngine')
     const tracks = makeTracks(10, 10, 180)
 
-    const playlists = buildPlaylists({
+    const { playlists } = buildPlaylists({
       tracks,
       pinnedTrackIds: [],
       playlistCount: 3,
@@ -71,7 +71,7 @@ describe('PlaylistEngine — buildPlaylists', () => {
     const tracks = makeTracks(15, 15, 180) // plenty of tracks
 
     const targetMin = 30
-    const playlists = buildPlaylists({
+    const { playlists } = buildPlaylists({
       tracks,
       pinnedTrackIds: [],
       playlistCount: 2,
@@ -89,7 +89,7 @@ describe('PlaylistEngine — buildPlaylists', () => {
     const tracks = makeTracks(10, 10, 180)
     const pinnedId = tracks[0].id // pin first priority track
 
-    const playlists = buildPlaylists({
+    const { playlists } = buildPlaylists({
       tracks,
       pinnedTrackIds: [pinnedId],
       playlistCount: 2,
@@ -107,7 +107,7 @@ describe('PlaylistEngine — buildPlaylists', () => {
     const { buildPlaylists } = await import('../../backend/music/playlistEngine')
     const tracks = makeTracks(5, 5, 180)
 
-    const playlists = buildPlaylists({
+    const { playlists } = buildPlaylists({
       tracks,
       pinnedTrackIds: [],
       playlistCount: 1,
@@ -123,7 +123,7 @@ describe('PlaylistEngine — buildPlaylists', () => {
     const { buildPlaylists } = await import('../../backend/music/playlistEngine')
     const tracks = makeTracks(5, 5, 180)
 
-    const playlists = buildPlaylists({
+    const { playlists } = buildPlaylists({
       tracks,
       pinnedTrackIds: [],
       playlistCount: 1,
@@ -145,7 +145,7 @@ describe('PlaylistEngine — buildPlaylists', () => {
     // Use few tracks to force reuse — but check no consecutive dups
     const tracks = makeTracks(3, 3, 60) // 6 tracks × 60s = 360s library
 
-    const playlists = buildPlaylists({
+    const { playlists } = buildPlaylists({
       tracks,
       pinnedTrackIds: [],
       playlistCount: 1,
@@ -196,7 +196,7 @@ describe('PlaylistEngine — edge cases', () => {
     const tracks = [makePriorityTrack('only', 120)]
 
     // Should not throw, should produce playlist with the single track (repeated)
-    const playlists = buildPlaylists({
+    const { playlists } = buildPlaylists({
       tracks,
       pinnedTrackIds: [],
       playlistCount: 1,
@@ -212,7 +212,7 @@ describe('PlaylistEngine — edge cases', () => {
     const tracks = makeTracks(5, 0, 180)
     const pinnedIds = tracks.map((t) => t.id)
 
-    const playlists = buildPlaylists({
+    const { playlists } = buildPlaylists({
       tracks,
       pinnedTrackIds: pinnedIds,
       playlistCount: 1,
@@ -229,7 +229,7 @@ describe('PlaylistEngine — edge cases', () => {
     const tracks = [makePriorityTrack('a', 60), makeRandomTrack('b', 60)]
 
     // Need 2 × 30min = 3600s but only have 120s
-    const playlists = buildPlaylists({
+    const { playlists } = buildPlaylists({
       tracks,
       pinnedTrackIds: [],
       playlistCount: 2,
@@ -252,7 +252,7 @@ describe('PlaylistEngine — priority ratio', () => {
     // Plenty of both types so ratio can be enforced
     const tracks = makeTracks(20, 20, 180)
 
-    const playlists = buildPlaylists({
+    const { playlists } = buildPlaylists({
       tracks,
       pinnedTrackIds: [],
       playlistCount: 1,

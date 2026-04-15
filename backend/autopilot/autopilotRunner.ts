@@ -9,6 +9,7 @@ import { type FinalExportJobRequest, type FinalExportEmitter, planFinalExport, e
 import { videoJobManager } from '../video/videoJobManager'
 import { getDiskSpace, formatBytes } from '../utils/diskSpace'
 import { syncPoolWithFiles, pickUniqueSequence, markClipsUsed, getPoolStats } from './videoPool'
+import type { FinalExportDonePayload } from '../../shared/videoFinalExportChannels'
 
 export type DayPresetId = 'tomorrowland' | 'partymix' | 'custom'
 
@@ -62,9 +63,21 @@ export interface AutopilotFoldersConfig {
   minVideoClipsTarget?: number
 }
 
+export interface AutopilotRuntimeOverrides {
+  finalExportUseGpuEncoding?: 'gpu' | 'cpu' | 'auto'
+  requireGpuForVideoEncode?: boolean
+  healthCheckNotice?: string
+  healthCheckNoticeLevel?: 'info' | 'warn'
+  resolvedGpuProfile?: 'modern' | 'legacy'
+  resolvedGpuFfmpegPath?: string
+  resolvedGpuEncoder?: 'nvenc' | 'amf' | 'videotoolbox'
+  gpuFallbackReason?: string
+}
+
 export interface AutopilotConfig {
   dayPlans: DayPlanConfig[]
   folders: AutopilotFoldersConfig
+  runtimeOverrides?: AutopilotRuntimeOverrides
 }
 
 export type AutopilotStatus =
@@ -87,6 +100,16 @@ export interface AutopilotProgress {
   videoTargetMin?: number
 }
 
+export type AutopilotLogVerbosity = 'normal' | 'verbose'
+
+export interface AutopilotLogEntry {
+  seq: number
+  timestamp: string
+  level: 'info' | 'warn' | 'error'
+  message: string
+  verbosity: AutopilotLogVerbosity
+}
+
 export type AutopilotProgressListener = (progress: AutopilotProgress) => void
 
 let currentProgress: AutopilotProgress = {
@@ -99,10 +122,18 @@ let currentProgress: AutopilotProgress = {
 
 let isCancelling = false
 let progressListener: AutopilotProgressListener | null = null
-let logListener: ((log: { timestamp: string; level: 'info' | 'warn' | 'error'; message: string }) => void) | null = null
+let logListener: ((log: AutopilotLogEntry) => void) | null = null
 let activeAbortControllers: AbortController[] = []
+let lastBroadcastProgress: AutopilotProgress | null = null
+let lastBroadcastAt = 0
+let pendingBroadcastProgress: AutopilotProgress | null = null
+let progressBroadcastTimer: ReturnType<typeof setTimeout> | null = null
+let pendingLogFileLines: string[] = []
+let logFileFlushTimer: ReturnType<typeof setTimeout> | null = null
+let logFileFlushChain: Promise<void> = Promise.resolve()
 const LOG_BUFFER_LIMIT = 500
-let recentLogs: { timestamp: string; level: 'info' | 'warn' | 'error'; message: string }[] = []
+let recentLogs: AutopilotLogEntry[] = []
+let nextLogSequence = 1
 const SCAN_TIMEOUT_MS = 10 * 60 * 1000 // 10 phút
 const VIDEO_PICK_TIMEOUT_MS = 10 * 60 * 1000 // 10 phút
 const AUDIO_EXPORT_TIMEOUT_MS = 30 * 60 * 1000 // 30 phút per playlist (audio export có thể lâu với crossfade)
@@ -110,6 +141,29 @@ const MAX_PLAYLIST_COUNT_DEFAULT = 200 // cảnh báo
 const MAX_PLAYLIST_COUNT = 500 // giới hạn cứng
 const MAX_LOG_FILES = 5
 const MAX_LOG_SIZE_BYTES = 5 * 1024 * 1024 // 5MB
+
+function cancelAutopilotVideoJobs() {
+  for (const requestId of videoJobManager.getAllJobIds()) {
+    if (requestId.startsWith('autopilot-')) {
+      videoJobManager.cancelJob(requestId)
+    }
+  }
+}
+const MAX_SUMMARY_LOG_ITEMS = 20
+const AUDIO_PROGRESS_LOG_STEP_PCT = 10
+const AUDIO_PROGRESS_LOG_INTERVAL_MS = 10_000
+const AUDIO_PROGRESS_STALL_WARN_MS = 60_000
+const AUDIO_PROGRESS_STALL_CHECK_INTERVAL_MS = 15_000
+const FINAL_EXPORT_PROGRESS_NORMAL_LOG_STEP_PCT = 10
+const FINAL_EXPORT_PROGRESS_NORMAL_LOG_INTERVAL_MS = 20_000
+const FINAL_EXPORT_PROGRESS_VERBOSE_LOG_STEP_PCT = 5
+const FINAL_EXPORT_PROGRESS_VERBOSE_LOG_INTERVAL_MS = 5_000
+const VIDEO_SCAN_PROGRESS_LOG_EVERY = 250
+const PROGRESS_NOTIFY_INTERVAL_MS = 350
+const PROGRESS_NOTIFY_STEP_DELTA = 2
+const PROGRESS_NOTIFY_VIDEO_DELTA = 25
+const LOG_FILE_FLUSH_INTERVAL_MS = 250
+const LOG_FILE_FLUSH_BATCH_SIZE = 25
 // Lazy-init LOG_DIR để tránh require electron trước khi app ready
 function getLogDir(): string {
   try {
@@ -121,12 +175,13 @@ function getLogDir(): string {
     return path.join(process.cwd(), 'logs')
   }
 }
-const LOG_DIR = getLogDir()
 const LOG_FILE_PREFIX = 'autopilot'
 const VIDEO_CHECK_MAX_DEPTH = 8
 const VIDEO_CHECK_ENTRY_LIMIT = 10_000
 
 const VIDEO_EXTS = new Set(['.mp4', '.mkv', '.mov', '.m4v', '.avi', '.wmv', '.webm'])
+const TERMINAL_AUTOPILOT_STATUSES = new Set<AutopilotStatus>(['idle', 'completed', 'completed_with_errors', 'error'])
+let currentLogVerbosity: AutopilotLogVerbosity = 'normal'
 
 export function getAutopilotProgress(): AutopilotProgress {
   return currentProgress
@@ -138,6 +193,78 @@ export function onAutopilotProgress(listener: AutopilotProgressListener) {
 
 export function offAutopilotProgress() {
   progressListener = null
+  pendingBroadcastProgress = null
+  if (progressBroadcastTimer) {
+    clearTimeout(progressBroadcastTimer)
+    progressBroadcastTimer = null
+  }
+}
+
+function shouldBroadcastProgressImmediately(progress: AutopilotProgress): boolean {
+  if (!lastBroadcastProgress) return true
+  if (progress.status !== lastBroadcastProgress.status) return true
+  if (progress.currentDayIndex !== lastBroadcastProgress.currentDayIndex) return true
+  if (progress.currentStep !== lastBroadcastProgress.currentStep) return true
+  if (progress.error !== lastBroadcastProgress.error) return true
+  if (TERMINAL_AUTOPILOT_STATUSES.has(progress.status)) return true
+  return false
+}
+
+function broadcastProgressNow(progress: AutopilotProgress) {
+  const snapshot: AutopilotProgress = { ...progress }
+  pendingBroadcastProgress = null
+  if (progressBroadcastTimer) {
+    clearTimeout(progressBroadcastTimer)
+    progressBroadcastTimer = null
+  }
+  lastBroadcastProgress = snapshot
+  lastBroadcastAt = Date.now()
+  if (progressListener) {
+    progressListener(snapshot)
+  }
+}
+
+function scheduleProgressBroadcast(progress: AutopilotProgress) {
+  if (!progressListener) return
+
+  const now = Date.now()
+  const last = lastBroadcastProgress
+  const stepDelta = Math.abs((progress.stepPercent ?? 0) - (last?.stepPercent ?? 0))
+  const videoDelta = Math.abs((progress.videoSelectedCount ?? 0) - (last?.videoSelectedCount ?? 0))
+  const timeElapsed = now - lastBroadcastAt
+
+  if (
+    shouldBroadcastProgressImmediately(progress) ||
+    timeElapsed >= PROGRESS_NOTIFY_INTERVAL_MS ||
+    stepDelta >= PROGRESS_NOTIFY_STEP_DELTA ||
+    videoDelta >= PROGRESS_NOTIFY_VIDEO_DELTA
+  ) {
+    broadcastProgressNow(progress)
+    return
+  }
+
+  pendingBroadcastProgress = progress
+  if (!progressBroadcastTimer) {
+    const delay = Math.max(0, PROGRESS_NOTIFY_INTERVAL_MS - timeElapsed)
+    progressBroadcastTimer = setTimeout(() => {
+      progressBroadcastTimer = null
+      if (!pendingBroadcastProgress) return
+      const nextProgress = pendingBroadcastProgress
+      const nextStepDelta = Math.abs((nextProgress.stepPercent ?? 0) - (lastBroadcastProgress?.stepPercent ?? 0))
+      const nextVideoDelta = Math.abs((nextProgress.videoSelectedCount ?? 0) - (lastBroadcastProgress?.videoSelectedCount ?? 0))
+      const nextMessageChanged = nextProgress.message !== lastBroadcastProgress?.message
+      if (
+        nextMessageChanged ||
+        nextStepDelta > 0 ||
+        nextVideoDelta > 0 ||
+        nextProgress.status !== lastBroadcastProgress?.status
+      ) {
+        broadcastProgressNow(nextProgress)
+      } else {
+        pendingBroadcastProgress = null
+      }
+    }, delay)
+  }
 }
 
 function emit(progress: Partial<AutopilotProgress>) {
@@ -154,7 +281,7 @@ function emit(progress: Partial<AutopilotProgress>) {
     }
   }
   currentProgress = next
-  if (progressListener) progressListener(currentProgress)
+  scheduleProgressBroadcast(currentProgress)
 }
 
 function formatDuration(seconds: number): string {
@@ -167,16 +294,18 @@ function formatDuration(seconds: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`
 }
 
-let ensureLogDirDone = false
+let ensuredLogDirPath: string | null = null
 
-function ensureLogDir() {
-  if (ensureLogDirDone) return
+function ensureLogDir(): string {
+  const logDir = getLogDir()
+  if (ensuredLogDirPath === logDir) return logDir
   try {
-    fs.mkdirSync(LOG_DIR, { recursive: true })
-    ensureLogDirDone = true
+    fs.mkdirSync(logDir, { recursive: true })
+    ensuredLogDirPath = logDir
   } catch (err) {
     console.warn('[Autopilot] Không tạo được thư mục log:', err)
   }
+  return logDir
 }
 
 async function rotateLogsIfNeeded(basePath: string) {
@@ -200,43 +329,159 @@ async function rotateLogsIfNeeded(basePath: string) {
   }
 }
 
-function appendLogToFile(entry: { timestamp: string; level: 'info' | 'warn' | 'error'; message: string }) {
-  ensureLogDir()
-  const basePath = path.join(LOG_DIR, `${LOG_FILE_PREFIX}.log`)
-  const line = `${entry.timestamp} [${entry.level.toUpperCase()}] ${entry.message}\n`
-  // Dùng async I/O để không block main process / IPC event loop
-  rotateLogsIfNeeded(basePath)
-    .then(() => fsp.appendFile(basePath, line, 'utf-8'))
-    .catch(err => console.warn('[Autopilot] Ghi log file thất bại:', err))
+function scheduleLogFileFlush(delayMs: number) {
+  if (logFileFlushTimer) {
+    if (delayMs > 0) return
+    clearTimeout(logFileFlushTimer)
+  }
+  logFileFlushTimer = setTimeout(() => {
+    logFileFlushTimer = null
+    flushBufferedLogsToFile().catch(err => console.warn('[Autopilot] Ghi log file thất bại:', err))
+  }, delayMs)
 }
 
-function emitLog(level: 'info' | 'warn' | 'error', message: string) {
+async function flushBufferedLogsToFile(): Promise<void> {
+  if (pendingLogFileLines.length === 0) return
+  const basePath = path.join(ensureLogDir(), `${LOG_FILE_PREFIX}.log`)
+  const payload = pendingLogFileLines.join('')
+  pendingLogFileLines = []
+
+  logFileFlushChain = logFileFlushChain
+    .then(async () => {
+      await rotateLogsIfNeeded(basePath)
+      await fsp.appendFile(basePath, payload, 'utf-8')
+    })
+    .catch(err => {
+      console.warn('[Autopilot] Ghi log file thất bại:', err)
+    })
+
+  await logFileFlushChain
+}
+
+function appendLogToFile(entry: { timestamp: string; level: 'info' | 'warn' | 'error'; message: string }) {
+  const line = `${entry.timestamp} [${entry.level.toUpperCase()}] ${entry.message}\n`
+  pendingLogFileLines.push(line)
+  const shouldFlushImmediately =
+    entry.level === 'error' || pendingLogFileLines.length >= LOG_FILE_FLUSH_BATCH_SIZE
+  scheduleLogFileFlush(shouldFlushImmediately ? 0 : LOG_FILE_FLUSH_INTERVAL_MS)
+}
+
+function shouldEmitLogForVerbosity(verbosity: AutopilotLogVerbosity): boolean {
+  return currentLogVerbosity === 'verbose' || verbosity === 'normal'
+}
+
+type EmitLogOptions = {
+  skipListener?: boolean
+  skipFile?: boolean
+  skipConsole?: boolean
+}
+
+function emitLog(
+  level: 'info' | 'warn' | 'error',
+  message: string,
+  verbosity: AutopilotLogVerbosity = 'normal',
+  options: EmitLogOptions = {},
+) {
+  const shouldEmitLive = shouldEmitLogForVerbosity(verbosity)
   const timestamp = new Date().toLocaleTimeString('vi-VN', { hour12: false })
-  const logEntry = { timestamp, level, message }
+  const logEntry: AutopilotLogEntry = {
+    seq: nextLogSequence++,
+    timestamp,
+    level,
+    message,
+    verbosity,
+  }
   recentLogs.push(logEntry)
   if (recentLogs.length > LOG_BUFFER_LIMIT) {
     recentLogs = recentLogs.slice(-LOG_BUFFER_LIMIT)
   }
-  if (logListener) {
+  if (shouldEmitLive && logListener && !options.skipListener) {
     logListener(logEntry)
   }
-  appendLogToFile(logEntry)
+  if (!options.skipFile) {
+    appendLogToFile(logEntry)
+  }
+  if (options.skipConsole) return
   // Cũng log vào console
   if (level === 'error') {
     console.error(`[Autopilot] ${message}`)
   } else if (level === 'warn') {
     console.warn(`[Autopilot] ${message}`)
-  } else {
+  } else if (shouldEmitLive) {
     console.log(`[Autopilot] ${message}`)
   }
 }
 
-export function onAutopilotLog(listener: (log: { timestamp: string; level: 'info' | 'warn' | 'error'; message: string }) => void) {
+function emitVerboseLog(level: 'info' | 'warn' | 'error', message: string) {
+  emitLog(level, message, 'verbose')
+}
+
+/**
+ * Gộp nhiều dòng log thành 1 entry duy nhất (giảm IPC spam).
+ * Mỗi phần tử trong `lines` sẽ nối bằng `\n`.
+ */
+function emitLogBlock(
+  level: 'info' | 'warn' | 'error',
+  lines: string[],
+  verbosity: AutopilotLogVerbosity = 'normal',
+) {
+  if (lines.length === 0) return
+  emitLog(level, lines.join('\n'), verbosity)
+}
+
+export function onAutopilotLog(listener: (log: AutopilotLogEntry) => void) {
   logListener = listener
 }
 
 export function offAutopilotLog() {
   logListener = null
+}
+
+export function getAutopilotLogVerbosity(): AutopilotLogVerbosity {
+  return currentLogVerbosity
+}
+
+export function setAutopilotLogVerbosity(verbosity: AutopilotLogVerbosity | string | null | undefined): AutopilotLogVerbosity {
+  currentLogVerbosity = verbosity === 'verbose' ? 'verbose' : 'normal'
+  return currentLogVerbosity
+}
+
+export function getRecentAutopilotLogs(limit = LOG_BUFFER_LIMIT): AutopilotLogEntry[] {
+  const safeLimit = Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : LOG_BUFFER_LIMIT
+  if (safeLimit === 0) return []
+  return recentLogs.slice(-safeLimit)
+}
+
+export const __autopilotTestUtils = {
+  resetRecentLogs() {
+    recentLogs = []
+    nextLogSequence = 1
+    currentLogVerbosity = 'normal'
+    pendingLogFileLines = []
+    if (logFileFlushTimer) {
+      clearTimeout(logFileFlushTimer)
+      logFileFlushTimer = null
+    }
+  },
+  seedRecentLogs(entries: AutopilotLogEntry[]) {
+    recentLogs = entries.slice(-LOG_BUFFER_LIMIT)
+    nextLogSequence =
+      recentLogs.reduce((maxSeq, entry) => Math.max(maxSeq, entry.seq), 0) + 1
+  },
+  setLogVerbosity(verbosity: AutopilotLogVerbosity) {
+    currentLogVerbosity = verbosity
+  },
+  emitLogForTest(
+    level: 'info' | 'warn' | 'error',
+    message: string,
+    verbosity: AutopilotLogVerbosity = 'normal',
+  ) {
+    emitLog(level, message, verbosity, {
+      skipListener: true,
+      skipFile: true,
+      skipConsole: true,
+    })
+  },
 }
 
 export function cancelAutopilot() {
@@ -245,7 +490,7 @@ export function cancelAutopilot() {
     emit({ status: 'cancelling', message: 'Đang dừng Autopilot, huỷ các job FFmpeg hiện tại...' })
     try {
       // Kill toàn bộ FFmpeg jobs đang chạy (export audio, final export, v.v.)
-      videoJobManager.cancelAll()
+      cancelAutopilotVideoJobs()
     } catch (error) {
       console.warn('[Autopilot] cancelAutopilot: lỗi khi huỷ video jobs:', error)
     }
@@ -278,7 +523,7 @@ async function ensureDir(dirPath: string): Promise<void> {
 /**
  * Validate dateCode format: phải là 4 ký tự số (ddMM)
  */
-function validateDateCode(dateCode: string): boolean {
+export function validateDateCode(dateCode: string): boolean {
   if (!dateCode || typeof dateCode !== 'string') return false
   if (dateCode.length !== 4) return false
   if (!/^\d{4}$/.test(dateCode)) return false
@@ -288,14 +533,43 @@ function validateDateCode(dateCode: string): boolean {
   
   if (isNaN(day) || isNaN(month)) return false
   if (month < 1 || month > 12) return false
-  if (day < 1 || day > 31) return false
+  if (day < 1) return false
   
   // Kiểm tra số ngày hợp lệ trong tháng
-  const currentYear = new Date().getFullYear()
-  const date = new Date(currentYear, month - 1, day)
-  if (date.getDate() !== day || date.getMonth() !== month - 1) return false
-  
-  return true
+  const daysInMonth = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+  return day <= daysInMonth[month - 1]
+}
+
+function createStallHeartbeat(
+  stallWarnMs: number,
+  checkIntervalMs: number,
+  onStall: (stalledForMs: number) => void,
+) {
+  let lastActivityAt = Date.now()
+  let lastReportedBucket = 0
+
+  const timer = setInterval(() => {
+    const stalledForMs = Date.now() - lastActivityAt
+    if (stalledForMs < stallWarnMs) return
+    const bucket = Math.floor(stalledForMs / stallWarnMs)
+    if (bucket <= lastReportedBucket) return
+    lastReportedBucket = bucket
+    onStall(stalledForMs)
+  }, checkIntervalMs)
+
+  if (typeof timer.unref === 'function') {
+    timer.unref()
+  }
+
+  return {
+    markActivity() {
+      lastActivityAt = Date.now()
+      lastReportedBucket = 0
+    },
+    stop() {
+      clearInterval(timer)
+    },
+  }
 }
 
 /**
@@ -645,7 +919,7 @@ async function pickVideosFromFolders(
   const summaries: VideoBucketSummary[] = []
   const p = Math.max(1, Math.min(100, Math.round(percent || 70)))
 
-  emitLog('info', `[Bước 4] Bắt đầu quét ${buckets.length} thư mục video...`)
+  emitVerboseLog('info', `[Bước 3] Bắt đầu quét ${buckets.length} thư mục video...`)
   
   // BƯỚC 1: Quét TẤT CẢ folder, thu thập TẤT CẢ video (không dừng sớm)
   const allFilesByFolder: Array<{ folder: string; files: string[] }> = []
@@ -653,22 +927,29 @@ async function pickVideosFromFolders(
   
   for (let i = 0; i < buckets.length; i++) {
     if (isCancelling) break
-    
+
     const folder = buckets[i]
-    emitLog('info', `[Bước 4] Đang quét thư mục ${i + 1}/${buckets.length}: ${folder}`)
+    emitVerboseLog('info', `[Bước 3] Đang quét thư mục ${i + 1}/${buckets.length}: ${folder}`)
+
+    // Emit progress (UI heartbeat) — cho user biết app vẫn đang chạy
+    emit({
+      currentStep: 3,
+      stepPercent: 60 + Math.round(((i + 1) / buckets.length) * 10),
+      message: `Đang quét video... (${i + 1}/${buckets.length} thư mục)`,
+    })
     
     // Quét với progress callback
     let folderFileCount = 0
     const allFiles = await collectVideoFilesRecursive(folder, (currentCount, currentDir) => {
       folderFileCount = currentCount
       totalScanned = allFilesByFolder.reduce((sum, item) => sum + item.files.length, 0) + currentCount
-      // Emit progress mỗi 100 file để tránh spam log
-      if (currentCount % 100 === 0 || currentCount === 1) {
-        emitLog('info', `[Bước 4]   → Đã quét ${currentCount} video từ "${path.basename(currentDir)}"...`)
+      // Emit progress theo nhịp thưa hơn để tránh spam IPC/log khi scan thư mục lớn
+      if (currentCount % VIDEO_SCAN_PROGRESS_LOG_EVERY === 0 || currentCount === 1) {
+        emitVerboseLog('info', `[Bước 3]   → Đã quét ${currentCount} video từ "${path.basename(currentDir)}"...`)
       }
     })
     
-    emitLog('info', `[Bước 4] ✓ Thư mục ${i + 1}/${buckets.length}: Tìm thấy ${allFiles.length} video`)
+    emitVerboseLog('info', `[Bước 3] ✓ Thư mục ${i + 1}/${buckets.length}: Tìm thấy ${allFiles.length} video`)
     
     allFilesByFolder.push({ folder, files: allFiles })
     summaries.push({
@@ -686,7 +967,7 @@ async function pickVideosFromFolders(
     allFiles.push(...item.files)
   }
 
-  emitLog('info', `[Bước 4] Tổng cộng quét được ${allFiles.length} video từ ${buckets.length} thư mục`)
+  emitVerboseLog('info', `[Bước 3] Tổng cộng quét được ${allFiles.length} video từ ${buckets.length} thư mục`)
 
   if (allFiles.length === 0) {
     console.warn('[Autopilot] Không tìm thấy video nào trong tất cả thư mục')
@@ -694,14 +975,14 @@ async function pickVideosFromFolders(
   }
 
   // BƯỚC 3: Shuffle IN-PLACE để tiết kiệm memory và lấy X% từ tổng số
-  emitLog('info', `[Bước 4] Đang shuffle ${allFiles.length} video...`)
+  emitVerboseLog('info', `[Bước 3] Đang shuffle ${allFiles.length} video...`)
   shuffleArrayInPlace(allFiles) // In-place shuffle, không copy array
   
   const percentCount = Math.max(1, Math.round((allFiles.length * p) / 100))
   const targetCount = Math.max(minTotal, percentCount) // Lấy ít nhất minTotal, hoặc X% nếu lớn hơn
   const selected = allFiles.slice(0, Math.min(targetCount, allFiles.length))
 
-  emitLog('info', `[Bước 4] Đã chọn ${selected.length} video (${p}% = ${percentCount}, minTotal = ${minTotal}, tổng = ${allFiles.length})`)
+  emitLog('info', `[Bước 3] Đã chọn ${selected.length}/${allFiles.length} video (${p}%, min ${minTotal}) từ ${buckets.length} thư mục`)
 
   // Cập nhật selectedFiles cho mỗi folder (tính theo tỷ lệ)
   for (let i = 0; i < summaries.length; i++) {
@@ -1059,6 +1340,13 @@ async function runExportVideoWithOptions(
   playlists: PlaylistDefinition[],
 ): Promise<void> {
   const requestId = jobRequest.requestId || randomUUID()
+  let donePayload: FinalExportDonePayload | null = null
+  let lastNormalProgressLogAt = 0
+  let lastNormalProgressBucket = -1
+  let lastNormalProgressJobIndex = -1
+  let lastVerboseProgressLogAt = 0
+  let lastVerboseProgressBucket = -1
+  let lastVerboseProgressJobIndex = -1
   
   // Plan first
   const plan = await planFinalExport(
@@ -1076,6 +1364,27 @@ async function runExportVideoWithOptions(
       const p = payload.percent ?? 0
       const currentIndex = payload.currentIndex ?? 0
       const totalOutputs = payload.totalOutputs ?? playlists.length
+      const now = Date.now()
+      const normalProgressBucket = Math.floor(p / FINAL_EXPORT_PROGRESS_NORMAL_LOG_STEP_PCT)
+      const verboseProgressBucket = Math.floor(p / FINAL_EXPORT_PROGRESS_VERBOSE_LOG_STEP_PCT)
+      const shouldLogNormalProgress =
+        !!payload.currentOutputFilename &&
+        currentIndex > 0 &&
+        (
+          currentIndex !== lastNormalProgressJobIndex ||
+          normalProgressBucket > lastNormalProgressBucket ||
+          p >= 100 ||
+          now - lastNormalProgressLogAt >= FINAL_EXPORT_PROGRESS_NORMAL_LOG_INTERVAL_MS
+        )
+      const shouldLogVerboseProgress =
+        !!payload.currentOutputFilename &&
+        currentIndex > 0 &&
+        (
+          currentIndex !== lastVerboseProgressJobIndex ||
+          verboseProgressBucket > lastVerboseProgressBucket ||
+          p >= 100 ||
+          now - lastVerboseProgressLogAt >= FINAL_EXPORT_PROGRESS_VERBOSE_LOG_INTERVAL_MS
+        )
       emit({
         currentStep: 4,
         stepPercent: 60 + Math.round((p / 100) * 35),
@@ -1083,11 +1392,31 @@ async function runExportVideoWithOptions(
           payload.status ??
           `Ngày ${dateCode}: Đang xuất video hoàn chỉnh (${p.toFixed ? p.toFixed(1) : p}% )...`,
       })
-      if (payload.currentOutputFilename && currentIndex > 0) {
-        emitLog('info', `[Bước 4] Đang xuất video ${currentIndex}/${totalOutputs}: ${payload.currentOutputFilename} (${p.toFixed(1)}%)`)
+      const etaText =
+        typeof payload.etaSec === 'number' && Number.isFinite(payload.etaSec)
+          ? `, ETA ~${Math.max(0, Math.round(payload.etaSec))}s`
+          : ''
+      if (shouldLogNormalProgress) {
+        emitLog(
+          'info',
+          `[Bước 4] Đang xuất video ${currentIndex}/${totalOutputs}: ${payload.currentOutputFilename} (${p.toFixed(1)}%${etaText})`,
+        )
+        lastNormalProgressLogAt = now
+        lastNormalProgressBucket = normalProgressBucket
+        lastNormalProgressJobIndex = currentIndex
+      }
+      if (shouldLogVerboseProgress) {
+        emitVerboseLog(
+          'info',
+          `[Bước 4] [Verbose] Đang xuất video ${currentIndex}/${totalOutputs}: ${payload.currentOutputFilename} (${p.toFixed(1)}%${etaText})`,
+        )
+        lastVerboseProgressLogAt = now
+        lastVerboseProgressBucket = verboseProgressBucket
+        lastVerboseProgressJobIndex = currentIndex
       }
     },
     done: (payload) => {
+      donePayload = payload
       const failedCount = payload.failedJobs?.length ?? 0
       const successCount = payload.outputs?.length ?? 0
       const totalCount = successCount + failedCount
@@ -1100,7 +1429,7 @@ async function runExportVideoWithOptions(
           message: `Ngày ${dateCode}: Hoàn tất — ${successCount}/${totalCount} video thành công, ${failedCount} thất bại.`,
         })
         emitLog('warn', `[Bước 5] ⚠️ Ngày ${dateCode}: ${successCount}/${totalCount} video thành công, ${failedCount} thất bại.`)
-        for (const f of payload.failedJobs!) {
+        for (const f of payload.failedJobs!.slice(0, MAX_SUMMARY_LOG_ITEMS)) {
           emitLog('error', `[Bước 5]   ✗ Job ${f.jobIndex + 1} (${f.fileName}): ${f.error}`)
         }
       } else {
@@ -1111,27 +1440,31 @@ async function runExportVideoWithOptions(
         })
       }
 
-      // Summary report
-      emitLog('info', `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`)
-      emitLog('info', `📊 BÁO CÁO NGÀY ${dateCode}`)
-      emitLog('info', `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`)
-      emitLog('info', `  Tổng số video: ${totalCount}`)
-      emitLog('info', `  ✅ Thành công: ${successCount}`)
+      // Summary report — gộp thành 1 log block duy nhất
+      const reportLines: string[] = [
+        `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
+        `📊 BÁO CÁO NGÀY ${dateCode} — ✅ ${successCount}${failedCount > 0 ? ` / ❌ ${failedCount}` : ''} video`,
+      ]
       if (failedCount > 0) {
-        emitLog('info', `  ❌ Thất bại: ${failedCount}`)
-        for (const f of payload.failedJobs!) {
-          emitLog('info', `     • Job ${f.jobIndex + 1} — ${f.fileName}: ${f.error.slice(0, 150)}`)
+        for (const f of payload.failedJobs!.slice(0, MAX_SUMMARY_LOG_ITEMS)) {
+          reportLines.push(`   ✗ Job ${f.jobIndex + 1} — ${f.fileName}: ${f.error.slice(0, 150)}`)
+        }
+        if (failedCount > MAX_SUMMARY_LOG_ITEMS) {
+          reportLines.push(`   ... và ${failedCount - MAX_SUMMARY_LOG_ITEMS} job lỗi khác`)
         }
       }
       if (successCount > 0) {
-        emitLog('info', `  📁 Video output:`)
-        for (const out of payload.outputs) {
+        for (const out of payload.outputs.slice(0, MAX_SUMMARY_LOG_ITEMS)) {
           const fileName = out.videoFile.split(/[\\/]/).pop() || out.videoFile
           const durMin = (out.durationSec / 60).toFixed(1)
-          emitLog('info', `     • ${fileName} (${durMin} phút)`)
+          reportLines.push(`   ✓ ${fileName} (${durMin} phút)`)
+        }
+        if (successCount > MAX_SUMMARY_LOG_ITEMS) {
+          reportLines.push(`   ... và ${successCount - MAX_SUMMARY_LOG_ITEMS} video khác`)
         }
       }
-      emitLog('info', `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`)
+      reportLines.push(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`)
+      emitLogBlock('info', reportLines)
     },
     error: (err) => {
       emit({
@@ -1178,6 +1511,54 @@ async function runExportVideoWithOptions(
     jobRequest.targetResolution,
     jobRequest.targetFps
   )
+
+  if (!donePayload) {
+    throw new Error(`Final export không trả về kết quả hoàn tất cho ngày ${dateCode}.`)
+  }
+
+  const finalDonePayload = donePayload as unknown as FinalExportDonePayload
+  const outputCount = finalDonePayload.outputs.length
+  const failedJobs = finalDonePayload.failedJobs ?? []
+
+  if (outputCount === 0) {
+    throw new Error(`Final export không tạo được video nào cho ngày ${dateCode}.`)
+  }
+
+  const missingOrEmptyOutputs: string[] = []
+  for (const output of finalDonePayload.outputs) {
+    try {
+      const stat = await fsp.stat(output.videoFile)
+      if (!stat.isFile() || stat.size <= 0) {
+        missingOrEmptyOutputs.push(path.basename(output.videoFile))
+      }
+    } catch {
+      missingOrEmptyOutputs.push(path.basename(output.videoFile))
+    }
+  }
+
+  if (missingOrEmptyOutputs.length > 0) {
+    const sample = missingOrEmptyOutputs.slice(0, MAX_SUMMARY_LOG_ITEMS).join(', ')
+    const extra =
+      missingOrEmptyOutputs.length > MAX_SUMMARY_LOG_ITEMS
+        ? ` và ${missingOrEmptyOutputs.length - MAX_SUMMARY_LOG_ITEMS} file khác`
+        : ''
+    throw new Error(`Final export báo thành công nhưng file video bị thiếu hoặc rỗng: ${sample}${extra}.`)
+  }
+
+  if (failedJobs.length > 0 || outputCount !== playlists.length) {
+    const failureSample = failedJobs
+      .slice(0, MAX_SUMMARY_LOG_ITEMS)
+      .map((job: { fileName: string; error: string }) => `${job.fileName}: ${job.error}`)
+      .join(' | ')
+    const failureSuffix =
+      failedJobs.length > MAX_SUMMARY_LOG_ITEMS
+        ? ` | ... và ${failedJobs.length - MAX_SUMMARY_LOG_ITEMS} job lỗi khác`
+        : ''
+    const details = failureSample ? ` ${failureSample}${failureSuffix}` : ''
+    throw new Error(
+      `Final export chỉ tạo được ${outputCount}/${playlists.length} video cho ngày ${dateCode}.${details}`
+    )
+  }
 }
 
 async function runAutopilotForDay(
@@ -1219,14 +1600,15 @@ async function runAutopilotForDay(
     videoSelectedCount: undefined,
     videoTargetMin: undefined,
   })
-  emitLog('info', `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`)
-  emitLog('info', `📅 Bắt đầu xử lý ngày: ${dateCode}`)
-  emitLog('info', `[Bước 1] Ngày ${dateCode}: Đang chuẩn bị thư mục output...`)
+  emitLogBlock('info', [
+    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
+    `📅 Bắt đầu xử lý ngày: ${dateCode}`,
+    `[Bước 1] Đang chuẩn bị thư mục output...`,
+  ])
 
   await ensureDir(audioDir)
   await ensureDir(finalDir)
-  emitLog('info', `[Bước 1] ✓ Đã tạo thư mục Audio: ${audioDir}`)
-  emitLog('info', `[Bước 1] ✓ Đã tạo thư mục Video: ${finalDir}`)
+  emitLog('info', `[Bước 1] ✓ Đã tạo thư mục Audio + Video`)
 
   throwIfCancelling()
 
@@ -1310,12 +1692,8 @@ async function runAutopilotForDay(
     stepPercent: 40,
     message: `Ngày ${dateCode}: Đang xuất ${playlists.length} playlist thành file audio...`,
   })
-  emitLog('info', `[Bước 2] Ngày ${dateCode}: Bắt đầu xuất ${playlists.length} playlist thành file audio...`)
-  if (smoothTransitions) {
-    emitLog('info', `[Bước 2] Crossfade: BẬT (${crossfadeSec}s)`)
-  } else {
-    emitLog('info', `[Bước 2] Crossfade: TẮT (concat copy-stream)`)
-  }
+  const crossfadeLabel = smoothTransitions ? `Crossfade: BẬT (${crossfadeSec}s)` : 'Crossfade: TẮT'
+  emitLog('info', `[Bước 2] Ngày ${dateCode}: Xuất ${playlists.length} playlist → audio... (${crossfadeLabel})`)
 
   const maxAudioExportAttempts = 2
   for (let i = 0; i < playlists.length; i++) {
@@ -1337,18 +1715,36 @@ async function runAutopilotForDay(
     }
     
     // Pass requestId để có thể cancel
-    ;(req as any).requestId = exportRequestId
+    req.requestId = exportRequestId
 
-    emitLog('info', `[Bước 2] Đang xuất playlist ${i + 1}/${playlists.length}: ${fileNameBase}.m4a`)
+    emitVerboseLog('info', `[Bước 2] Đang xuất playlist ${i + 1}/${playlists.length}: ${fileNameBase}.m4a`)
     
     // Retry nhẹ khi export audio thất bại (không phải do cancel)
     let attempt = 0
-    let lastError: any = null
+    let lastAudioProgressLogAt = 0
+    let lastAudioProgressBucket = -1
     while (attempt < maxAudioExportAttempts) {
       attempt++
       const controller = new AbortController()
+      const audioHeartbeat = createStallHeartbeat(
+        AUDIO_PROGRESS_STALL_WARN_MS,
+        AUDIO_PROGRESS_STALL_CHECK_INTERVAL_MS,
+        (stalledForMs) => {
+          const stalledText = formatDuration(Math.max(1, Math.round(stalledForMs / 1000)))
+          emit({
+            currentStep: 2,
+            stepPercent: currentProgress.stepPercent,
+            message: `Ngày ${dateCode}: FFmpeg audio đang im lặng ở playlist ${i + 1}/${playlists.length} (${stalledText}), vẫn tiếp tục chờ...`,
+          })
+          emitLog(
+            'warn',
+            `[Bước 2] Playlist ${i + 1}/${playlists.length} chưa có progress FFmpeg trong ${stalledText}. Vẫn đang chờ cho tới timeout.`,
+          )
+        },
+      )
       activeAbortControllers.push(controller)
       try {
+        audioHeartbeat.markActivity()
         // Thêm progress emitter để log real-time
         // Wrap with timeout to prevent indefinite hang from stuck FFmpeg
         await withTimeout(
@@ -1358,7 +1754,19 @@ async function runAutopilotForDay(
               const percent = progress.percent?.toFixed(1) ?? '0.0'
               const timeStr = formatDuration(progress.currentSec ?? 0)
               const totalTimeStr = formatDuration(progress.totalSec ?? 0)
-              emitLog('info', `[Bước 2]   → Playlist ${i + 1}/${playlists.length}: ${percent}% (${timeStr}/${totalTimeStr})`)
+              const numericPercent = progress.percent ?? 0
+              const progressBucket = Math.floor(numericPercent / AUDIO_PROGRESS_LOG_STEP_PCT)
+              const now = Date.now()
+              audioHeartbeat.markActivity()
+              const shouldLogAudioProgress =
+                progressBucket > lastAudioProgressBucket ||
+                numericPercent >= 100 ||
+                now - lastAudioProgressLogAt >= AUDIO_PROGRESS_LOG_INTERVAL_MS
+              if (shouldLogAudioProgress) {
+                emitVerboseLog('info', `[Bước 2]   → Playlist ${i + 1}/${playlists.length}: ${percent}% (${timeStr}/${totalTimeStr})`)
+                lastAudioProgressLogAt = now
+                lastAudioProgressBucket = progressBucket
+              }
             },
           ),
           AUDIO_EXPORT_TIMEOUT_MS,
@@ -1377,7 +1785,6 @@ async function runAutopilotForDay(
         }
         break
       } catch (err: any) {
-        lastError = err
         if (isCancelling || controller.signal.aborted) {
           throw err
         }
@@ -1389,6 +1796,7 @@ async function runAutopilotForDay(
           throw err
         }
       } finally {
+        audioHeartbeat.stop()
         // cleanup controller reference
         activeAbortControllers = activeAbortControllers.filter((c) => c !== controller)
       }
@@ -1417,9 +1825,9 @@ async function runAutopilotForDay(
   emit({
     currentStep: 3,
     stepPercent: 60,
-    message: `Ngày ${dateCode}: Đang ghép video với audio (Final Export)...`,
+    message: `Ngày ${dateCode}: Đang chọn clip video cho final export...`,
   })
-  emitLog('info', `[Bước 4] Ngày ${dateCode}: Đang chọn video từ thư mục (${videoPickPercent}% mỗi thư mục)...`)
+  emitLog('info', `[Bước 3] Ngày ${dateCode}: Đang chọn video từ thư mục (${videoPickPercent}% mỗi thư mục)...`)
 
   // Chuẩn bị danh sách video clips:
   // - Cho phép nhiều thư mục video đã cắt (mỗi dòng trong ô cấu hình)
@@ -1439,7 +1847,7 @@ async function runAutopilotForDay(
     () => {
       emitLog('error', `[Autopilot] Timeout khi quét/chọn video cho ngày ${dateCode}, huỷ job.`)
       isCancelling = true
-      videoJobManager.cancelAll()
+      cancelAutopilotVideoJobs()
     },
   )
 
@@ -1461,18 +1869,18 @@ async function runAutopilotForDay(
   await ensureVideoDiskSpaceEstimate(finalDir, selectedVideoPaths, playlists.length, 'Xuất video hoàn chỉnh (Autopilot)')
 
   // ── Video Pool: sync + unique sequence ──────────────────────────────────────
-  emitLog('info', `[Bước 4] Đang sync ${selectedVideoPaths.length} clip vào Video Pool...`)
+  emitVerboseLog('info', `[Bước 3] Đang sync ${selectedVideoPaths.length} clip vào Video Pool...`)
   try {
     const { added, updated } = syncPoolWithFiles(selectedVideoPaths, (cur, total) => {
-      if (cur % 500 === 0) emitLog('info', `[VideoPool] Đang sync ${cur}/${total}...`)
+      if (cur % 500 === 0) emitVerboseLog('info', `[VideoPool] Đang sync ${cur}/${total}...`)
     })
     if (added > 0 || updated > 0) {
-      emitLog('info', `[VideoPool] Sync xong: +${added} clip mới, ${updated} clip cập nhật path`)
+      emitVerboseLog('info', `[VideoPool] Sync xong: +${added} clip mới, ${updated} clip cập nhật path`)
     }
 
     // Chọn sequence UNIQUE (LRU + shuffle đến khi fingerprint mới)
     const poolResult = pickUniqueSequence(selectedVideoPaths, selectedVideoPaths.length, dateCode, 30)
-    emitLog('info',
+    emitVerboseLog('info',
       `[VideoPool] Sequence: ${poolResult.isUnique ? '✅ Unique' : '⚠️ Có thể trùng'} | ` +
       `Thử: ${poolResult.attemptCount} lần | ` +
       `Tái dùng: ${poolResult.reusedCount}/${poolResult.totalAvailable} clip | ` +
@@ -1489,7 +1897,7 @@ async function runAutopilotForDay(
     _poolFingerprint = poolResult.fingerprint
 
     const stats = getPoolStats()
-    emitLog('info',
+    emitVerboseLog('info',
       `[VideoPool] Stats: ${stats.totalClips} clip trong pool | ` +
       `Chưa dùng: ${stats.neverUsed} | Dùng 24h qua: ${stats.usedInLast24h} | ` +
       `Tổng sessions: ${stats.totalSessions}`
@@ -1505,15 +1913,15 @@ async function runAutopilotForDay(
   // ────────────────────────────────────────────────────────────────────────────
 
   emit({
-    currentStep: 4,
-    stepPercent: 70,
+    currentStep: 3,
+    stepPercent: 100,
     message: `Ngày ${dateCode}: Đã chọn ${selectedVideoPaths.length} clip video (mục tiêu ${MIN_VIDEO_TOTAL}).`,
     videoSelectedCount: selectedVideoPaths.length,
     videoTargetMin: MIN_VIDEO_TOTAL,
   })
-  emitLog('info', `[Bước 4] Đã chọn ${selectedVideoPaths.length} clip video (mục tiêu: ${MIN_VIDEO_TOTAL})`)
+  emitLog('info', `[Bước 3] Đã chọn ${selectedVideoPaths.length} clip video (mục tiêu: ${MIN_VIDEO_TOTAL})`)
   for (const s of videoSelectionSummary) {
-    emitLog('info', `[Bước 4]   - ${s.folder}: ${s.selectedFiles}/${s.totalFiles} video`)
+    emitVerboseLog('info', `[Bước 3]   - ${s.folder}: ${s.selectedFiles}/${s.totalFiles} video`)
   }
 
   // Tạo danh sách audio paths theo đúng thứ tự playlists để đảm bảo mapping đúng
@@ -1543,28 +1951,28 @@ async function runAutopilotForDay(
     )
   }
 
-  emitLog('info', `[Bước 4] Đã tìm thấy ${audioPaths.length} file audio theo đúng thứ tự playlists`)
+  emitVerboseLog('info', `[Bước 3] Đã tìm thấy ${audioPaths.length} file audio theo đúng thứ tự playlists`)
 
   const baseOutputName = buildBaseOutputNameFromPreset(plan.presetId)
   
   // Debug: Log overrides để kiểm tra customTitles
   if (overrides?.useCustomTitles) {
-    emitLog('info', `[Bước 4] Debug: useCustomTitles=true, customTitles count=${overrides.customTitles?.length || 0}`)
+    emitVerboseLog('info', `[Bước 3] Debug: useCustomTitles=true, customTitles count=${overrides.customTitles?.length || 0}`)
     if (overrides.customTitles && overrides.customTitles.length > 0) {
-      emitLog('info', `[Bước 4] Debug: customTitles[0]=${overrides.customTitles[0]}`)
+      emitVerboseLog('info', `[Bước 3] Debug: customTitles[0]=${overrides.customTitles[0]}`)
     }
   } else {
-    emitLog('info', `[Bước 4] Debug: useCustomTitles=${overrides?.useCustomTitles || false}`)
+    emitVerboseLog('info', `[Bước 3] Debug: useCustomTitles=${overrides?.useCustomTitles || false}`)
   }
   
   const outputNames = generateSimpleTitles(playlists.length, baseOutputName, dateCode, overrides, plan.presetId)
   
   // Debug: Log outputNames để kiểm tra kết quả
   if (outputNames.length > 0) {
-    emitLog('info', `[Bước 4] Debug: outputNames[0]=${outputNames[0]}`)
+    emitVerboseLog('info', `[Bước 3] Debug: outputNames[0]=${outputNames[0]}`)
   }
 
-  const requestId = randomUUID()
+  const requestId = `autopilot-final-${dateCode}-${Date.now()}`
 
   const jobRequest: FinalExportJobRequest = {
     requestId,
@@ -1592,6 +2000,7 @@ async function runAutopilotForDay(
     targetFps: overrides.unifyVideoFormat ? (overrides.targetFps || '30') : undefined,
     normalizeAudio: false,
     tracklistAuto: !!overrides.generateTracklist,
+    useGpuEncoding: config.runtimeOverrides?.finalExportUseGpuEncoding ?? 'auto',
     priorityVideoSource:
       config.folders.priorityVideoFolder && config.folders.priorityVideoFolder.trim().length > 0
         ? (() => {
@@ -1601,17 +2010,41 @@ async function runAutopilotForDay(
         : undefined,
   }
 
-  emitLog('info', `[Bước 4] Ngày ${dateCode}: Bắt đầu xuất ${playlists.length} video hoàn chỉnh...`)
-  if (overrides.normalizeVideoInput) {
-    emitLog('info', `[Bước 4] Re-encode video: BẬT (chậm hơn nhưng an toàn hơn)`)
-  } else {
-    emitLog('info', `[Bước 4] Re-encode video: TẮT (copy-stream, nhanh)`)
-  }
-  if (overrides.unifyVideoFormat) {
-    emitLog('info', `[Bước 4] Chuẩn hóa tỉ lệ khung hình: BẬT — ${overrides.targetResolution || '1920x1080'} @ ${overrides.targetFps || '30'} fps`)
-  }
-  if (overrides.generateTracklist) {
-    emitLog('info', `[Bước 4] Tự động tạo tracklist: BẬT`)
+  {
+    const step4Lines: string[] = [`[Bước 4] Ngày ${dateCode}: Xuất ${playlists.length} video hoàn chỉnh...`]
+    if (overrides.normalizeVideoInput) {
+      step4Lines.push(`  Re-encode: BẬT (an toàn hơn)`)
+    }
+    if (overrides.unifyVideoFormat) {
+      step4Lines.push(`  Chuẩn hóa: ${overrides.targetResolution || '1920x1080'} @ ${overrides.targetFps || '30'} fps`)
+    }
+    if (config.runtimeOverrides?.requireGpuForVideoEncode && (overrides.normalizeVideoInput || overrides.unifyVideoFormat)) {
+      step4Lines.push(`  GPU policy: Bắt buộc (fail-fast, không fallback CPU)`)
+    }
+    if (jobRequest.useGpuEncoding === 'cpu') {
+      step4Lines.push(
+        config.runtimeOverrides?.gpuFallbackReason
+          ? `  Encoder: CPU (fallback sau health-check)`
+          : `  Encoder: CPU`,
+      )
+      if (config.runtimeOverrides?.gpuFallbackReason) {
+        step4Lines.push(`  Lý do fallback: ${config.runtimeOverrides.gpuFallbackReason}`)
+      }
+    } else if (jobRequest.useGpuEncoding === 'gpu') {
+      const gpuDetails = [
+        'GPU',
+        config.runtimeOverrides?.resolvedGpuEncoder?.toUpperCase(),
+        config.runtimeOverrides?.resolvedGpuProfile,
+      ].filter(Boolean)
+      step4Lines.push(`  Encoder: ${gpuDetails.join(' / ')}`)
+      if (config.runtimeOverrides?.resolvedGpuFfmpegPath) {
+        step4Lines.push(`  GPU FFmpeg: ${config.runtimeOverrides.resolvedGpuFfmpegPath}`)
+      }
+    }
+    if (overrides.generateTracklist) {
+      step4Lines.push(`  Tracklist: BẬT`)
+    }
+    emitLogBlock('info', step4Lines)
   }
 
   await runExportVideoWithOptions(jobRequest, dateCode, playlists)
@@ -1620,7 +2053,7 @@ async function runAutopilotForDay(
   if (_poolClipIds.length > 0 && _poolFingerprint) {
     try {
       markClipsUsed(_poolClipIds, dateCode, _poolFingerprint)
-      emitLog('info', `[VideoPool] ✅ Đã ghi ${_poolClipIds.length} clip vào pool history (session: ${_poolFingerprint})`)
+      emitVerboseLog('info', `[VideoPool] ✅ Đã ghi ${_poolClipIds.length} clip vào pool history (session: ${_poolFingerprint})`)
     } catch (poolErr: any) {
       emitLog('warn', `[VideoPool] Không thể ghi pool history: ${poolErr?.message}`)
     }
@@ -1628,13 +2061,19 @@ async function runAutopilotForDay(
 }
 
 export async function startAutopilot(config: AutopilotConfig): Promise<void> {
-  if (currentProgress.status === 'running') {
+  if (
+    currentProgress.status === 'running' ||
+    currentProgress.status === 'paused' ||
+    currentProgress.status === 'cancelling'
+  ) {
     throw new Error('Autopilot đang chạy. Hãy dừng job hiện tại trước khi chạy job mới.')
   }
 
   // Set status synchronously ngay sau guard để tránh race condition
   // nếu có 2 call đồng thời (cả 2 pass guard trước khi emit chạy)
   currentProgress.status = 'running'
+  recentLogs = []
+  nextLogSequence = 1
 
   activeAbortControllers = []
   isCancelling = false
@@ -1649,6 +2088,12 @@ export async function startAutopilot(config: AutopilotConfig): Promise<void> {
     videoTargetMin: undefined,
   })
   emitLog('info', '🚀 Bắt đầu Autopilot...')
+  if (config.runtimeOverrides?.healthCheckNotice) {
+    emitLog(
+      config.runtimeOverrides.healthCheckNoticeLevel ?? 'info',
+      config.runtimeOverrides.healthCheckNotice,
+    )
+  }
 
   try {
     if (!config.dayPlans || config.dayPlans.length === 0) {
@@ -1733,7 +2178,7 @@ export async function startAutopilot(config: AutopilotConfig): Promise<void> {
       () => {
         emitLog('error', '[Autopilot] Timeout khi quét thư mục nhạc, huỷ job.')
         isCancelling = true
-        videoJobManager.cancelAll()
+        cancelAutopilotVideoJobs()
       },
     )
 
@@ -1783,37 +2228,36 @@ export async function startAutopilot(config: AutopilotConfig): Promise<void> {
       }
     }
 
-    // ── BÁO CÁO TỔNG KẾT ──────────────────────────────────────────────
+    // ── BÁO CÁO TỔNG KẾT — gộp thành 1 log block ─────────────────────
     const totalElapsed = Math.round((Date.now() - startTime) / 1000)
     const totalElapsedStr = formatDuration(totalElapsed)
     const failedDateCodes = failedDays.map(d => d.dateCode)
 
-    emitLog('info', ``)
-    emitLog('info', `╔══════════════════════════════════════════════════════════╗`)
-    emitLog('info', `║           📊 BÁO CÁO TỔNG KẾT AUTOPILOT               ║`)
-    emitLog('info', `╠══════════════════════════════════════════════════════════╣`)
-    emitLog('info', `║  Tổng số ngày: ${validPlans.length}                                        `)
-    emitLog('info', `║  ✅ Thành công: ${succeededDays.length} ngày ${succeededDays.length > 0 ? `(${succeededDays.join(', ')})` : ''}`)
-    emitLog('info', `║  ❌ Thất bại: ${failedDays.length} ngày ${failedDays.length > 0 ? `(${failedDateCodes.join(', ')})` : ''}`)
-    emitLog('info', `║  ⏱️  Tổng thời gian: ${totalElapsedStr}                    `)
-    if (isCancelling) {
-      emitLog('info', `║  ⚠️  Trạng thái: Đã bị huỷ bởi người dùng             `)
+    const summaryLines: string[] = [
+      ``,
+      `╔══════════════════════════════════════════════════════════╗`,
+      `║           📊 BÁO CÁO TỔNG KẾT AUTOPILOT               ║`,
+      `╠══════════════════════════════════════════════════════════╣`,
+      `║  ✅ ${succeededDays.length}/${validPlans.length} ngày thành công${succeededDays.length > 0 ? ` (${succeededDays.join(', ')})` : ''}`,
+    ]
+    if (failedDays.length > 0) {
+      summaryLines.push(`║  ❌ ${failedDays.length} ngày thất bại (${failedDateCodes.join(', ')})`)
     }
-    emitLog('info', `╚══════════════════════════════════════════════════════════╝`)
+    summaryLines.push(`║  ⏱️  Tổng thời gian: ${totalElapsedStr}`)
+    if (isCancelling) {
+      summaryLines.push(`║  ⚠️  Đã bị huỷ bởi người dùng`)
+    }
+    summaryLines.push(`╚══════════════════════════════════════════════════════════╝`)
 
     if (failedDays.length > 0) {
-      emitLog('info', ``)
-      emitLog('info', `📋 CHI TIẾT LỖI:`)
+      summaryLines.push(``)
+      summaryLines.push(`📋 CHI TIẾT LỖI:`)
       for (const fd of failedDays) {
-        emitLog('error', `  • Ngày ${fd.dateCode}: ${fd.error.slice(0, 200)}`)
+        summaryLines.push(`  • Ngày ${fd.dateCode}: ${fd.error.slice(0, 200)}`)
       }
-      emitLog('info', ``)
-      emitLog('info', `💡 GỢI Ý XỬ LÝ:`)
-      emitLog('info', `  1. Kiểm tra log chi tiết ở trên để xem lỗi cụ thể từng bước`)
-      emitLog('info', `  2. Nếu lỗi liên quan đến FFmpeg/video → kiểm tra file video nguồn có bị hỏng không`)
-      emitLog('info', `  3. Nếu lỗi timeout → tăng thời gian chờ hoặc giảm số playlist/thời lượng`)
-      emitLog('info', `  4. Có thể chạy lại chỉ các ngày bị lỗi mà không ảnh hưởng ngày đã thành công`)
+      summaryLines.push(`💡 Kiểm tra log ở trên | FFmpeg lỗi → kiểm tra file nguồn | Timeout → giảm playlist`)
     }
+    emitLogBlock('info', summaryLines)
 
     if (isCancelling) {
       emit({
@@ -1851,6 +2295,11 @@ export async function startAutopilot(config: AutopilotConfig): Promise<void> {
     const finalStatus = currentProgress.status as AutopilotStatus
     isCancelling = false
     activeAbortControllers = []
+    if (logFileFlushTimer) {
+      clearTimeout(logFileFlushTimer)
+      logFileFlushTimer = null
+    }
+    await flushBufferedLogsToFile()
     // Reset status to idle so autopilot can be started again
     if (finalStatus === 'running' || finalStatus === 'cancelling') {
       currentProgress.status = 'idle'
@@ -1859,4 +2308,3 @@ export async function startAutopilot(config: AutopilotConfig): Promise<void> {
     // Nếu null hoá, batch tiếp theo sẽ không gửi được event nào về UI → freeze hoàn toàn
   }
 }
-

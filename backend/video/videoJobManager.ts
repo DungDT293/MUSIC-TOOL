@@ -54,10 +54,11 @@ class VideoJobManager {
     // Mark as cancelled trước (để các hàm khác có thể check)
     this.cancelledJobs.add(requestId)
 
-    // Evict oldest entry if history cap exceeded
-    if (this.cancelledJobs.size > MAX_CANCELLED_HISTORY) {
+    // Evict oldest entries if history cap exceeded (bulk eviction)
+    while (this.cancelledJobs.size > MAX_CANCELLED_HISTORY) {
       const oldest = this.cancelledJobs.values().next().value
       if (oldest !== undefined) this.cancelledJobs.delete(oldest)
+      else break
     }
 
     // Fix Critical #1.3: Get proc after marking cancelled to avoid race condition
@@ -71,9 +72,10 @@ class VideoJobManager {
 
     try {
       if (!proc.killed) {
-        // Thử SIGTERM trước, sau đó SIGKILL nếu cần
-        proc.kill('SIGTERM')
-        setTimeout(() => {
+        const initialSignal = process.platform === 'win32' ? 'SIGKILL' : 'SIGTERM'
+        proc.kill(initialSignal)
+        // FIX BUG 17: Lưu timer reference và clear khi process thoát
+        const killTimer = setTimeout(() => {
           if (!proc.killed && proc.pid) {
             // Chỉ kill nếu process vẫn còn sống
             try {
@@ -83,6 +85,8 @@ class VideoJobManager {
             }
           }
         }, 2000)
+        // Clear timer khi process thoát sớm — tránh timer leak
+        proc.once('close', () => clearTimeout(killTimer))
       }
     } catch (error) {
       console.warn(`[VideoJobManager] Error killing process:`, error)
@@ -126,13 +130,18 @@ class VideoJobManager {
    * Kiểm tra job có đang chạy không
    */
   hasJob(requestId: string): boolean {
-    return this.jobs.has(requestId)
+    const proc = this.jobs.get(requestId)
+    if (!proc) return false
+    if (proc.exitCode !== null || proc.signalCode !== null) {
+      this.jobs.delete(requestId)
+      return false
+    }
+    return true
   }
 }
 
 // Singleton instance
 export const videoJobManager = new VideoJobManager()
-
 
 
 

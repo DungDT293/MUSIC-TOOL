@@ -7,12 +7,13 @@
 import path from 'node:path'
 import { getDecryptedString } from '../backend/security/stringEncryption'
 import { createSignedHeaders } from '../backend/security/apiSigning'
-import { getMachineHash } from '../backend/license/machineId'
+import { getMachineHash, hasMachineHashCacheFootprint } from '../backend/license/machineId'
 import {
   readEncryptedAuthState,
   writeEncryptedAuthState,
   migrateFromPlaintext,
   hasEncryptedAuthFile,
+  hasAuthStorageFootprint,
 } from '../backend/auth/encryptedAuthStore'
 
 // =========================
@@ -41,6 +42,10 @@ try {
   // Fallback nếu không đọc được
 }
 export { APP_VERSION, AUTH_BASE }
+
+function hasPriorInstallationMarkers(): boolean {
+  return hasAuthStorageFootprint() || hasMachineHashCacheFootprint()
+}
 
 // ─── Path validation helper ────────────────────────────────────────────────
 /**
@@ -140,6 +145,7 @@ export interface InternalAuthState {
   machineId: string
   activationKey?: string
   message?: string
+  preferredView?: 'register' | 'login'
   refreshCount?: number
   latestVersion?: string
   downloadUrl?: string
@@ -166,7 +172,8 @@ export async function getOrInitAuthState(): Promise<InternalAuthState> {
       }
 
       const stored = await readEncryptedAuthState()
-      if (stored && stored.remember && stored.status === 'allowed' && stored.username && stored.password) {
+      const hasStoredAllowedCredential = !!(stored?.password || stored?.token || stored?.deviceToken)
+      if (stored && stored.remember && stored.status === 'allowed' && stored.username && hasStoredAllowedCredential) {
         authState = {
           status: stored.status,
           username: stored.username,
@@ -174,6 +181,36 @@ export async function getOrInitAuthState(): Promise<InternalAuthState> {
           machineId: currentMachineId,
           activationKey: stored.activationKey,
           message: stored.message,
+          preferredView: 'login',
+          latestVersion: stored.latestVersion,
+          downloadUrl: stored.downloadUrl,
+        }
+        return authState
+      }
+
+      if (stored?.status === 'pending' && stored.username) {
+        authState = {
+          status: 'pending',
+          username: stored.username,
+          password: stored.password,
+          machineId: currentMachineId,
+          activationKey: stored.activationKey,
+          message: stored.message || 'Tài khoản đang chờ admin phê duyệt.',
+          preferredView: 'login',
+          latestVersion: stored.latestVersion,
+          downloadUrl: stored.downloadUrl,
+        }
+        return authState
+      }
+
+      if (stored?.status === 'blocked' && stored.username) {
+        authState = {
+          status: 'blocked',
+          username: stored.username,
+          machineId: currentMachineId,
+          activationKey: stored.activationKey,
+          message: stored.message || 'Tài khoản đã bị khóa.',
+          preferredView: 'login',
           latestVersion: stored.latestVersion,
           downloadUrl: stored.downloadUrl,
         }
@@ -185,11 +222,15 @@ export async function getOrInitAuthState(): Promise<InternalAuthState> {
       //    → status: 'unregistered' với message hướng dẫn đăng NHẬP lại
       // 2. Chưa có file .enc → thực sự chưa đăng ký lần nào
       const fileExists = hasEncryptedAuthFile()
+      const returningUser = hasPriorInstallationMarkers()
       authState = {
         status: 'unregistered',
         machineId: currentMachineId,
+        preferredView: fileExists || returningUser ? 'login' : 'register',
         message: fileExists
           ? 'Phiên đăng nhập đã hết hạn hoặc thông tin máy thay đổi. Vui lòng đăng nhập lại.'
+          : returningUser
+          ? 'Máy này đã từng dùng app nhưng không còn phiên đăng nhập cũ. Nếu đã đăng ký rồi, hãy chuyển sang tab Đăng nhập để vào lại.'
           : 'Máy này chưa đăng ký tài khoản sử dụng.',
       }
       return authState

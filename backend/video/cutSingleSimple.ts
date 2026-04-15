@@ -35,6 +35,40 @@ export interface CutSingleSimpleResult {
   error?: string
 }
 
+function normalizeSelectedPath(rawPath: string | undefined): string {
+  if (typeof rawPath !== 'string') return ''
+  const trimmed = rawPath.trim()
+  if (!trimmed) return ''
+
+  const unquoted =
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+      ? trimmed.slice(1, -1).trim()
+      : trimmed
+
+  return path.normalize(unquoted)
+}
+
+function parseTargetFpsValue(rawFps: string | undefined): number | null {
+  if (!rawFps) return null
+  const trimmed = rawFps.trim()
+  if (!trimmed) return null
+
+  const parts = trimmed.split('/')
+  if (parts.length === 2) {
+    const numerator = Number(parts[0])
+    const denominator = Number(parts[1])
+    if (!Number.isFinite(numerator) || !Number.isFinite(denominator) || denominator <= 0) {
+      return null
+    }
+    const value = numerator / denominator
+    return Number.isFinite(value) && value > 0 ? value : null
+  }
+
+  const value = Number(trimmed)
+  return Number.isFinite(value) && value > 0 ? value : null
+}
+
 function emitProgress(
   onProgress: ((progress: SingleCutProgress) => void) | undefined,
   requestId: string,
@@ -53,7 +87,7 @@ function emitProgress(
   
   // Use provided etaSec, or calculate if not provided
   let finalEtaSec: number | null = etaSec ?? null
-  if (finalEtaSec === null && timeSec !== undefined && totalDurationSec !== undefined && speedX !== null && speedX > 0) {
+  if (finalEtaSec === null && timeSec !== undefined && totalDurationSec !== undefined && speedX != null && speedX > 0) {
     const remainingSec = Math.max(0, totalDurationSec - timeSec)
     finalEtaSec = remainingSec / speedX
   }
@@ -99,7 +133,7 @@ export async function cutVideoIntoSegmentsSimple(
 
   const {
     inputPath,
-    outputDir,
+    outputDir: rawOutputDir,
     segmentLengthSec,
     format = 'mp4',
     requestId = 'unknown',
@@ -108,6 +142,8 @@ export async function cutVideoIntoSegmentsSimple(
     targetResolution,
     targetFps,
   } = params
+
+  const outputDir = normalizeSelectedPath(rawOutputDir)
 
   // Medium: Validate segment length > 0
   if (segmentLengthSec <= 0) {
@@ -120,6 +156,12 @@ export async function cutVideoIntoSegmentsSimple(
     console.log('\n────────────────────────────────────────────────────────')
     console.log('▌ CUT SINGLE VIDEO (SIMPLE)')
     console.log('────────────────────────────────────────────────────────')
+  }
+
+  if (!outputDir) {
+    const error = 'Output directory is empty or invalid'
+    console.error(`✗ ${error}`)
+    return buildResult(requestId, false, 0, 0, 0, [], error)
   }
 
   if (!fs.existsSync(inputPath)) {
@@ -167,6 +209,7 @@ export async function cutVideoIntoSegmentsSimple(
   console.log(`[cutSingleSimple] DEBUG START: normalizeOutput=${normalizeOutput}, useGpuEncoding=${useGpuEncoding}`)
 
   const { ffmpeg } = getFfmpegPaths()
+  let selectedFfmpegPath = ffmpeg
 
   // Build encoder args based on user choice (GPU/CPU/Auto)
   let codecArgs: string[]
@@ -189,6 +232,7 @@ export async function cutVideoIntoSegmentsSimple(
     if (usedEncoder === 'gpu' && gpuInfo) {
       console.log(`[cutSingleSimple] ✓ Using ${gpuInfo.encoder.toUpperCase()} encoder (${gpuInfo.name || 'GPU'}) for video encoding`)
       console.log(`[cutSingleSimple] GPU Info: available=${gpuInfo.available}, encoder=${gpuInfo.encoder}, reason=${gpuInfo.reason}`)
+      selectedFfmpegPath = gpuInfo.ffmpegPath || ffmpeg
     } else {
       console.log(`[cutSingleSimple] ✗ Using CPU encoder (libx264)${gpuInfo && !gpuInfo.available ? ` - ${gpuInfo.reason}` : ''}`)
       console.log(`[cutSingleSimple] GPU Info: available=${gpuInfo?.available ?? false}, encoder=${gpuInfo?.encoder ?? 'unknown'}, reason=${gpuInfo?.reason ?? 'N/A'}`)
@@ -206,6 +250,11 @@ export async function cutVideoIntoSegmentsSimple(
     // Check if using GPU encoder (NVENC/AMF/VideoToolbox) - they don't support -level or -force_key_frames expr
     const isGpuEncoder = encoderArgs.includes('h264_nvenc') || encoderArgs.includes('h264_amf') || encoderArgs.includes('h264_videotoolbox')
     
+    const resolvedTargetFps = parseTargetFpsValue(targetFps)
+    const gopFrames = resolvedTargetFps
+      ? Math.max(1, Math.round(segmentLengthSec * resolvedTargetFps))
+      : Math.max(1, Math.round(segmentLengthSec * 30))
+
     codecArgs = [
       ...encoderArgs,
       // Additional video settings for segment cutting
@@ -214,9 +263,9 @@ export async function cutVideoIntoSegmentsSimple(
       // Note: GPU encoders (NVENC/AMF) don't support -level parameter, they auto-detect
       // Only add -level for CPU encoder (libx264)
       ...(isGpuEncoder ? [] : ['-level', '4.1']),
-      // Force keyframes: GPU encoders use -g (GOP size), CPU uses -force_key_frames expr
-      ...(isGpuEncoder 
-        ? ['-g', Math.round(segmentLengthSec * 30).toString()] // Force keyframe every segment (assuming 30fps)
+      // Force keyframes at segment boundaries based on the normalized output FPS.
+      ...(isGpuEncoder
+        ? ['-g', gopFrames.toString()]
         : ['-force_key_frames', `expr:gte(t,n_forced*${segmentLengthSec})`]
       ),
       // Audio codec settings
@@ -279,9 +328,9 @@ export async function cutVideoIntoSegmentsSimple(
     '1',
     '-avoid_negative_ts',
     'make_zero',
-    // Cho phép cắt tại non-keyframes khi normalizeOutput = true để chính xác hơn
+    // Với output đã re-encode và có keyframe cadence cố định, luôn cắt tại keyframe để tránh segment bị xước/dừng hình khi ghép lại.
     '-break_non_keyframes',
-    normalizeOutput ? '1' : '0',
+    '0',
     // Force FFmpeg to output progress info (stats mode)
     '-stats', // Hiển thị stats (time, bitrate, ...) vào stderr
     // Khi normalizeOutput = true, thêm -loglevel và -progress để đảm bảo output progress
@@ -299,7 +348,7 @@ export async function cutVideoIntoSegmentsSimple(
   ]
 
   console.log(`\nâœ“ FFmpeg command:`)
-  console.log(`  ${ffmpeg} ${ffmpegArgs.join(' ')}\n`)
+  console.log(`  ${selectedFfmpegPath} ${ffmpegArgs.join(' ')}\n`)
   // Debug: Check if GPU encoder is being used
   const hasGpuEncoder = ffmpegArgs.some(arg => arg.includes('nvenc') || arg.includes('amf') || arg.includes('videotoolbox'))
   const hasCpuEncoder = ffmpegArgs.some(arg => arg.includes('libx264'))
@@ -324,7 +373,7 @@ export async function cutVideoIntoSegmentsSimple(
       return
     }
 
-    const ffmpegProcess = spawn(ffmpeg, ffmpegArgs, {
+    const ffmpegProcess = spawn(selectedFfmpegPath, ffmpegArgs, {
       stdio: ['ignore', 'ignore', 'pipe'],
       windowsHide: true,
     })
@@ -389,7 +438,7 @@ export async function cutVideoIntoSegmentsSimple(
     }
 
     // Watch progress file khi normalizeOutput = true
-    let progressFileWatcher: fs.FSWatcher | null = null
+    let progressFileWatcher: fs.StatWatcher | null = null
     if (normalizeOutput && progressFilePath) {
       // Xóa file progress cũ nếu có (unwatch trước để tránh EBUSY trên Windows)
       if (fs.existsSync(progressFilePath)) {
@@ -493,8 +542,8 @@ export async function cutVideoIntoSegmentsSimple(
         return // skip progress emit — file watcher handles it
       }
 
-      let timeMatch = chunk.match(/time=([0-9:.]+)/)
-      if (!timeMatch) {
+      let timeStr: string | null = chunk.match(/time=([0-9:.]+)/)?.[1] ?? null
+      if (!timeStr) {
         // Thử parse từ out_time_ms (khi dùng -progress)
         const outTimeMatch = chunk.match(/out_time_ms=(\d+)/)
         if (outTimeMatch) {
@@ -504,13 +553,11 @@ export async function cutVideoIntoSegmentsSimple(
           const hours = Math.floor(outTimeSec / 3600)
           const minutes = Math.floor((outTimeSec % 3600) / 60)
           const seconds = outTimeSec % 60
-          const timeStr = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toFixed(2).padStart(5, '0')}`
-          timeMatch = [null, timeStr] as RegExpMatchArray
+          timeStr = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toFixed(2).padStart(5, '0')}`
         }
       }
       
-      if (timeMatch && timeMatch[1] && duration > 0) {
-        const timeStr = timeMatch[1]
+      if (timeStr && duration > 0) {
         // Guard: bỏ qua N/A và các giá trị không bắt đầu bằng số (invalid)
         if (!timeStr || !/^\d/.test(timeStr)) return
         const currentTimeSec = parseTimeToSeconds(timeStr)

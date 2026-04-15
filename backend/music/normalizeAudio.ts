@@ -175,7 +175,7 @@ async function normalizeSingleFile(
 
     // Kiểm tra có audio stream không
     const streams = Array.isArray((probeResult as any).streams) ? (probeResult as any).streams : []
-    const hasAudioStream = streams.some((s) => s?.codec_type === 'audio')
+    const hasAudioStream = streams.some((s: { codec_type?: string }) => s?.codec_type === 'audio')
     const hasAudioField = !!(probeResult as any).audio
     if (!hasAudioStream && !hasAudioField) {
       return { success: false, error: 'File không có audio stream' }
@@ -474,7 +474,6 @@ export async function normalizeAudio(
   result.success = !cancelRequested && result.failed === 0
   return result
 }
-
 
 
 

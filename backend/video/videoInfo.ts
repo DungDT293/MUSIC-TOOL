@@ -11,6 +11,10 @@ export interface VideoFileInfo {
   durationSec: number | null
   width: number | null
   height: number | null
+  fps?: number | null
+  codecName?: string | null
+  formatName?: string | null
+  bitrateBps?: number | null
   sizeBytes: number | null
 }
 
@@ -37,6 +41,10 @@ export async function getVideoFileInfo(filePath: string): Promise<VideoFileInfo>
       durationSec: null,
       width: null,
       height: null,
+      fps: null,
+      codecName: null,
+      formatName: null,
+      bitrateBps: null,
       sizeBytes,
     }
     const safeResolve = (val: VideoFileInfo) => {
@@ -45,12 +53,10 @@ export async function getVideoFileInfo(filePath: string): Promise<VideoFileInfo>
       resolve(val)
     }
 
-    // Dùng ffprobe để lấy metadata
-    // IMPORTANT: Phải include codec_type trong show_entries để streams.find(codec_type === 'video')
-    // hoạt động — nếu thiếu thì codec_type sẽ không có trong output JSON → width/height luôn null.
+    // Dùng ffprobe để lấy metadata cần cho audit + validation.
     const args = [
       '-v', 'error',
-      '-show_entries', 'format=duration:stream=width,height,codec_type',
+      '-show_entries', 'format=duration,format_name,bit_rate:stream=width,height,codec_type,codec_name,r_frame_rate',
       '-of', 'json',
       filePath,
     ]
@@ -64,8 +70,6 @@ export async function getVideoFileInfo(filePath: string): Promise<VideoFileInfo>
     const killTimer = setTimeout(() => {
       console.warn(`[getVideoFileInfo] ffprobe timeout (30s) for: ${filePath}`)
       try { proc.kill('SIGKILL') } catch { /* ignore */ }
-      // Resolve ngay với null values — không chờ close handler
-      // (process có thể không fire close trên Windows sau SIGKILL)
       safeResolve(nullResult)
     }, PROBE_TIMEOUT_MS)
 
@@ -96,20 +100,35 @@ export async function getVideoFileInfo(filePath: string): Promise<VideoFileInfo>
       try {
         const json = JSON.parse(stdout)
         const format = json.format || {}
-        const streams = json.streams || []
+        const streams = Array.isArray(json.streams) ? json.streams : []
+        const videoStream = streams.find((s: any) => s?.codec_type === 'video')
 
-        // Tìm video stream đầu tiên (cần codec_type trong show_entries)
-        const videoStream = streams.find((s: any) => s.codec_type === 'video')
-
-        const durationSec = format.duration ? parseFloat(format.duration) : null
-        const width = videoStream?.width ? parseInt(videoStream.width, 10) : null
-        const height = videoStream?.height ? parseInt(videoStream.height, 10) : null
+        let fps: number | null = null
+        const rawRate = videoStream?.r_frame_rate
+        if (typeof rawRate === 'string' && rawRate && rawRate !== '0/0') {
+          const parts = rawRate.split('/')
+          if (parts.length === 2) {
+            const numerator = Number(parts[0])
+            const denominator = Number(parts[1])
+            if (Number.isFinite(numerator) && Number.isFinite(denominator) && denominator > 0) {
+              const value = numerator / denominator
+              fps = Number.isFinite(value) && value > 0 ? value : null
+            }
+          } else {
+            const value = Number(rawRate)
+            fps = Number.isFinite(value) && value > 0 ? value : null
+          }
+        }
 
         safeResolve({
           filePath,
-          durationSec,
-          width,
-          height,
+          durationSec: format.duration ? parseFloat(format.duration) : null,
+          width: videoStream?.width ? parseInt(videoStream.width, 10) : null,
+          height: videoStream?.height ? parseInt(videoStream.height, 10) : null,
+          fps,
+          codecName: typeof videoStream?.codec_name === 'string' ? videoStream.codec_name : null,
+          formatName: typeof format.format_name === 'string' ? format.format_name : null,
+          bitrateBps: format.bit_rate ? parseInt(format.bit_rate, 10) : null,
           sizeBytes,
         })
       } catch (error) {

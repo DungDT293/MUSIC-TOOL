@@ -81,6 +81,29 @@ interface Env {
   JWT_SECRET?: string
 }
 
+function normalizeActivationKeyForComparison(value: string | null | undefined): string {
+  return (value || '').trim().replace(/\s+/g, '')
+}
+
+function looksLikeUuidActivationKey(value: string): boolean {
+  return /^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$/i.test(value)
+}
+
+function activationKeysMatch(storedKey: string | null | undefined, providedKey: string | null | undefined): boolean {
+  const normalizedStored = normalizeActivationKeyForComparison(storedKey)
+  const normalizedProvided = normalizeActivationKeyForComparison(providedKey)
+
+  if (!normalizedStored || !normalizedProvided) {
+    return false
+  }
+
+  if (looksLikeUuidActivationKey(normalizedStored) && looksLikeUuidActivationKey(normalizedProvided)) {
+    return normalizedStored.toLowerCase() === normalizedProvided.toLowerCase()
+  }
+
+  return normalizedStored === normalizedProvided
+}
+
 /**
  * Write audit log helper
  */
@@ -115,8 +138,121 @@ async function writeAuditLog(
   }
 }
 
+async function autoRebindMachineId(
+  db: D1Database,
+  username: string,
+  oldMachineId: string,
+  newMachineId: string,
+  ipAddress: string,
+  context: string,
+): Promise<void> {
+  const normalizedOldMachineId = (oldMachineId || '').trim()
+  const normalizedNewMachineId = (newMachineId || '').trim()
+  if (!normalizedNewMachineId || normalizedOldMachineId === normalizedNewMachineId) {
+    return
+  }
+
+  await db.prepare(
+    `UPDATE registrations
+     SET ma_may = ?1
+     WHERE tai_khoan = ?2`
+  )
+    .bind(normalizedNewMachineId, username)
+    .run()
+
+  await writeAuditLog(db, username, 'MACHINE_REBIND_AUTO', 'warning', ipAddress, normalizedNewMachineId, {
+    action: 'auto-rebind',
+    context,
+    oldMachineId: normalizedOldMachineId,
+    newMachineId: normalizedNewMachineId,
+  })
+}
+
+async function findRegistrationForAuth<T>(
+  db: D1Database,
+  selectClause: string,
+  username: string,
+  machineId?: string,
+): Promise<T | null> {
+  const normalizedUsername = (username || '').trim()
+  const normalizedMachineId = (machineId || '').trim()
+
+  if (normalizedMachineId) {
+    const row = await db.prepare(
+      `SELECT ${selectClause}
+       FROM registrations
+       WHERE tai_khoan = ?1 AND ma_may = ?2
+       ORDER BY rowid DESC
+       LIMIT 1`
+    )
+      .bind(normalizedUsername, normalizedMachineId)
+      .first<T>()
+
+    if (row) {
+      return row
+    }
+  }
+
+  return db.prepare(
+    `SELECT ${selectClause}
+     FROM registrations
+     WHERE tai_khoan = ?1
+     ORDER BY rowid DESC
+     LIMIT 1`
+  )
+    .bind(normalizedUsername)
+    .first<T>()
+}
+
+async function findRegistrationForValidateKey<T extends { key_kich_hoat: string | null; ma_may: string | null }>(
+  db: D1Database,
+  selectClause: string,
+  username: string,
+  activationKey: string,
+  machineId?: string,
+): Promise<T | null> {
+  const normalizedUsername = (username || '').trim()
+  const normalizedMachineId = (machineId || '').trim()
+  const rowsResult = await db.prepare(
+    `SELECT ${selectClause}
+     FROM registrations
+     WHERE tai_khoan = ?1
+     ORDER BY rowid DESC`
+  )
+    .bind(normalizedUsername)
+    .all<T>()
+
+  const rows = rowsResult.results || []
+  if (!rows.length) {
+    return null
+  }
+
+  const keyMatchedRows = rows.filter((row) => activationKeysMatch(row.key_kich_hoat, activationKey))
+
+  if (normalizedMachineId) {
+    const machineAndKeyMatch = keyMatchedRows.find((row) => (row.ma_may || '').trim() === normalizedMachineId)
+    if (machineAndKeyMatch) {
+      return machineAndKeyMatch
+    }
+  }
+
+  if (keyMatchedRows.length > 0) {
+    return keyMatchedRows[0]
+  }
+
+  if (normalizedMachineId) {
+    const machineMatchedRow = rows.find((row) => (row.ma_may || '').trim() === normalizedMachineId)
+    if (machineMatchedRow) {
+      return machineMatchedRow
+    }
+  }
+
+  return rows[0]
+}
+
 /**
- * V2: Check tamper count and return action (SUSPICIOUS/BLOCKED)
+ * V2: Check tamper count and return action.
+ * Monitor-only mode: keep warning signal, never hard-block user automatically.
  */
 async function checkTamperAndGetAction(
   db: D1Database,
@@ -138,11 +274,7 @@ async function checkTamperAndGetAction(
 
     const tamperCount = countResult?.count || 0
 
-    // < 3: SUSPICIOUS (soft action - warning)
-    // >= 3: BLOCKED (hard action - block login)
-    if (tamperCount >= 3) {
-      return { action: 'BLOCKED', tamperCount }
-    } else if (tamperCount > 0) {
+    if (tamperCount > 0) {
       return { action: 'SUSPICIOUS', tamperCount }
     }
 
@@ -183,7 +315,8 @@ async function reportTamperEvent(
             details,
           }),
         }),
-        { DB: db }
+        { DB: db },
+        { trustedSource: true },
       ).catch(() => {})
     })
   } catch (err) {
@@ -221,11 +354,16 @@ export async function handleCheckStatus(request: Request, env: Env): Promise<Res
   const { tai_khoan, ma_may } = validated
 
   try {
-    const row = await env.DB.prepare(
-      'SELECT trang_thai, key_status, key_kich_hoat FROM registrations WHERE tai_khoan = ? AND ma_may = ?'
+    const row = await findRegistrationForAuth<{
+      trang_thai: string
+      key_status: string | null
+      key_kich_hoat: string | null
+    }>(
+      env.DB,
+      'trang_thai, key_status, key_kich_hoat',
+      tai_khoan,
+      ma_may,
     )
-      .bind(tai_khoan, ma_may)
-      .first<{ trang_thai: string; key_status: string | null; key_kich_hoat: string | null }>()
 
     if (!row) {
       return json({ status: 'not_found', message: 'Không tìm thấy tài khoản.' })
@@ -292,20 +430,20 @@ export async function handleValidateKey(request: Request, env: Env): Promise<Res
   const now = Date.now()
 
   try {
-    const row = await env.DB.prepare(
-      `SELECT id, key_kich_hoat, key_status, key_attempts, ma_may, trang_thai 
-       FROM registrations 
-       WHERE tai_khoan = ?`
+    const row = await findRegistrationForValidateKey<{
+      id: string
+      key_kich_hoat: string | null
+      key_status: string | null
+      key_attempts: number | null
+      ma_may: string
+      trang_thai: string
+    }>(
+      env.DB,
+      'id, key_kich_hoat, key_status, key_attempts, ma_may, trang_thai',
+      tai_khoan,
+      key_kich_hoat,
+      ma_may,
     )
-      .bind(tai_khoan)
-      .first<{
-        id: string
-        key_kich_hoat: string | null
-        key_status: string | null
-        key_attempts: number | null
-        ma_may: string
-        trang_thai: string
-      }>()
 
     if (!row) {
       return json({ valid: false, message: 'Tài khoản không tồn tại.' })
@@ -333,7 +471,8 @@ export async function handleValidateKey(request: Request, env: Env): Promise<Res
     }
 
     // Check machineId
-    if (row.ma_may !== ma_may) {
+    const machineIdChangedForValidateKey = row.ma_may !== ma_may
+    if (false && machineIdChangedForValidateKey) {
       // V2: Report tamper event
       await reportTamperEvent(env.DB, tai_khoan, ma_may, ipAddress, {
         reason: 'Machine ID mismatch',
@@ -369,7 +508,7 @@ export async function handleValidateKey(request: Request, env: Env): Promise<Res
     }
 
     // Check key
-    if (row.key_kich_hoat !== key_kich_hoat) {
+    if (!activationKeysMatch(row.key_kich_hoat, key_kich_hoat)) {
       // Increment attempts
       const newAttempts = (row.key_attempts || 0) + 1
       const shouldLock = newAttempts >= 5
@@ -407,7 +546,8 @@ export async function handleValidateKey(request: Request, env: Env): Promise<Res
                 timestamp: now,
               }),
             }),
-            env
+            env,
+            { trustedSource: true },
           ).catch(() => {})
         })
 
@@ -426,6 +566,10 @@ export async function handleValidateKey(request: Request, env: Env): Promise<Res
         locked: false,
         message: `Key không đúng. Còn ${remaining} lần thử.`,
       })
+    }
+
+    if (machineIdChangedForValidateKey) {
+      await autoRebindMachineId(env.DB, tai_khoan, row.ma_may, ma_may, ipAddress, 'validate-key')
     }
 
     // Key is correct - generate tokens
@@ -520,6 +664,19 @@ export async function handleValidateToken(request: Request, env: Env): Promise<R
 
     // Check machineId matches
     if (payload.machine_id !== machine_id) {
+      await writeAuditLog(env.DB, payload.sub, 'TOKEN_MACHINE_MISMATCH', 'warning', ipAddress, machine_id, {
+        tokenMachineId: payload.machine_id,
+        providedMachineId: machine_id,
+      })
+
+      return json({
+        valid: false,
+        action: 'RELOGIN_REQUIRED',
+        error: 'Machine ID da thay doi. Vui long dang nhap lai de cap nhat may.',
+      })
+    }
+
+    if (false && payload.machine_id !== machine_id) {
       // V2: Report tamper event
       await reportTamperEvent(env.DB, payload.sub, machine_id, ipAddress, {
         reason: 'Machine ID mismatch',
@@ -671,6 +828,10 @@ export async function handleRefreshToken(request: Request, env: Env): Promise<Re
 
     // Check machineId
     if (row.ma_may !== machine_id) {
+      await autoRebindMachineId(env.DB, row.tai_khoan, row.ma_may, machine_id, ipAddress, 'refresh-token')
+    }
+
+    if (false && row.ma_may !== machine_id) {
       // V2: Report tamper event
       await reportTamperEvent(env.DB, row.tai_khoan, machine_id, ipAddress, {
         reason: 'Machine ID mismatch',
@@ -794,20 +955,19 @@ export async function handleLogin(request: Request, env: Env): Promise<Response>
   const now = Date.now()
 
   try {
-    const row = await env.DB.prepare(
-      `SELECT id, mat_khau, trang_thai, key_status, ma_may, key_kich_hoat 
-       FROM registrations 
-       WHERE tai_khoan = ?`
+    const row = await findRegistrationForAuth<{
+      id: string
+      mat_khau: string
+      trang_thai: string
+      key_status: string | null
+      ma_may: string
+      key_kich_hoat: string | null
+    }>(
+      env.DB,
+      'id, mat_khau, trang_thai, key_status, ma_may, key_kich_hoat',
+      tai_khoan,
+      ma_may,
     )
-      .bind(tai_khoan)
-      .first<{
-        id: string
-        mat_khau: string
-        trang_thai: string
-        key_status: string | null
-        ma_may: string
-        key_kich_hoat: string | null
-      }>()
 
     if (!row) {
       return json({ ok: false, error: 'Tài khoản hoặc mật khẩu không đúng.' })
@@ -846,6 +1006,10 @@ export async function handleLogin(request: Request, env: Env): Promise<Response>
 
     // Check machineId — chỉ sau khi password đã xác thực đúng
     if (row.ma_may !== ma_may) {
+      await autoRebindMachineId(env.DB, tai_khoan, row.ma_may, ma_may, ipAddress, 'login')
+    }
+
+    if (false && row.ma_may !== ma_may) {
       // V2: Report tamper event
       await reportTamperEvent(env.DB, tai_khoan, ma_may, ipAddress, {
         reason: 'Machine ID mismatch',

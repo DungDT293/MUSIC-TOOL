@@ -534,7 +534,7 @@ function MergeTab() {
         shuffle: shuffleOrder,
         mute: muteAudio,
         forceReencode,
-        useGpuEncoding: forceReencode ? useGpuEncoding : undefined, // Only use GPU encoding if forceReencode is enabled
+        useGpuEncoding: (forceReencode || unifyFormat) ? useGpuEncoding : undefined,
         mergeCount: mergeCount ? parseInt(mergeCount, 10) : undefined,
         repeatCount: mergeCount ? parseInt(mergeCount, 10) : 1, // Dùng mergeCount như repeatCount khi không có target
         targetDurationSec, // null nếu không tick, number nếu tick
@@ -894,8 +894,8 @@ function MergeTab() {
               <span style={{ fontSize: '12px', color: '#b0b0b0' }}>Scale tất cả video về cùng resolution/FPS, tránh xước hình, đen màn hình, lỗi dừng khi ghép. Thời gian xử lý sẽ lâu hơn.</span>
             </div>
           </label>
-          {/* GPU Encoding (chỉ hiển thị khi forceReencode = true) */}
-          {forceReencode && (
+          {/* GPU Encoding */}
+          {(forceReencode || unifyFormat) && (
             <div style={{ marginBottom: '16px' }}>
               <label style={{ display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
                 <input
@@ -908,7 +908,7 @@ function MergeTab() {
                 <div>
                   <div style={{ fontSize: '14px', fontWeight: 500 }}>Sử dụng GPU để mã hóa (nhanh hơn)</div>
                   <div style={{ fontSize: '12px', color: '#b0b0b0', lineHeight: 1.4 }}>
-                    Sử dụng GPU (NVIDIA/AMD/Apple) để mã hóa video, nhanh hơn nhiều so với CPU.
+                    Sử dụng GPU (NVIDIA/AMD/Apple) để mã hóa video khi ghép có re-encode / chỉnh lại định dạng.
                     Nếu GPU không khả dụng, hệ thống sẽ tự động chuyển sang CPU.
                   </div>
                 </div>

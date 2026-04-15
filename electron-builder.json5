@@ -52,10 +52,11 @@
     createStartMenuShortcut: true,
     shortcutName: '93 Media Tool',
     include: 'build/installer.nsh',
+    artifactName: '${name}-setup-${version}.${ext}',
   },
 
   portable: {
-    artifactName: '${productName}-${version}-portable.${ext}',
+    artifactName: '${name}-${version}-portable.${ext}',
   },
 
   publish: [
@@ -67,7 +68,6 @@
     },
   ],
 }
-
 
 
 

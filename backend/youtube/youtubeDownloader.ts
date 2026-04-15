@@ -1,5 +1,6 @@
 import { spawn, ChildProcess } from 'child_process';
 import * as path from 'path';
+import * as fsSync from 'fs';
 import * as fs from 'fs/promises';
 import { EventEmitter } from 'events';
 // import { getFfmpegPaths } from '../ffmpeg/config'; // Reserved for future upscale feature
@@ -856,7 +857,7 @@ export class YouTubeDownloader extends EventEmitter {
     // Execute - GIỐNG HỆT TOOL PYTHON (chỉ gọi một lần, không retry phức tạp)
     const cleanupTempCookie = () => {
       if (tempCookieFile) {
-        try { if (fs.existsSync(tempCookieFile)) fs.unlinkSync(tempCookieFile) } catch (_) {}
+        try { if (fsSync.existsSync(tempCookieFile)) fsSync.unlinkSync(tempCookieFile) } catch (_) {}
         tempCookieFile = null
       }
     }
@@ -1509,11 +1510,13 @@ export class YouTubeDownloader extends EventEmitter {
     // Estimate based on quality and duration
     const qualityToBitrate: Record<Quality, number> = {
       'best': 8_000_000,    // 8 Mbps
+      '4320': 25_000_000,   // 25 Mbps for 8K
       '2160': 15_000_000,   // 15 Mbps for 4K
       '1440': 10_000_000,   // 10 Mbps for 1440p
       '1080': 5_000_000,    // 5 Mbps for 1080p
       '720': 2_500_000,     // 2.5 Mbps for 720p
-      '480': 1_000_000      // 1 Mbps for 480p
+      '480': 1_000_000,     // 1 Mbps for 480p
+      '360': 700_000,       // 0.7 Mbps for 360p
     };
     
     const bitrate = qualityToBitrate[quality] || qualityToBitrate['1080'];

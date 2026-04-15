@@ -1,6 +1,6 @@
 {
   "name": "93-media-tool-mix-nhac",
-  "version": "4.0.6",
+  "version": "4.1.0",
   "description": "Media tool for mixing music and video editing",
   "main": "dist-electron/main/main.js",
   "author": "",

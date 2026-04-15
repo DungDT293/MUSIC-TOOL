@@ -30,6 +30,7 @@ import { EventEmitter } from 'node:events'
 function makeFakeChild(exitCode: number, stderrOutput: string) {
   const child = new EventEmitter() as any
   child.stderr = new EventEmitter()
+  child.stdout = { resume: vi.fn() }
   child.stdin = { write: vi.fn(), end: vi.fn(), destroyed: false }
 
   // Emit stderr data and close asynchronously
@@ -61,6 +62,8 @@ describe('verifyOutputVideo', () => {
     expect(result.videoCodec).toBe('h264')
     expect(result.audioCodec).toBe('aac')
     expect(result.fps).toBeCloseTo(30)
+    expect(result.hasVideoStream).toBe(true)
+    expect(result.hasAudioStream).toBe(true)
   })
 
   it('no duration warning when diff within tolerance', async () => {
@@ -146,6 +149,25 @@ describe('verifyOutputVideo', () => {
     expect(result.decodeOk).toBe(false)
   })
 
+  it('decodeOk=false when decode test times out', async () => {
+    vi.mocked(probeFile).mockResolvedValue({ format: { duration: 10 }, video: null, audio: null } as any)
+    const child = new EventEmitter() as any
+    child.stderr = new EventEmitter()
+    child.stdout = { resume: vi.fn() }
+    child.stdin = { write: vi.fn(), end: vi.fn(), destroyed: false }
+    child.kill = vi.fn()
+    vi.mocked(spawn).mockReturnValue(child)
+
+    const resultPromise = verifyOutputVideo('/tmp/out.mp4', {
+      decodeTimeoutMs: 5,
+    })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+
+    const result = await resultPromise
+    expect(child.kill).toHaveBeenCalled()
+    expect(result.decodeOk).toBe(false)
+  })
+
   // ─── FPS parsing ──────────────────────────────────────────────────────────
 
   it('parses fractional fps correctly (24000/1001 = ~23.976)', async () => {
@@ -170,5 +192,31 @@ describe('verifyOutputVideo', () => {
 
     const result = await verifyOutputVideo('/tmp/out.mp4')
     expect(result.fps).toBeNull()
+  })
+
+  it('reports missing video stream when output only has audio', async () => {
+    vi.mocked(probeFile).mockResolvedValue({
+      format: { duration: 42 },
+      video: undefined,
+      audio: { codec: 'aac' },
+    } as any)
+    vi.mocked(spawn).mockReturnValue(makeFakeChild(0, '') as any)
+
+    const result = await verifyOutputVideo('/tmp/out.mp4')
+    expect(result.hasVideoStream).toBe(false)
+    expect(result.hasAudioStream).toBe(true)
+  })
+
+  it('parses numeric fps values from probe results', async () => {
+    vi.mocked(probeFile).mockResolvedValue({
+      format: { duration: 10 },
+      video: { codec: 'h264', fps: 60 },
+      audio: { codec: 'aac' },
+    } as any)
+    vi.mocked(spawn).mockReturnValue(makeFakeChild(0, '') as any)
+
+    const result = await verifyOutputVideo('/tmp/out.mp4')
+    expect(result.fps).toBe(60)
+    expect(result.videoCodec).toBe('h264')
   })
 })

@@ -10,6 +10,7 @@ export interface ProbeResult {
   format: {
     duration: number
     size: number
+    format_name?: string
     bit_rate?: number
     start_time?: number
     tags?: {
@@ -49,7 +50,7 @@ export async function probeFile(filePath: string): Promise<ProbeResult> {
   // Dùng ffprobe để lấy metadata (bao gồm tags và lyrics)
   const args = [
     '-v', 'error',
-    '-show_entries', 'format=duration,size,bit_rate,start_time:format_tags=title,artist,album,album_artist,genre,date,lyrics,LYRICS,USLT:stream=codec_name,codec_type,sample_rate,channels,channel_layout,width,height,r_frame_rate,pix_fmt',
+    '-show_entries', 'format=duration,size,format_name,bit_rate,start_time:format_tags=title,artist,album,album_artist,genre,date,lyrics,LYRICS,USLT:stream=codec_name,codec_type,sample_rate,channels,channel_layout,width,height,r_frame_rate,pix_fmt',
     '-of', 'json',
     filePath,
   ]
@@ -79,6 +80,7 @@ export async function probeFile(filePath: string): Promise<ProbeResult> {
     const formatInfo = {
       duration: format.duration ? parseFloat(format.duration) : 0,
       size: format.size ? parseInt(format.size, 10) : 0,
+      format_name: typeof format.format_name === 'string' ? format.format_name : undefined,
       bit_rate: format.bit_rate ? parseInt(format.bit_rate, 10) : undefined,
       start_time: format.start_time ? parseFloat(format.start_time) : undefined,
       tags: {

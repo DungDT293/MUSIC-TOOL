@@ -54,7 +54,7 @@ export function buildNormalizeVfFilter(resolution: string, fps: string): string 
   // Sanitize fps: chỉ cho phép giá trị từ FPS_OPTIONS (hoặc dạng số/phân số hợp lệ)
   // Phòng injection: fps được nội suy trực tiếp vào FFmpeg filter string,
   // nên chuỗi như "30,drawtext=text=hacked" sẽ inject filter tùy ý.
-  const FPS_ALLOWLIST = new Set(FPS_OPTIONS.map((o) => o.value))
+  const FPS_ALLOWLIST = new Set<string>(FPS_OPTIONS.map((o) => o.value))
   const safeFps = FPS_ALLOWLIST.has(fps) ? fps : '30'
 
   const [wStr, hStr] = resolution.split('x')

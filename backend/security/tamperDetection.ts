@@ -9,6 +9,11 @@ import path from 'node:path'
 import { app } from 'electron'
 import { reportTamperingDetected, reportFileIntegrityFailed } from './securityMonitoring'
 
+interface ExpectedIntegrityHashes {
+  mainJsHash?: string | null
+  executableHash?: string | null
+}
+
 /**
  * Calculate file hash (SHA-256)
  */
@@ -24,11 +29,12 @@ export function calculateFileHash(filePath: string): Promise<string> {
 }
 
 /**
- * Get expected hash của main.js
- * Thử đọc từ build-hash.json (ghi bởi scripts/inject-hash.js sau build).
+ * Get expected integrity hashes from build-hash.json.
+ * Current build flow always produces `mainJsHash`.
+ * `executableHash` is optional because it can only be generated after packaging.
  * Trong dev mode luôn trả null (skip check).
  */
-function getExpectedMainHash(): string | null {
+function getExpectedIntegrityHashes(): ExpectedIntegrityHashes | null {
   if (process.env.NODE_ENV === 'development' || process.env.ELECTRON_RENDERER_URL) {
     return null
   }
@@ -40,7 +46,10 @@ function getExpectedMainHash(): string | null {
       return null // Chưa có hash file (dev build hoặc script chưa chạy)
     }
     const data = JSON.parse(fs.readFileSync(hashFile, 'utf8'))
-    return data?.mainJsHash ?? null
+    return {
+      mainJsHash: data?.mainJsHash ?? null,
+      executableHash: data?.executableHash ?? null,
+    }
   } catch {
     return null
   }
@@ -51,9 +60,10 @@ function getExpectedMainHash(): string | null {
  */
 export async function verifyExecutableIntegrity(): Promise<boolean> {
   try {
-    const expectedHash = getExpectedMainHash()
+    const expectedHash = getExpectedIntegrityHashes()?.executableHash ?? null
     if (!expectedHash) {
-      // Skip check trong dev hoặc nếu chưa có expected hash
+      // Current build pipeline does not generate executableHash before packaging.
+      // Skip EXE integrity checks until a dedicated executable hash is available.
       return true
     }
 
@@ -101,7 +111,7 @@ export async function verifyMainJsIntegrity(): Promise<boolean> {
       }
     }
 
-    const expectedHash = getExpectedMainHash()
+    const expectedHash = getExpectedIntegrityHashes()?.mainJsHash ?? null
     if (!expectedHash) {
       // Hash chưa được inject (dev build hoặc script chưa chạy) — skip
       return true
@@ -227,4 +237,3 @@ export function initTamperDetection(): void {
     }
   }, 5 * 60 * 1000)
 }
-

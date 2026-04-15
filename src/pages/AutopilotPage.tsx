@@ -48,7 +48,7 @@ export interface AutopilotFoldersConfig {
   minVideoClipsTarget?: number
 }
 
-type AutopilotRunStatus = 'idle' | 'running' | 'paused' | 'completed' | 'error' | 'cancelling'
+type AutopilotRunStatus = 'idle' | 'running' | 'paused' | 'completed' | 'completed_with_errors' | 'error' | 'cancelling'
 
 interface AutopilotRunProgress {
   status: AutopilotRunStatus
@@ -61,9 +61,50 @@ interface AutopilotRunProgress {
   videoTargetMin?: number
 }
 
+type AutopilotUiLogEntry = {
+  seq?: number
+  timestamp: string
+  level: 'info' | 'warn' | 'error'
+  message: string
+  verbosity?: 'normal' | 'verbose'
+}
+
+function getAutopilotLogDedupKey(log: AutopilotUiLogEntry): string {
+  if (typeof log.seq === 'number') {
+    return `seq:${log.seq}`
+  }
+  return `${log.timestamp}|${log.level}|${log.verbosity ?? 'normal'}|${log.message}`
+}
+
+function mergeAutopilotLogEntries(
+  existing: AutopilotUiLogEntry[],
+  incoming: AutopilotUiLogEntry[],
+): AutopilotUiLogEntry[] {
+  if (incoming.length === 0) return existing
+  const resetIndex = incoming.findIndex((log) => log.seq === 1)
+  const merged = [...(resetIndex >= 0 ? [] : existing), ...(resetIndex >= 0 ? incoming.slice(resetIndex) : incoming)]
+  const deduped: AutopilotUiLogEntry[] = []
+  const seen = new Set<string>()
+
+  for (let i = merged.length - 1; i >= 0; i--) {
+    const log = merged[i]
+    const key = getAutopilotLogDedupKey(log)
+    if (seen.has(key)) continue
+    seen.add(key)
+    deduped.push(log)
+    if (deduped.length >= 500) break
+  }
+
+  return deduped.reverse()
+}
+
 interface AutopilotConfig {
   dayPlans: DayPlanUI[]
   folders: AutopilotFoldersConfig
+  runtimeOverrides?: {
+    finalExportUseGpuEncoding?: 'gpu' | 'cpu' | 'auto'
+    requireGpuForVideoEncode?: boolean
+  }
 }
 
 interface PriorityTrack {
@@ -1498,7 +1539,12 @@ function AutopilotControlSection({
     !!config.folders.rootVideo &&
     !!config.folders.rootFinal &&
     hasMusicFolder &&
-    (runProgress.status === 'idle' || runProgress.status === 'error' || runProgress.status === 'completed')
+    (
+      runProgress.status === 'idle' ||
+      runProgress.status === 'error' ||
+      runProgress.status === 'completed' ||
+      runProgress.status === 'completed_with_errors'
+    )
 
   const steps = [
     'Quét / load kho nhạc',
@@ -1509,7 +1555,12 @@ function AutopilotControlSection({
   ]
 
   const renderControls = () => {
-    if (runProgress.status === 'idle' || runProgress.status === 'completed' || runProgress.status === 'error') {
+    if (
+      runProgress.status === 'idle' ||
+      runProgress.status === 'completed' ||
+      runProgress.status === 'completed_with_errors' ||
+      runProgress.status === 'error'
+    ) {
       return (
         <button
           type="button"
@@ -1591,9 +1642,20 @@ function AutopilotControlSection({
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>{renderControls()}</div>
       </div>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '8px' }}>
-        <span style={{ fontSize: '12px', color: '#9ca3af' }}>
-          Trạng thái: <strong>{runProgress.status}</strong> | Ngày hiện tại: <strong>{currentDayLabel}</strong>
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '8px',
+          marginBottom: '8px',
+          border: `1px solid ${runProgress.status === 'error' ? '#ef4444' : runProgress.status === 'completed_with_errors' ? '#f59e0b' : runProgress.status === 'completed' ? '#22c55e' : runProgress.status === 'running' || runProgress.status === 'cancelling' ? '#38bdf8' : '#374151'}`,
+          borderRadius: '8px',
+          padding: '10px',
+          backgroundColor: runProgress.status === 'error' ? '#3f0b16' : runProgress.status === 'completed_with_errors' ? '#3b2a08' : runProgress.status === 'completed' ? '#0f2f1d' : runProgress.status === 'running' || runProgress.status === 'cancelling' ? '#0b2239' : '#0f172a',
+        }}
+      >
+        <span style={{ fontSize: '12px', color: '#cbd5e1' }}>
+          Trạng thái: <strong>{runProgress.status}</strong> | Ngày hiện tại: <strong>{currentDayLabel}</strong> | Bước: <strong>{runProgress.currentStep ?? '—'}</strong> | Tiến độ bước: <strong>{Math.round(runProgress.stepPercent || 0)}%</strong>
         </span>
         {runProgress.message && (
           <span style={{ fontSize: '12px', color: '#e5e7eb' }}>{runProgress.message}</span>
@@ -1893,8 +1955,10 @@ function AutopilotPageLegacy() {
     error: undefined,
   })
 
-  const [logMessages, setLogMessages] = useState<Array<{ timestamp: string; level: 'info' | 'warn' | 'error'; message: string }>>([])
+  const [logMessages, setLogMessages] = useState<AutopilotUiLogEntry[]>([])
   const logContainerRef = useRef<HTMLDivElement | null>(null)
+  const pendingLogsRef = useRef<AutopilotUiLogEntry[]>([])
+  const flushLogsTimerRef = useRef<number | null>(null)
 
   const currentDetailPlan = useMemo(
     () => dayPlans.find((p) => p.id === detailOpenFor) ?? null,
@@ -1916,12 +1980,29 @@ function AutopilotPageLegacy() {
         }
       : undefined
 
+  const flushQueuedLogs = () => {
+    if (pendingLogsRef.current.length === 0) return
+    const logs = pendingLogsRef.current
+    pendingLogsRef.current = []
+    setLogMessages((prev) => mergeAutopilotLogEntries(prev, logs))
+  }
+
+  const queueLog = (log: AutopilotUiLogEntry) => {
+    pendingLogsRef.current.push(log)
+    if (flushLogsTimerRef.current !== null) return
+    flushLogsTimerRef.current = window.setTimeout(() => {
+      flushLogsTimerRef.current = null
+      flushQueuedLogs()
+    }, 150)
+  }
+
   // Đồng bộ tiến trình với backend Autopilot
   useEffect(() => {
     const w = window
     if (!w.api?.autopilot) return
 
     let unsub: (() => void) | undefined
+    let disposed = false
 
     // Lấy trạng thái hiện tại khi mount
     w.api.autopilot
@@ -1963,15 +2044,30 @@ function AutopilotPageLegacy() {
     let logUnsub: (() => void) | undefined
     if (typeof w.api.autopilot.onLog === 'function') {
       logUnsub = w.api.autopilot.onLog((log: any) => {
-        setLogMessages((prev) => {
-          const newLogs = [...prev, log]
-          // Giới hạn tối đa 500 dòng log để tránh lag
-          return newLogs.slice(-500)
-        })
+        if (disposed) return
+        queueLog(log)
       })
     }
 
+    if (typeof w.api.autopilot.getRecentLogs === 'function') {
+      w.api.autopilot
+        .getRecentLogs(500)
+        .then((logs: AutopilotUiLogEntry[]) => {
+          if (disposed || !Array.isArray(logs) || logs.length === 0) return
+          setLogMessages((prev) => mergeAutopilotLogEntries(prev, logs))
+        })
+        .catch((err: any) => {
+          console.warn('[AutopilotPage] getRecentLogs error:', err)
+        })
+    }
+
     return () => {
+      disposed = true
+      if (flushLogsTimerRef.current !== null) {
+        window.clearTimeout(flushLogsTimerRef.current)
+        flushLogsTimerRef.current = null
+      }
+      pendingLogsRef.current = []
       if (unsub) unsub()
       if (logUnsub) logUnsub()
     }
@@ -2146,11 +2242,8 @@ function AutopilotPageLegacy() {
 
     setRunProgress((prev) => ({
       ...prev,
-      status: 'idle',
-      currentDayIndex: null,
-      currentStep: null,
-      stepPercent: 0,
-      message: 'Đã gửi yêu cầu hủy Autopilot.',
+      status: 'cancelling',
+      message: 'Đang gửi yêu cầu hủy Autopilot. Vui lòng chờ job hiện tại đóng lại.',
       error: undefined,
     }))
   }
@@ -2371,4 +2464,3 @@ export default function AutopilotPage() {
     </div>
   )
 }
-

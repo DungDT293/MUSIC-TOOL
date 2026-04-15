@@ -294,3 +294,400 @@ describe('EncryptedAuthStore — read/write/clear', () => {
     expect(result).toBeNull()
   })
 })
+
+describe('Auth restore regression', () => {
+  beforeEach(() => {
+    vi.resetModules()
+    vi.clearAllMocks()
+  })
+
+  test('getOrInitAuthState restores allowed state when remembered auth has deviceToken but no password', async () => {
+    vi.doMock('../../backend/license/machineId', () => ({
+      getMachineHash: vi.fn().mockResolvedValue('machine-1'),
+      hasMachineHashCacheFootprint: vi.fn().mockReturnValue(true),
+    }))
+    vi.doMock('../../backend/auth/encryptedAuthStore', () => ({
+      readEncryptedAuthState: vi.fn().mockResolvedValue({
+        status: 'allowed',
+        username: 'dung',
+        machineId: 'machine-1',
+        deviceToken: 'device-token-1',
+        remember: true,
+        message: 'stored ok',
+      }),
+      writeEncryptedAuthState: vi.fn(),
+      migrateFromPlaintext: vi.fn().mockResolvedValue(undefined),
+      hasEncryptedAuthFile: vi.fn().mockReturnValue(true),
+      hasAuthStorageFootprint: vi.fn().mockReturnValue(true),
+    }))
+    vi.doMock('../../backend/security/stringEncryption', () => ({
+      getDecryptedString: vi.fn(() => 'https://example.com'),
+    }))
+    vi.doMock('../../backend/security/apiSigning', () => ({
+      createSignedHeaders: vi.fn().mockResolvedValue({}),
+    }))
+
+    const authStateModule = await import('../../electron/authState')
+    authStateModule.setAuthState(null)
+
+    const state = await authStateModule.getOrInitAuthState()
+
+    expect(state.status).toBe('allowed')
+    expect(state.username).toBe('dung')
+    expect(state.password).toBeUndefined()
+    expect(state.machineId).toBe('machine-1')
+  })
+
+  test('getOrInitAuthState prefers login view when auth restore fails but auth footprint exists', async () => {
+    vi.doMock('../../backend/license/machineId', () => ({
+      getMachineHash: vi.fn().mockResolvedValue('machine-restore-failed'),
+      hasMachineHashCacheFootprint: vi.fn().mockReturnValue(false),
+    }))
+    vi.doMock('../../backend/auth/encryptedAuthStore', () => ({
+      readEncryptedAuthState: vi.fn().mockResolvedValue(null),
+      writeEncryptedAuthState: vi.fn(),
+      migrateFromPlaintext: vi.fn().mockResolvedValue(undefined),
+      hasEncryptedAuthFile: vi.fn().mockReturnValue(true),
+      hasAuthStorageFootprint: vi.fn().mockReturnValue(true),
+    }))
+    vi.doMock('../../backend/security/stringEncryption', () => ({
+      getDecryptedString: vi.fn(() => 'https://example.com'),
+    }))
+    vi.doMock('../../backend/security/apiSigning', () => ({
+      createSignedHeaders: vi.fn().mockResolvedValue({}),
+    }))
+
+    const authStateModule = await import('../../electron/authState')
+    authStateModule.setAuthState(null)
+
+    const state = await authStateModule.getOrInitAuthState()
+
+    expect(state.status).toBe('unregistered')
+    expect(state.preferredView).toBe('login')
+    expect(state.message).toContain('đăng nhập lại')
+  })
+
+  test('getOrInitAuthState prefers login view when only machine-id cache footprint exists', async () => {
+    vi.doMock('../../backend/license/machineId', () => ({
+      getMachineHash: vi.fn().mockResolvedValue('machine-cache-only'),
+      hasMachineHashCacheFootprint: vi.fn().mockReturnValue(true),
+    }))
+    vi.doMock('../../backend/auth/encryptedAuthStore', () => ({
+      readEncryptedAuthState: vi.fn().mockResolvedValue(null),
+      writeEncryptedAuthState: vi.fn(),
+      migrateFromPlaintext: vi.fn().mockResolvedValue(undefined),
+      hasEncryptedAuthFile: vi.fn().mockReturnValue(false),
+      hasAuthStorageFootprint: vi.fn().mockReturnValue(false),
+    }))
+    vi.doMock('../../backend/security/stringEncryption', () => ({
+      getDecryptedString: vi.fn(() => 'https://example.com'),
+    }))
+    vi.doMock('../../backend/security/apiSigning', () => ({
+      createSignedHeaders: vi.fn().mockResolvedValue({}),
+    }))
+
+    const authStateModule = await import('../../electron/authState')
+    authStateModule.setAuthState(null)
+
+    const state = await authStateModule.getOrInitAuthState()
+
+    expect(state.status).toBe('unregistered')
+    expect(state.preferredView).toBe('login')
+    expect(state.message).toContain('đã từng dùng app')
+  })
+
+  test('getOrInitAuthState keeps register view for a truly new machine', async () => {
+    vi.doMock('../../backend/license/machineId', () => ({
+      getMachineHash: vi.fn().mockResolvedValue('machine-new'),
+      hasMachineHashCacheFootprint: vi.fn().mockReturnValue(false),
+    }))
+    vi.doMock('../../backend/auth/encryptedAuthStore', () => ({
+      readEncryptedAuthState: vi.fn().mockResolvedValue(null),
+      writeEncryptedAuthState: vi.fn(),
+      migrateFromPlaintext: vi.fn().mockResolvedValue(undefined),
+      hasEncryptedAuthFile: vi.fn().mockReturnValue(false),
+      hasAuthStorageFootprint: vi.fn().mockReturnValue(false),
+    }))
+    vi.doMock('../../backend/security/stringEncryption', () => ({
+      getDecryptedString: vi.fn(() => 'https://example.com'),
+    }))
+    vi.doMock('../../backend/security/apiSigning', () => ({
+      createSignedHeaders: vi.fn().mockResolvedValue({}),
+    }))
+
+    const authStateModule = await import('../../electron/authState')
+    authStateModule.setAuthState(null)
+
+    const state = await authStateModule.getOrInitAuthState()
+
+    expect(state.status).toBe('unregistered')
+    expect(state.preferredView).toBe('register')
+    expect(state.message).toContain('chưa đăng ký')
+  })
+
+  test('auth:validateToken uses deviceToken fallback and restores allowed state', async () => {
+    const handlers = new Map<string, Function>()
+    const handle = vi.fn((channel: string, fn: Function) => {
+      handlers.set(channel, fn)
+    })
+    const clearEncryptedAuthState = vi.fn()
+    const setAuthState = vi.fn()
+    const getOrInitAuthState = vi.fn().mockResolvedValue({
+      status: 'unregistered',
+      machineId: 'machine-3',
+      preferredView: 'login',
+    })
+    const readEncryptedAuthState = vi.fn().mockResolvedValue({
+      status: 'allowed',
+      username: 'dung',
+      machineId: 'machine-3',
+      deviceToken: 'device-token-3',
+      activationKey: 'key-3',
+      latestVersion: '1.2.3',
+      downloadUrl: 'https://example.com/download',
+      remember: true,
+    })
+    const postJson = vi.fn().mockResolvedValue({
+      valid: true,
+      username: 'dung',
+    })
+
+    vi.doMock('electron', () => ({
+      app: { getVersion: vi.fn() },
+      ipcMain: { handle },
+    }))
+    vi.doMock('../../electron/authState', () => ({
+      authState: null,
+      setAuthState,
+      getOrInitAuthState,
+      getFriendlyAuthError: vi.fn((_err: any, fallback: string) => fallback),
+      postJson,
+      APP_VERSION: '1.0.0',
+      writeEncryptedAuthState: vi.fn(),
+    }))
+    vi.doMock('../../backend/auth/encryptedAuthStore', () => ({
+      readEncryptedAuthState,
+      clearEncryptedAuthState,
+      hasAuthStorageFootprint: vi.fn(),
+    }))
+    vi.doMock('../../backend/security/rateLimiter', () => ({
+      loginRateLimiter: { check: vi.fn(), reset: vi.fn() },
+      LOGIN_RATE_LIMIT_CONFIG: {},
+    }))
+    vi.doMock('../../backend/utils/gpuDetection', () => ({
+      clearGpuCache: vi.fn(),
+    }))
+    vi.doMock('../../backend/app/appSettings', () => ({
+      getGpuFfmpegProfileSetting: vi.fn(),
+      getLegacyGpuFfmpegPathSetting: vi.fn(),
+      setGpuFfmpegProfileSetting: vi.fn(),
+      setLegacyGpuFfmpegPathSetting: vi.fn(),
+    }))
+    vi.doMock('../../backend/license/licenseManager', () => ({
+      evaluateLicenseState: vi.fn(),
+      submitLicenseRequest: vi.fn(),
+      clearLicense: vi.fn(),
+    }))
+
+    const authHandlers = await import('../../electron/handlers/authHandlers')
+    authHandlers.registerAuthHandlers()
+
+    const result = await handlers.get('auth:validateToken')!()
+
+    expect(postJson).toHaveBeenCalledWith('/api/auth/validate-token', {
+      device_token: 'device-token-3',
+      machine_id: 'machine-3',
+    })
+    expect(setAuthState).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'allowed',
+        username: 'dung',
+        machineId: 'machine-3',
+        activationKey: 'key-3',
+      }),
+    )
+    expect(result).toEqual(
+      expect.objectContaining({
+        valid: true,
+        status: 'allowed',
+        username: 'dung',
+      }),
+    )
+    expect(clearEncryptedAuthState).not.toHaveBeenCalled()
+  })
+
+  test('auth:validateKey persists both token and deviceToken after activation succeeds', async () => {
+    const handlers = new Map<string, Function>()
+    const handle = vi.fn((channel: string, fn: Function) => {
+      handlers.set(channel, fn)
+    })
+    const writeEncryptedAuthState = vi.fn().mockResolvedValue(undefined)
+
+    vi.doMock('electron', () => ({
+      app: { getVersion: vi.fn() },
+      ipcMain: { handle },
+    }))
+    vi.doMock('../../electron/authState', () => ({
+      authState: null,
+      setAuthState: vi.fn(),
+      getOrInitAuthState: vi.fn().mockResolvedValue({
+        status: 'pending',
+        username: 'dung',
+        password: 'secret',
+        machineId: 'machine-5',
+      }),
+      getFriendlyAuthError: vi.fn((_err: any, fallback: string) => fallback),
+      postJson: vi.fn().mockResolvedValue({
+        valid: true,
+        device_token: 'device-token-5',
+        refresh_token: 'refresh-token-5',
+        expires_at: 123456,
+      }),
+      APP_VERSION: '1.0.0',
+      writeEncryptedAuthState,
+    }))
+    vi.doMock('../../backend/auth/encryptedAuthStore', () => ({
+      readEncryptedAuthState: vi.fn(),
+      clearEncryptedAuthState: vi.fn(),
+      hasAuthStorageFootprint: vi.fn(),
+    }))
+    vi.doMock('../../backend/security/rateLimiter', () => ({
+      loginRateLimiter: { check: vi.fn(), reset: vi.fn() },
+      LOGIN_RATE_LIMIT_CONFIG: {},
+    }))
+    vi.doMock('../../backend/utils/gpuDetection', () => ({
+      clearGpuCache: vi.fn(),
+    }))
+    vi.doMock('../../backend/app/appSettings', () => ({
+      getGpuFfmpegProfileSetting: vi.fn(),
+      getLegacyGpuFfmpegPathSetting: vi.fn(),
+      setGpuFfmpegProfileSetting: vi.fn(),
+      setLegacyGpuFfmpegPathSetting: vi.fn(),
+    }))
+    vi.doMock('../../backend/license/licenseManager', () => ({
+      evaluateLicenseState: vi.fn(),
+      submitLicenseRequest: vi.fn(),
+      clearLicense: vi.fn(),
+    }))
+
+    const authHandlers = await import('../../electron/handlers/authHandlers')
+    authHandlers.registerAuthHandlers()
+
+    const result = await handlers.get('auth:validateKey')!(undefined, {
+      username: 'dung',
+      key: 'KEY-123',
+    })
+
+    expect(result.valid).toBe(true)
+    expect(writeEncryptedAuthState).toHaveBeenCalledWith(
+      expect.objectContaining({
+        token: 'device-token-5',
+        deviceToken: 'device-token-5',
+        refreshToken: 'refresh-token-5',
+      }),
+    )
+  })
+})
+
+describe('Server validate-key regression', () => {
+  beforeEach(() => {
+    vi.resetModules()
+    vi.clearAllMocks()
+  })
+
+  test('handleValidateKey selects the row whose activation key matches when username has multiple registrations', async () => {
+    const runCalls: Array<{ sql: string; params: any[] }> = []
+    const rows = [
+      {
+        id: 'newer-row',
+        key_kich_hoat: 'OTHER-KEY',
+        key_status: 'ACTIVE',
+        key_attempts: 0,
+        ma_may: 'machine-7',
+        trang_thai: 'CHO_PHEP',
+      },
+      {
+        id: 'target-row',
+        key_kich_hoat: 'RIGHT-KEY',
+        key_status: 'ACTIVE',
+        key_attempts: 0,
+        ma_may: 'machine-7',
+        trang_thai: 'CHO_PHEP',
+      },
+    ]
+
+    const db = {
+      prepare: vi.fn((sql: string) => ({
+        bind: (...params: any[]) => ({
+          all: async () => {
+            if (sql.includes('FROM registrations') && sql.includes('WHERE tai_khoan = ?1') && sql.includes('ORDER BY rowid DESC')) {
+              return { results: rows }
+            }
+            throw new Error(`Unexpected all query: ${sql}`)
+          },
+          first: async () => {
+            throw new Error(`Unexpected first query: ${sql}`)
+          },
+          run: async () => {
+            runCalls.push({ sql, params })
+            return { success: true }
+          },
+        }),
+      })),
+    }
+
+    vi.doMock('../../server/index', () => ({
+      json: (payload: any, status = 200) => new Response(JSON.stringify(payload), {
+        status,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    }))
+    vi.doMock('../../backend/utils/validatePayload', () => ({
+      validatePayload: vi.fn((_schema: any, body: any) => body),
+    }))
+    vi.doMock('../../backend/security/rateLimiter', () => ({
+      requireRateLimit: vi.fn(),
+      getIdentifierFromRequest: vi.fn(() => 'ip:127.0.0.1'),
+      RateLimitPresets: { STRICT: 'STRICT', NORMAL: 'NORMAL' },
+    }))
+    vi.doMock('../../shared/ipcSchemas', () => ({
+      ServerCheckStatusSchema: {},
+      ServerValidateKeySchema: {},
+      ServerValidateTokenSchema: {},
+      ServerRefreshTokenSchema: {},
+      ServerLoginSchema: {},
+      ServerUnlockKeySchema: {},
+      ServerRevokeKeySchema: {},
+      ServerAllowRebindSchema: {},
+    }))
+    vi.doMock('../../server/utils/jwt', () => ({
+      generateToken: vi.fn().mockResolvedValue('device-token-7'),
+      verifyToken: vi.fn(),
+      generateRefreshToken: vi.fn(() => 'refresh-token-7'),
+    }))
+
+    const { handleValidateKey } = await import('../../server/auth-v2-handlers')
+    const response = await handleValidateKey(new Request('http://localhost/api/auth/validate-key', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        tai_khoan: 'dung',
+        key_kich_hoat: 'RIGHT-KEY',
+        ma_may: 'machine-7',
+      }),
+    }), { DB: db } as any)
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toEqual(expect.objectContaining({
+      valid: true,
+      device_token: 'device-token-7',
+      refresh_token: 'refresh-token-7',
+    }))
+    expect(runCalls).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        sql: expect.stringContaining('UPDATE registrations'),
+        params: expect.arrayContaining(['target-row']),
+      }),
+    ]))
+  })
+})

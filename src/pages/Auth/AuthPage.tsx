@@ -9,6 +9,7 @@ export interface AuthState {
   machineId: string
   activationKey?: string
   message?: string
+  preferredView?: 'register' | 'login'
 }
 
 interface RegisterPayload {
@@ -58,6 +59,7 @@ const AuthPage: React.FC<AuthPageProps> = ({ onLoggedIn }) => {
   const [keyInput, setKeyInput] = useState('')
   const [keyAttempts, setKeyAttempts] = useState<number | null>(null)
   const [keyLocked, setKeyLocked] = useState(false)
+  const [readyForActivationKey, setReadyForActivationKey] = useState(false)
 
   // Chế độ hiển thị chính: Đăng ký / Đăng nhập
   const [viewMode, setViewMode] = useState<'register' | 'login'>('register')
@@ -74,8 +76,8 @@ const AuthPage: React.FC<AuthPageProps> = ({ onLoggedIn }) => {
         if (!cancelled) {
           setAuthState(state)
           setError(null)
-          if (state.status === 'allowed' && state.username) {
-            setLoginUsername(state.username)
+          if (state.username) {
+            setLoginUsername((prev) => prev || state.username || '')
           }
         }
       } catch (e: any) {
@@ -93,6 +95,10 @@ const AuthPage: React.FC<AuthPageProps> = ({ onLoggedIn }) => {
   // Tự động chọn tab phù hợp theo trạng thái hiện tại
   useEffect(() => {
     if (!authState) return
+    if (authState.preferredView) {
+      setViewMode(authState.preferredView)
+      return
+    }
     if (authState.status === 'allowed') {
       setViewMode('login')
     } else if (authState.status === 'unregistered') {
@@ -101,6 +107,14 @@ const AuthPage: React.FC<AuthPageProps> = ({ onLoggedIn }) => {
     // Khi status là 'pending', giữ nguyên viewMode hiện tại để hiển thị confirmation message
     // Không tự động chuyển sang login
   }, [authState])
+
+  useEffect(() => {
+    if (authState?.status !== 'pending' || !authState?.username) {
+      setReadyForActivationKey(false)
+      setKeyLocked(false)
+      setKeyAttempts(null)
+    }
+  }, [authState?.status, authState?.username])
 
   // Tự động check status khi vào tab login và status là 'pending'
   useEffect(() => {
@@ -111,8 +125,13 @@ const AuthPage: React.FC<AuthPageProps> = ({ onLoggedIn }) => {
         try {
           const result = await window.api.auth.checkStatus({ username: authState.username! })
           if (result.status === 'approved') {
-            // Update state để hiển thị form nhập key
-            setAuthState((prev) => (prev ? { ...prev, status: 'pending' as const } : prev))
+            setReadyForActivationKey(true)
+            setAuthState((prev) => (prev ? { ...prev, status: 'pending' as const, message: result.message } : prev))
+          } else {
+            setReadyForActivationKey(false)
+            if (result.message) {
+              setAuthState((prev) => (prev ? { ...prev, message: result.message } : prev))
+            }
           }
         } catch (e) {
           // Ignore errors, user can manually refresh
@@ -151,6 +170,7 @@ const AuthPage: React.FC<AuthPageProps> = ({ onLoggedIn }) => {
         password: regPassword,
       } as RegisterPayload)
       setAuthState(state)
+      setReadyForActivationKey(false)
       
       // Nếu registration thành công (status = 'pending'), giữ lại tài khoản và mật khẩu
       // để sau khi admin duyệt và user nhập đúng key thì điền sẵn vào form đăng nhập
@@ -175,6 +195,9 @@ const AuthPage: React.FC<AuthPageProps> = ({ onLoggedIn }) => {
     try {
       const state: AuthState = await window.api.auth.refresh()
       setAuthState(state)
+      if (state.status !== 'pending') {
+        setReadyForActivationKey(false)
+      }
     } catch (e: any) {
       setError(e?.message || 'Không kiểm tra được trạng thái.')
     } finally {
@@ -197,15 +220,14 @@ const AuthPage: React.FC<AuthPageProps> = ({ onLoggedIn }) => {
     try {
       const result = await window.api.auth.checkStatus({ username: authState.username! })
       if (result.status === 'approved') {
-        // Update state để hiển thị form nhập key
-        // Giữ nguyên status 'pending' nhưng đảm bảo có username để trigger needsKeyInput
+        setReadyForActivationKey(true)
         setAuthState((prev) => 
           prev 
             ? { ...prev, status: 'pending' as const, message: result.message } 
             : prev
         )
       } else {
-        // Update message
+        setReadyForActivationKey(false)
         setAuthState((prev) => (prev ? { ...prev, message: result.message } : prev))
       }
     } catch (e: any) {
@@ -219,6 +241,10 @@ const AuthPage: React.FC<AuthPageProps> = ({ onLoggedIn }) => {
   const handleValidateKey = async () => {
     if (!keyInput.trim()) {
       setError('Vui lòng nhập key kích hoạt.')
+      return
+    }
+    if (!readyForActivationKey) {
+      setError('Tài khoản chưa được duyệt hoặc app chưa nhận xác nhận mới. Hãy bấm "Kiểm tra lại".')
       return
     }
     if (!authState?.username) {
@@ -251,6 +277,7 @@ const AuthPage: React.FC<AuthPageProps> = ({ onLoggedIn }) => {
         setKeyInput('')
         setKeyAttempts(null)
         setKeyLocked(false)
+        setReadyForActivationKey(false)
         // Chuyển sang tab đăng nhập và điền sẵn tài khoản + mật khẩu đã đăng ký
         setLoginUsername(authState.username!)
         setLoginPassword(regPassword)
@@ -311,6 +338,10 @@ const AuthPage: React.FC<AuthPageProps> = ({ onLoggedIn }) => {
             }
           : prev
       )
+      setReadyForActivationKey(false)
+      setKeyInput('')
+      setKeyAttempts(null)
+      setKeyLocked(false)
       setRegUsername('')
       setRegPassword('')
     } catch (e: any) {
@@ -388,17 +419,36 @@ const AuthPage: React.FC<AuthPageProps> = ({ onLoggedIn }) => {
     authState.status === 'allowed'
       ? `${authState.username || 'Tài khoản'} - ĐÃ KÍCH HOẠT`
       : authState.status === 'pending'
-      ? `${authState.username || 'Tài khoản'} - ĐANG CHỜ DUYỆT`
+      ? `${authState.username || 'Tài khoản'} - ${readyForActivationKey ? 'CHỜ NHẬP KEY' : 'ĐANG CHỜ DUYỆT'}`
       : authState.status === 'blocked'
       ? `${authState.username || 'Tài khoản'} - BỊ CHẶN`
       : ''
 
   // V2: Check if user needs to enter key (approved but not activated)
-  const needsKeyInput = authState.status === 'pending' && authState.username
+  const needsKeyInput = authState.status === 'pending' && authState.username && readyForActivationKey
 
-  // Cho phép mở tab đăng nhập nếu máy đã có trạng thái khác "unregistered" hoặc đơn giản là không bị block.
-  // (Server sẽ vẫn kiểm tra quyền, nên mở tab sớm không làm giảm an toàn.)
-  const canLogin = authState.status !== 'blocked'
+  // Cho phép user quay lại tab đăng nhập để thử lại sau khi admin mở khóa/mở lại quyền.
+  // Quyền truy cập thực tế vẫn do server kiểm tra ở bước login/validate-token.
+  const canLogin = true
+  const shouldShowLoginForm =
+    viewMode === 'login' &&
+    (authState.status === 'allowed' || authState.status === 'unregistered' || authState.status === 'blocked')
+  const loginTitle =
+    authState.status === 'blocked'
+      ? 'Thử đăng nhập lại'
+      : authState.status === 'unregistered'
+        ? 'Đăng nhập lại'
+        : 'Đăng nhập'
+  const loginTitleColor = authState.status === 'blocked' ? '#f97373' : authState.status === 'unregistered' ? '#f97316' : '#38bdf8'
+  const loginDescription =
+    authState.status === 'allowed'
+      ? 'Máy và tài khoản này đã được kích hoạt. Vui lòng đăng nhập để sử dụng tool.'
+      : authState.status === 'blocked'
+        ? 'Nếu admin đã mở lại quyền hoặc bỏ chặn tài khoản, hãy thử đăng nhập lại. Quyền truy cập thực tế sẽ được server kiểm tra khi bạn đăng nhập.'
+        : authState.message?.includes('đăng nhập lại') || authState.message?.includes('không còn phiên đăng nhập cũ')
+          ? 'Máy này đã từng dùng app nhưng phiên cũ không còn khả dụng. Nếu tài khoản vẫn được admin cho phép, hãy đăng nhập lại để tiếp tục sử dụng.'
+          : 'Máy này chưa có phiên đăng nhập khả dụng trên máy hiện tại. Nếu đã được admin duyệt trước đó, hãy thử đăng nhập lại. Nếu chưa có quyền, hãy chuyển sang tab Đăng ký để gửi yêu cầu mới.'
+  const loginMessageColor = authState.status === 'blocked' ? '#fecaca' : '#cbd5f5'
 
   return (
     <div
@@ -489,11 +539,7 @@ const AuthPage: React.FC<AuthPageProps> = ({ onLoggedIn }) => {
             <button
               type="button"
               disabled={!canLogin}
-              title={
-                canLogin
-                  ? undefined
-                  : 'Máy này chưa được kích hoạt. Vui lòng đăng ký tài khoản và chờ admin duyệt trước khi đăng nhập.'
-              }
+              title={undefined}
               onClick={async () => {
                 if (!canLogin) return
                 setViewMode('login')
@@ -502,8 +548,10 @@ const AuthPage: React.FC<AuthPageProps> = ({ onLoggedIn }) => {
                   try {
                     const result = await window.api.auth.checkStatus({ username: authState.username })
                     if (result.status === 'approved') {
-                      // Update state để hiển thị form nhập key
-                      setAuthState((prev) => (prev ? { ...prev, status: 'pending' as const } : prev))
+                      setReadyForActivationKey(true)
+                      setAuthState((prev) => (prev ? { ...prev, status: 'pending' as const, message: result.message } : prev))
+                    } else {
+                      setReadyForActivationKey(false)
                     }
                   } catch (e) {
                     // Ignore errors
@@ -654,21 +702,6 @@ const AuthPage: React.FC<AuthPageProps> = ({ onLoggedIn }) => {
             </>
           )}
 
-          {/* NỘI DUNG: CHƯA KÍCH HOẠT NHƯNG CHỌN TAB ĐĂNG NHẬP */}
-          {authState.status === 'unregistered' && viewMode === 'login' && (
-            <>
-              <h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 8, color: '#f97316' }}>
-                Chưa thể đăng nhập
-              </h2>
-              <p style={{ fontSize: 14, color: '#cbd5f5', marginBottom: 16, lineHeight: 1.5 }}>
-                Máy này chưa được kích hoạt. Vui lòng chuyển sang tab <strong>Đăng ký</strong>, gửi yêu cầu
-                đăng ký và chờ admin cấp quyền trước khi đăng nhập.
-              </p>
-              <div style={{ marginBottom: 12, fontSize: 12, color: '#e5e7eb' }}>
-                <div>Mã máy: {authState.machineId}</div>
-              </div>
-            </>
-          )}
 
           {/* NỘI DUNG: ĐANG CHỜ DUYỆT (không phụ thuộc tab) */}
           {authState.status === 'pending' && !needsKeyInput && (
@@ -852,14 +885,14 @@ const AuthPage: React.FC<AuthPageProps> = ({ onLoggedIn }) => {
             </>
           )}
 
-          {/* NỘI DUNG: MÁY ĐÃ ĐƯỢC KÍCH HOẠT */}
-          {authState.status === 'allowed' && viewMode === 'login' && (
+          {/* NỘI DUNG: FORM ĐĂNG NHẬP cho máy đã kích hoạt / mất phiên / vừa được mở lại */}
+          {shouldShowLoginForm && (
             <>
-              <h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 8, color: '#38bdf8' }}>
-                Đăng nhập
+              <h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 8, color: loginTitleColor }}>
+                {loginTitle}
               </h2>
               <p style={{ fontSize: 14, color: '#cbd5f5', marginBottom: 16, lineHeight: 1.5 }}>
-                Máy và tài khoản này đã được kích hoạt. Vui lòng đăng nhập để sử dụng tool.
+                {loginDescription}
               </p>
 
               <div style={{ marginBottom: 12 }}>
@@ -935,15 +968,15 @@ const AuthPage: React.FC<AuthPageProps> = ({ onLoggedIn }) => {
               </div>
 
               <div style={{ marginBottom: 12, fontSize: 12, color: '#e5e7eb' }}>
+                {authState.username && <div>Tài khoản hiện tại: {authState.username}</div>}
                 <div>Mã máy: {authState.machineId}</div>
-                {/* V2: KHÔNG hiển thị key */}
               </div>
 
               {error && (
                 <div style={{ color: '#f87171', fontSize: 13, marginBottom: 8 }}>{error}</div>
               )}
               {authState.message && (
-                <div style={{ color: '#cbd5f5', fontSize: 12, marginBottom: 8 }}>
+                <div style={{ color: loginMessageColor, fontSize: 12, marginBottom: 8 }}>
                   {authState.message}
                 </div>
               )}
@@ -1008,14 +1041,14 @@ const AuthPage: React.FC<AuthPageProps> = ({ onLoggedIn }) => {
             </>
           )}
 
-          {authState.status === 'blocked' && (
+          {authState.status === 'blocked' && viewMode !== 'login' && (
             <>
               <h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 8, color: '#f97373' }}>
                 Tài khoản / máy đã bị chặn
               </h2>
               <p style={{ fontSize: 14, color: '#cbd5f5', marginBottom: 16, lineHeight: 1.5 }}>
-                Vui lòng liên hệ admin để được hỗ trợ. Bạn có thể thử đăng ký lại với tài khoản khác
-                nếu được cho phép.
+                Vui lòng liên hệ admin để được hỗ trợ. Nếu admin đã mở lại quyền, bạn có thể chuyển sang tab
+                đăng nhập để thử lại. Bạn cũng có thể đăng ký lại với tài khoản khác nếu được cho phép.
               </p>
               <div style={{ marginBottom: 12, fontSize: 12, color: '#e5e7eb' }}>
                 <div>Tài khoản: {authState.username || '(chưa rõ)'}</div>
