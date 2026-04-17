@@ -13,11 +13,11 @@ import { registerVideoFinalExportHandlers } from './videoFinalExportHandlers'
 import { registerSongNhacHandlers } from './songNhacHandlers'
 
 export function registerAllHandlers(
-  mainWindow: BrowserWindow | null,
+  _mainWindow: BrowserWindow | null,
   getMainWindow: () => BrowserWindow | null
 ) {
   registerAuthHandlers()
-  registerSystemHandlers(mainWindow)
+  registerSystemHandlers(getMainWindow)
   registerMusicHandlers(getMainWindow)
   registerVideoHandlers()
   registerVideoFinalExportHandlers(getMainWindow)

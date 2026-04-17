@@ -52,11 +52,14 @@ declare const window: Window & {
   }
 }
 
-// Giới hạn khi dùng Web Audio fallback
-const MAX_DECODE_BYTES =
+// Giới hạn khi dùng Web Audio API fallback (renderer-side decode).
+// Trước đây dùng 150 MB — quá nhỏ cho FLAC/WAV chất lượng cao (1h FLAC 24-bit ≈ 300-500 MB).
+// Web Audio API thực tế decode được ≈ 2 GB trước khi OOM trên hầu hết máy.
+// Dev giữ nhỏ để catch issues sớm.
+const MAX_WEB_AUDIO_DECODE_BYTES =
   typeof import.meta !== 'undefined' && import.meta.env?.DEV
-    ? 40 * 1024 * 1024
-    : 150 * 1024 * 1024
+    ? 80 * 1024 * 1024   // 80 MB in dev
+    : 2 * 1024 * 1024 * 1024 // 2 GB in production
 
 export async function decodeAudioFromFileUrl(fileUrl: string): Promise<DecodedAudio> {
   const path = fileUrlToPath(fileUrl)
@@ -95,9 +98,13 @@ export async function decodeAudioFromFileUrl(fileUrl: string): Promise<DecodedAu
 
   // Decode bằng Web Audio API (đọc bytes + decode)
   const bytes = await api.readAudioFile(path)
-  if (bytes.byteLength > MAX_DECODE_BYTES) {
-    const maxMb = (MAX_DECODE_BYTES / 1024 / 1024).toFixed(0)
-    throw new Error(`File quá lớn (${(bytes.byteLength / 1024 / 1024).toFixed(0)} MB). Chọn file dưới ~${maxMb} MB.`)
+  if (bytes.byteLength > MAX_WEB_AUDIO_DECODE_BYTES) {
+    const maxGb = (MAX_WEB_AUDIO_DECODE_BYTES / 1024 / 1024 / 1024).toFixed(1)
+    const fileMb = (bytes.byteLength / 1024 / 1024).toFixed(0)
+    throw new Error(
+      `File quá lớn cho Web Audio decode (${fileMb} MB, giới hạn ${maxGb} GB). ` +
+      `Hãy convert sang định dạng nén (MP3/AAC/OGG) trước khi import, hoặc kiểm tra FFmpeg đã cài đúng.`
+    )
   }
   const arrayBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
   const ctx = new AudioContext()

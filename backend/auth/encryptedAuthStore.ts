@@ -16,13 +16,18 @@ const AUTH_FILE_NAME = 'authState.enc'
 const IV_LENGTH = 16
 const TAG_LENGTH = 16
 const HMAC_LENGTH = 32
+const SALT_LENGTH = 32 // FIX H4: Random per-file salt
 const PBKDF2_ITERATIONS = 300000
 const KEY_LENGTH = 32 // 256 bits
 const isDev = process.env.NODE_ENV === 'development' || !!process.env.ELECTRON_RENDERER_URL
 
-// Salt cố định được embed trong code (không lưu trong file)
-// Nếu muốn tăng bảo mật, có thể random mỗi lần và lưu riêng
-const EMBEDDED_SALT = Buffer.from('93MediaToolMixNhac2025SecuritySalt!', 'utf8')
+// FIX H4: Legacy hardcoded salt — used ONLY for reading old v1 files during migration.
+// New files always use a random salt stored in the encrypted blob header.
+const LEGACY_EMBEDDED_SALT = Buffer.from('93MediaToolMixNhac2025SecuritySalt!', 'utf8')
+const LEGACY_HMAC_SALT = Buffer.from('93MediaToolMixNhac2025HMACSalt!', 'utf8')
+
+// Magic bytes to identify v2 format (random salt) vs v1 format (hardcoded salt)
+const V2_MAGIC = Buffer.from([0x93, 0x4D, 0x54, 0x02]) // "93MT" + version 2
 
 function getPreferredStoragePath(): string {
   const appData = process.env.APPDATA || path.join(process.env.HOME || process.env.USERPROFILE || 'C:\\Users\\Default', 'AppData', 'Roaming')
@@ -68,10 +73,11 @@ export function resolveStoragePath(): string {
 
 /**
  * Derive encryption key từ machineId
+ * FIX H4: Salt is now a parameter — callers pass either random (v2) or legacy (v1) salt
  */
-async function deriveKey(machineId: string): Promise<Buffer> {
+async function deriveKey(machineId: string, salt: Buffer): Promise<Buffer> {
   return new Promise((resolve, reject) => {
-    crypto.pbkdf2(machineId, EMBEDDED_SALT, PBKDF2_ITERATIONS, KEY_LENGTH, 'sha256', (err, derivedKey) => {
+    crypto.pbkdf2(machineId, salt, PBKDF2_ITERATIONS, KEY_LENGTH, 'sha256', (err, derivedKey) => {
       if (err) reject(err)
       else resolve(derivedKey)
     })
@@ -80,10 +86,11 @@ async function deriveKey(machineId: string): Promise<Buffer> {
 
 /**
  * Derive HMAC key từ machineId (key khác với encryption key)
+ * FIX H4: Derives a separate HMAC key by appending 'hmac' domain separator to salt
  */
-async function deriveHMACKey(machineId: string): Promise<Buffer> {
-  // Dùng salt khác cho HMAC
-  const hmacSalt = Buffer.from('93MediaToolMixNhac2025HMACSalt!', 'utf8')
+async function deriveHMACKey(machineId: string, salt: Buffer): Promise<Buffer> {
+  // Domain-separate HMAC key from encryption key using salt + 'hmac' suffix
+  const hmacSalt = Buffer.concat([salt, Buffer.from(':hmac', 'utf8')])
   return new Promise((resolve, reject) => {
     crypto.pbkdf2(machineId, hmacSalt, PBKDF2_ITERATIONS, KEY_LENGTH, 'sha256', (err, derivedKey) => {
       if (err) reject(err)
@@ -109,15 +116,20 @@ async function verifyHMAC(data: Buffer, hmac: Buffer, key: Buffer): Promise<bool
 
 /**
  * Mã hóa auth state
+ * FIX H4: v2 format — generates a random salt per-write, stored in the blob header.
+ * Layout: V2_MAGIC(4) + SALT(32) + HMAC(32) + IV(16) + ENCRYPTED(...) + AUTH_TAG(16)
  */
 async function encryptAuthState(state: StoredAuthState, machineId: string): Promise<string> {
   // Convert state to JSON
   const plaintext = JSON.stringify(state)
   const plaintextBuffer = Buffer.from(plaintext, 'utf8')
 
-  // Derive keys
-  const encryptionKey = await deriveKey(machineId)
-  const hmacKey = await deriveHMACKey(machineId)
+  // FIX H4: Generate a random salt for this write operation
+  const salt = crypto.randomBytes(SALT_LENGTH)
+
+  // Derive keys with per-file random salt
+  const encryptionKey = await deriveKey(machineId, salt)
+  const hmacKey = await deriveHMACKey(machineId, salt)
 
   // Generate IV (Initialization Vector)
   const iv = crypto.randomBytes(IV_LENGTH)
@@ -130,11 +142,11 @@ async function encryptAuthState(state: StoredAuthState, machineId: string): Prom
   // Combine: IV + Encrypted + AuthTag
   const encryptedData = Buffer.concat([iv, encrypted, authTag])
 
-  // Calculate HMAC của encrypted data
+  // Calculate HMAC của encrypted data (covers IV + ciphertext + tag)
   const hmac = await calculateHMAC(encryptedData, hmacKey)
 
-  // Final format: HMAC + IV + Encrypted + AuthTag
-  const final = Buffer.concat([hmac, encryptedData])
+  // FIX H4: v2 final format: MAGIC + SALT + HMAC + IV + Encrypted + AuthTag
+  const final = Buffer.concat([V2_MAGIC, salt, hmac, encryptedData])
 
   // Return base64 encoded
   return final.toString('base64')
@@ -142,26 +154,53 @@ async function encryptAuthState(state: StoredAuthState, machineId: string): Prom
 
 /**
  * Giải mã auth state
+ * FIX H4: Supports both v2 (random salt) and v1 (legacy hardcoded salt) formats.
+ * v1 files are transparently upgraded to v2 on next write.
  */
 async function decryptAuthState(encryptedBase64: string, machineId: string): Promise<StoredAuthState | null> {
   try {
     const final = Buffer.from(encryptedBase64, 'base64')
 
-    // Extract components
-    if (final.length < HMAC_LENGTH + IV_LENGTH + TAG_LENGTH) {
-      console.warn('[encryptedAuthStore] Invalid encrypted data length')
-      return null
+    // FIX H4: Detect format by checking v2 magic bytes
+    const isV2 = final.length >= V2_MAGIC.length &&
+      final[0] === V2_MAGIC[0] && final[1] === V2_MAGIC[1] &&
+      final[2] === V2_MAGIC[2] && final[3] === V2_MAGIC[3]
+
+    let salt: Buffer
+    let hmac: Buffer
+    let encryptedData: Buffer
+
+    if (isV2) {
+      // v2 layout: MAGIC(4) + SALT(32) + HMAC(32) + IV(16) + ENCRYPTED(...) + AUTH_TAG(16)
+      const minV2Length = V2_MAGIC.length + SALT_LENGTH + HMAC_LENGTH + IV_LENGTH + TAG_LENGTH
+      if (final.length < minV2Length) {
+        console.warn('[encryptedAuthStore] Invalid v2 encrypted data length')
+        return null
+      }
+      let offset = V2_MAGIC.length
+      salt = final.subarray(offset, offset + SALT_LENGTH); offset += SALT_LENGTH
+      hmac = final.subarray(offset, offset + HMAC_LENGTH); offset += HMAC_LENGTH
+      encryptedData = final.subarray(offset) // IV + encrypted + authTag
+    } else {
+      // v1 legacy layout: HMAC(32) + IV(16) + ENCRYPTED(...) + AUTH_TAG(16)
+      if (final.length < HMAC_LENGTH + IV_LENGTH + TAG_LENGTH) {
+        console.warn('[encryptedAuthStore] Invalid v1 encrypted data length')
+        return null
+      }
+      salt = LEGACY_EMBEDDED_SALT
+      hmac = final.subarray(0, HMAC_LENGTH)
+      encryptedData = final.subarray(HMAC_LENGTH)
     }
 
-    const hmac = final.subarray(0, HMAC_LENGTH)
-    const encryptedData = final.subarray(HMAC_LENGTH)
     const iv = encryptedData.subarray(0, IV_LENGTH)
     const encrypted = encryptedData.subarray(IV_LENGTH, encryptedData.length - TAG_LENGTH)
     const authTag = encryptedData.subarray(encryptedData.length - TAG_LENGTH)
 
-    // Derive keys
-    const encryptionKey = await deriveKey(machineId)
-    const hmacKey = await deriveHMACKey(machineId)
+    // Derive keys (using detected salt — random for v2, legacy constant for v1)
+    const encryptionKey = await deriveKey(machineId, salt)
+    const hmacKey = isV2
+      ? await deriveHMACKey(machineId, salt)
+      : await deriveLegacyHMACKey(machineId)
 
     // Verify HMAC trước khi decrypt
     const isValidHMAC = await verifyHMAC(encryptedData, hmac, hmacKey)
@@ -183,11 +222,29 @@ async function decryptAuthState(encryptedBase64: string, machineId: string): Pro
 
     // Parse JSON
     const state = JSON.parse(decrypted.toString('utf8')) as StoredAuthState
+
+    if (!isV2) {
+      console.log('[encryptedAuthStore] Read v1 (legacy salt) file — will upgrade to v2 on next write')
+    }
+
     return state
   } catch (error: any) {
     console.warn('[encryptedAuthStore] Decryption failed:', error.message)
     return null
   }
+}
+
+/**
+ * Legacy HMAC key derivation (v1 format only) — uses hardcoded HMAC salt.
+ * Kept only for backward-compatible reads during migration.
+ */
+async function deriveLegacyHMACKey(machineId: string): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    crypto.pbkdf2(machineId, LEGACY_HMAC_SALT, PBKDF2_ITERATIONS, KEY_LENGTH, 'sha256', (err, derivedKey) => {
+      if (err) reject(err)
+      else resolve(derivedKey)
+    })
+  })
 }
 
 /**

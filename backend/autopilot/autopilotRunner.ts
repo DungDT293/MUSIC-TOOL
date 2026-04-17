@@ -7,7 +7,7 @@ import { exportPlaylistToFile, type ExportPlaylistRequest } from '../music/expor
 import { scanMusicFolders, type ScanMusicResult } from '../music/scanMusic'
 import { type FinalExportJobRequest, type FinalExportEmitter, planFinalExport, executeFinalExport } from '../video/finalExport'
 import { videoJobManager } from '../video/videoJobManager'
-import { getDiskSpace, formatBytes } from '../utils/diskSpace'
+import { getDiskSpace, formatBytes, isEnospcError } from '../utils/diskSpace'
 import { syncPoolWithFiles, pickUniqueSequence, markClipsUsed, getPoolStats } from './videoPool'
 import type { FinalExportDonePayload } from '../../shared/videoFinalExportChannels'
 
@@ -72,6 +72,8 @@ export interface AutopilotRuntimeOverrides {
   resolvedGpuFfmpegPath?: string
   resolvedGpuEncoder?: 'nvenc' | 'amf' | 'videotoolbox'
   gpuFallbackReason?: string
+  gpuNormalizeMode?: 'gpu_heavy' | 'software'
+  gpuNormalizeReason?: string
 }
 
 export interface AutopilotConfig {
@@ -134,6 +136,13 @@ let logFileFlushChain: Promise<void> = Promise.resolve()
 const LOG_BUFFER_LIMIT = 500
 let recentLogs: AutopilotLogEntry[] = []
 let nextLogSequence = 1
+
+// FIX H-04: Heartbeat timestamp — updated on every emit() call.
+// If `status === 'running'` but heartbeat is stale (> STALE_LOCK_TIMEOUT_MS),
+// the lock is considered stuck and will be auto-reset by `startAutopilot()`.
+let lastHeartbeatAt = 0
+const STALE_LOCK_TIMEOUT_MS = 5 * 60 * 1000 // 5 minutes without any progress update = stuck
+
 const SCAN_TIMEOUT_MS = 10 * 60 * 1000 // 10 phút
 const VIDEO_PICK_TIMEOUT_MS = 10 * 60 * 1000 // 10 phút
 const AUDIO_EXPORT_TIMEOUT_MS = 30 * 60 * 1000 // 30 phút per playlist (audio export có thể lâu với crossfade)
@@ -281,6 +290,8 @@ function emit(progress: Partial<AutopilotProgress>) {
     }
   }
   currentProgress = next
+  // FIX H-04: Update heartbeat on every progress emit so staleness can be detected
+  lastHeartbeatAt = Date.now()
   scheduleProgressBroadcast(currentProgress)
 }
 
@@ -507,6 +518,47 @@ export function cancelAutopilot() {
   }
 }
 
+/**
+ * FIX H-04: Force-reset the autopilot status lock.
+ *
+ * Use this as a last-resort escape hatch when the autopilot is stuck in
+ * 'running'/'cancelling' and auto-detection hasn't kicked in yet.
+ * Exposed as an IPC handler so the UI can offer a "Force Reset" button.
+ *
+ * This does NOT gracefully stop FFmpeg processes — it only resets the
+ * module-level singleton state so a new run can start.
+ */
+export function forceResetAutopilot(): { reset: boolean; previousStatus: string } {
+  const previousStatus = currentProgress.status
+  if (previousStatus === 'idle' || previousStatus === 'completed' || previousStatus === 'error' || previousStatus === 'completed_with_errors') {
+    return { reset: false, previousStatus }
+  }
+
+  console.warn(`[Autopilot] Force reset requested. Previous status: ${previousStatus}`)
+
+  // Kill any active video jobs
+  try { cancelAutopilotVideoJobs() } catch {}
+
+  // Abort any active controllers
+  for (const ctrl of activeAbortControllers) {
+    try { ctrl.abort() } catch {}
+  }
+  activeAbortControllers = []
+
+  isCancelling = false
+  currentProgress = {
+    status: 'idle',
+    currentDayIndex: null,
+    currentStep: null,
+    stepPercent: 0,
+    message: 'Đã force reset Autopilot.',
+  }
+  lastHeartbeatAt = 0
+  scheduleProgressBroadcast(currentProgress)
+
+  return { reset: true, previousStatus }
+}
+
 function normalizeNumber(value: number | string | null | undefined, fallback: number): number {
   if (typeof value === 'number' && !Number.isNaN(value) && value > 0) return value
   if (typeof value === 'string') {
@@ -713,10 +765,40 @@ function throwIfCancelling() {
 }
 
 function isFatalExportError(err: any): boolean {
+  // ── Priority 1: Structural Node.js error codes (locale-independent) ──
+  // These are always reliable regardless of Windows language settings.
+  const errCode = (err?.code || '').toUpperCase()
+  const FATAL_NODE_CODES = new Set([
+    'ENOSPC',   // No space left on device
+    'EACCES',   // Permission denied
+    'EPERM',    // Operation not permitted
+    'ENOENT',   // No such file or directory (missing output dir)
+    'EROFS',    // Read-only file system
+    'EMFILE',   // Too many open files (system-level, not retryable)
+    'ENFILE',   // File table overflow (system-level)
+  ])
+  if (errCode && FATAL_NODE_CODES.has(errCode)) return true
+
+  // ── Priority 2: Structured ENOSPC classifier (checks errno, code, nested fields) ──
+  if (isEnospcError(err)) return true
+
+  // ── Priority 3: FFmpeg exit codes that indicate non-transient failures ──
+  // FFmpeg returns specific exit codes on certain fatal conditions.
+  // Exit code 1 is generic (could be transient), but higher codes often aren't.
+  const exitCode = err?.exitCode ?? err?.status
+  if (typeof exitCode === 'number') {
+    // Exit code 69 = EX_UNAVAILABLE (resource not available, e.g. disk full)
+    // Exit code 73 = EX_CANTCREAT (can't create output file)
+    // Exit code 74 = EX_IOERR (I/O error)
+    if ([69, 73, 74].includes(exitCode)) return true
+  }
+
+  // ── Priority 4: String matching fallback (catches app-level Vietnamese messages) ──
+  // Only used for messages generated by our own code (not FFmpeg stderr),
+  // so locale is controlled.
   const msg = (err?.message || err?.error || `${err}` || '').toLowerCase()
   const fatalKeywords = [
-    'disk',
-    'space',
+    // App-generated messages (controlled locale — Vietnamese)
     'dung lượng',
     'không kiểm tra được dung lượng',
     'không tồn tại',
@@ -724,6 +806,13 @@ function isFatalExportError(err: any): boolean {
     'playlist không tồn tại',
     'playlist không có bài',
     'thư mục xuất không tồn tại',
+    // English fallback patterns (for FFmpeg stderr on English systems)
+    'no space left',
+    'not enough space',
+    'disk full',
+    'permission denied',
+    'access is denied',
+    'read-only file system',
   ]
   return fatalKeywords.some((k) => msg.includes(k))
 }
@@ -1338,6 +1427,7 @@ async function runExportVideoWithOptions(
   jobRequest: FinalExportJobRequest,
   dateCode: string,
   playlists: PlaylistDefinition[],
+  preferredPreTranscodeMode: 'gpu_heavy' | 'software' = 'software',
 ): Promise<void> {
   const requestId = jobRequest.requestId || randomUUID()
   let donePayload: FinalExportDonePayload | null = null
@@ -1509,7 +1599,8 @@ async function runExportVideoWithOptions(
     !!jobRequest.deleteSourceFiles, // Xóa file audio/video sau khi xuất xong
     !!jobRequest.unifyFormat,       // Chuẩn hóa tỉ lệ khung hình + FPS
     jobRequest.targetResolution,
-    jobRequest.targetFps
+    jobRequest.targetFps,
+    preferredPreTranscodeMode
   )
 
   if (!donePayload) {
@@ -2040,6 +2131,14 @@ async function runAutopilotForDay(
       if (config.runtimeOverrides?.resolvedGpuFfmpegPath) {
         step4Lines.push(`  GPU FFmpeg: ${config.runtimeOverrides.resolvedGpuFfmpegPath}`)
       }
+      if (config.runtimeOverrides?.gpuNormalizeMode) {
+        step4Lines.push(
+          `  Normalize path: ${config.runtimeOverrides.gpuNormalizeMode === 'gpu_heavy' ? 'GPU-heavy hybrid CUDA' : 'Software fallback'}`,
+        )
+      }
+      if (config.runtimeOverrides?.gpuNormalizeReason) {
+        step4Lines.push(`  Normalize note: ${config.runtimeOverrides.gpuNormalizeReason}`)
+      }
     }
     if (overrides.generateTracklist) {
       step4Lines.push(`  Tracklist: BẬT`)
@@ -2047,7 +2146,12 @@ async function runAutopilotForDay(
     emitLogBlock('info', step4Lines)
   }
 
-  await runExportVideoWithOptions(jobRequest, dateCode, playlists)
+  await runExportVideoWithOptions(
+    jobRequest,
+    dateCode,
+    playlists,
+    config.runtimeOverrides?.gpuNormalizeMode || 'software',
+  )
 
   // ── Đánh dấu clips đã dùng trong Video Pool (sau khi export xong) ────────────
   if (_poolClipIds.length > 0 && _poolFingerprint) {
@@ -2066,12 +2170,29 @@ export async function startAutopilot(config: AutopilotConfig): Promise<void> {
     currentProgress.status === 'paused' ||
     currentProgress.status === 'cancelling'
   ) {
-    throw new Error('Autopilot đang chạy. Hãy dừng job hiện tại trước khi chạy job mới.')
+    // FIX H-04: Detect stuck lock via stale heartbeat.
+    // If status is 'running' but no progress has been emitted for STALE_LOCK_TIMEOUT_MS,
+    // the previous run likely crashed (unhandled rejection in deeply nested async I/O)
+    // and the finally block never reset the status. Auto-recover instead of blocking forever.
+    const staleDuration = Date.now() - lastHeartbeatAt
+    if (lastHeartbeatAt > 0 && staleDuration > STALE_LOCK_TIMEOUT_MS) {
+      console.warn(
+        `[Autopilot] Detected stuck lock: status='${currentProgress.status}' but last heartbeat was ${Math.round(staleDuration / 1000)}s ago. Auto-resetting to idle.`
+      )
+      currentProgress.status = 'idle'
+      isCancelling = false
+      activeAbortControllers = []
+      // Fall through to start normally
+    } else {
+      throw new Error('Autopilot đang chạy. Hãy dừng job hiện tại trước khi chạy job mới.')
+    }
   }
 
   // Set status synchronously ngay sau guard để tránh race condition
   // nếu có 2 call đồng thời (cả 2 pass guard trước khi emit chạy)
   currentProgress.status = 'running'
+  // FIX H-04: Initialize heartbeat so staleness detection has a baseline
+  lastHeartbeatAt = Date.now()
   recentLogs = []
   nextLogSequence = 1
 

@@ -47,24 +47,79 @@ export interface NormalizeAudioResult {
 
 const SUPPORTED_AUDIO_EXTENSIONS = ['.mp3', '.wav', '.flac', '.aac', '.m4a', '.ogg', '.opus']
 
-let cancelRequested = false
-let currentFfmpegProcess: any = null
-
-export function cancelNormalizeAudio() {
-  cancelRequested = true
-  if (currentFfmpegProcess) {
-    try {
-      currentFfmpegProcess.kill('SIGTERM')
-    } catch (err) {
-      console.warn('[normalizeAudio] Failed to kill FFmpeg process:', err)
-    }
-    currentFfmpegProcess = null
-  }
+// FIX M6: Per-job cancel context to prevent cross-contamination.
+// Previously, `cancelRequested` and `currentFfmpegProcess` were module-level singletons.
+// Two concurrent normalizeAudio() calls would share the same cancel flag and FFmpeg
+// process reference — cancelling job A would kill job B's FFmpeg process.
+// Now each job gets its own NormalizeJobContext keyed by a unique jobId.
+interface NormalizeJobContext {
+  cancelRequested: boolean
+  currentFfmpegProcess: ReturnType<typeof spawn> | null
 }
 
-function resetCancelFlag() {
-  cancelRequested = false
-  currentFfmpegProcess = null
+const activeJobs = new Map<string, NormalizeJobContext>()
+let jobIdCounter = 0
+
+function createJobContext(): { jobId: string; ctx: NormalizeJobContext } {
+  const jobId = `normalize-${Date.now()}-${++jobIdCounter}`
+  const ctx: NormalizeJobContext = { cancelRequested: false, currentFfmpegProcess: null }
+  activeJobs.set(jobId, ctx)
+  return { jobId, ctx }
+}
+
+function cleanupJobContext(jobId: string): void {
+  // FIX M-05: Kill orphaned FFmpeg process before removing from the Map.
+  // If the function threw before explicitly killing FFmpeg (e.g., an I/O error
+  // in a non-FFmpeg step), the process is still running. Without this check,
+  // deleting it from activeJobs makes it unreachable — the cancel handler
+  // can't find it, and it runs forever consuming CPU/disk.
+  const ctx = activeJobs.get(jobId)
+  if (ctx?.currentFfmpegProcess) {
+    try {
+      if (!ctx.currentFfmpegProcess.killed) {
+        ctx.currentFfmpegProcess.kill('SIGTERM')
+        console.log(`[normalizeAudio] cleanupJobContext: killed orphaned FFmpeg for job ${jobId}`)
+      }
+    } catch (err) {
+      console.warn(`[normalizeAudio] cleanupJobContext: failed to kill FFmpeg for job ${jobId}:`, err)
+    }
+    ctx.currentFfmpegProcess = null
+  }
+  activeJobs.delete(jobId)
+}
+
+/**
+ * Cancel a specific normalize job by jobId.
+ * If no jobId is provided, cancels ALL active jobs (backward-compatible).
+ */
+export function cancelNormalizeAudio(jobId?: string) {
+  if (jobId) {
+    const ctx = activeJobs.get(jobId)
+    if (ctx) {
+      ctx.cancelRequested = true
+      if (ctx.currentFfmpegProcess) {
+        try {
+          ctx.currentFfmpegProcess.kill('SIGTERM')
+        } catch (err) {
+          console.warn('[normalizeAudio] Failed to kill FFmpeg process:', err)
+        }
+        ctx.currentFfmpegProcess = null
+      }
+    }
+  } else {
+    // Cancel all active jobs (backward compatibility)
+    for (const [id, ctx] of activeJobs) {
+      ctx.cancelRequested = true
+      if (ctx.currentFfmpegProcess) {
+        try {
+          ctx.currentFfmpegProcess.kill('SIGTERM')
+        } catch (err) {
+          console.warn(`[normalizeAudio] Failed to kill FFmpeg process for job ${id}:`, err)
+        }
+        ctx.currentFfmpegProcess = null
+      }
+    }
+  }
 }
 
 function isSupportedAudioFile(filePath: string): boolean {
@@ -74,9 +129,24 @@ function isSupportedAudioFile(filePath: string): boolean {
 
 function getAllAudioFilesInFolder(folderPath: string): string[] {
   const files: string[] = []
+  // FIX M13: Track visited real paths to prevent infinite recursion via symlink cycles.
+  // Without this, a circular symlink (e.g. A/link → B, B/link → A) causes stack overflow
+  // because walkDir recurses indefinitely.
+  const visitedDirs = new Set<string>()
 
   function walkDir(currentDir: string) {
     try {
+      // Resolve symlinks to their real path so we detect cycles
+      let realDir: string
+      try {
+        realDir = fs.realpathSync(currentDir)
+      } catch {
+        // realpathSync can fail on broken symlinks — skip this directory
+        return
+      }
+      if (visitedDirs.has(realDir)) return // Already visited — break the cycle
+      visitedDirs.add(realDir)
+
       const entries = fs.readdirSync(currentDir, { withFileTypes: true })
       for (const entry of entries) {
         const fullPath = path.join(currentDir, entry.name)
@@ -157,7 +227,8 @@ async function normalizeSingleFile(
   outputFormat: 'mp3' | 'aac' | 'keep' | undefined,
   backupOriginal: boolean,
   outputFolder?: string,
-  loudnessPreset?: 'streaming' | 'youtube' | 'broadcast' | 'club'
+  loudnessPreset?: 'streaming' | 'youtube' | 'broadcast' | 'club',
+  ctx?: NormalizeJobContext // FIX M6: Per-job context
 ): Promise<{ success: boolean; outputFile?: string; error?: string }> {
   try {
     // Kiểm tra file tồn tại
@@ -242,7 +313,8 @@ async function normalizeSingleFile(
 
     await new Promise<void>((resolve, reject) => {
       const child = spawn(ffmpeg, args, { windowsHide: true })
-      currentFfmpegProcess = child
+      // FIX M6: Store FFmpeg process in per-job context (not module-level)
+      if (ctx) ctx.currentFfmpegProcess = child
 
       let stderr = ''
       child.stderr?.on('data', (chunk) => {
@@ -250,8 +322,8 @@ async function normalizeSingleFile(
       })
 
       child.on('error', (err) => {
-        currentFfmpegProcess = null
-        if (cancelRequested) {
+        if (ctx) ctx.currentFfmpegProcess = null
+        if (ctx?.cancelRequested) {
           reject(new Error('Đã dừng bởi người dùng'))
         } else {
           reject(new Error(`FFmpeg error: ${err.message}`))
@@ -259,8 +331,8 @@ async function normalizeSingleFile(
       })
 
       child.on('close', (code) => {
-        currentFfmpegProcess = null
-        if (cancelRequested) {
+        if (ctx) ctx.currentFfmpegProcess = null
+        if (ctx?.cancelRequested) {
           reject(new Error('Đã dừng bởi người dùng'))
         } else if (code === 0) {
           resolve()
@@ -270,13 +342,13 @@ async function normalizeSingleFile(
       })
 
       // Kiểm tra cancel trong quá trình chạy
-      if (cancelRequested) {
+      if (ctx?.cancelRequested) {
         try {
           child.kill('SIGTERM')
         } catch (err) {
           // Ignore
         }
-        currentFfmpegProcess = null
+        if (ctx) ctx.currentFfmpegProcess = null
         reject(new Error('Đã dừng bởi người dùng'))
       }
     })
@@ -301,8 +373,10 @@ async function normalizeSingleFile(
 export async function normalizeAudio(
   request: NormalizeAudioRequest,
   onProgress?: (progress: NormalizeAudioProgress) => void
-): Promise<NormalizeAudioResult> {
-  resetCancelFlag()
+): Promise<NormalizeAudioResult & { jobId?: string }> {
+  // FIX M6: Create per-job context instead of using module-level globals
+  const { jobId, ctx } = createJobContext()
+  try {
   // Thu thập danh sách file cần normalize
   let filesToProcess: string[] = []
 
@@ -346,7 +420,7 @@ export async function normalizeAudio(
     const file = filesToProcess[i]
     const fileStartTime = Date.now()
 
-    if (cancelRequested) {
+    if (ctx.cancelRequested) {
       result.success = false
       result.errors.push({ file: '[cancelled]', error: 'Đã dừng bởi người dùng' })
       if (onProgress) {
@@ -398,7 +472,8 @@ export async function normalizeAudio(
       request.outputFormat,
       request.backupOriginal ?? false,
       request.outputFolder,
-      request.loudnessPreset
+      request.loudnessPreset,
+      ctx // FIX M6: Pass per-job context
     )
 
     // Lưu thời gian xử lý file này
@@ -406,7 +481,7 @@ export async function normalizeAudio(
     fileProcessingTimes.push(fileProcessingTime)
 
     // Kiểm tra cancel sau khi xử lý file
-    if (cancelRequested) {
+    if (ctx.cancelRequested) {
       result.success = false
       result.errors.push({ file: '[cancelled]', error: 'Đã dừng bởi người dùng' })
       if (onProgress) {
@@ -466,13 +541,16 @@ export async function normalizeAudio(
       currentIndex: totalFiles,
       totalFiles,
       percent: 100,
-      status: cancelRequested ? 'cancelled' : result.failed === 0 ? 'completed' : 'error',
+      status: ctx.cancelRequested ? 'cancelled' : result.failed === 0 ? 'completed' : 'error',
       etaSeconds: 0,
     })
   }
 
-  result.success = !cancelRequested && result.failed === 0
-  return result
+  result.success = !ctx.cancelRequested && result.failed === 0
+  return { ...result, jobId }
+  } finally {
+    cleanupJobContext(jobId)
+  }
 }
 
 

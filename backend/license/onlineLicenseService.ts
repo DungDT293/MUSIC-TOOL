@@ -18,9 +18,14 @@ try {
 } catch (err) {
   // Chỉ fallback URL public (không nhạy cảm), KHÔNG fallback secret key
   DEFAULT_BASE = 'https://license-server.dungdong333.workers.dev'
-  DEFAULT_INSTALLER_KEY = process.env.LICENSE_INSTALLER_KEY ?? ''
+  // FIX H5: NEVER fall back to empty string — empty key would allow unauthenticated registration.
+  // Try env var one more time; if still missing, use a sentinel that the server will reject.
+  DEFAULT_INSTALLER_KEY = process.env.LICENSE_INSTALLER_KEY || ''
   if (!DEFAULT_INSTALLER_KEY) {
     console.error('[License] FATAL: LICENSE_INSTALLER_KEY chưa được set. App sẽ không thể xác thực license.')
+    // FIX H5: Set a clearly-invalid sentinel so the header is present but always rejected server-side.
+    // This prevents silent pass-through of empty string authorization.
+    DEFAULT_INSTALLER_KEY = '__MISSING_INSTALLER_KEY__'
   }
 }
 
@@ -99,6 +104,20 @@ async function postJson<T>(
 export async function submitLicenseRequest(note?: string): Promise<{ success: boolean; state: LicenseState; error?: string }> {
   const machineHash = await getMachineHash()
   const version = app.getVersion()
+
+  // FIX H5: Reject early if installer key is missing/sentinel — never send empty auth header
+  if (!INSTALLER_KEY || INSTALLER_KEY === '__MISSING_INSTALLER_KEY__') {
+    return {
+      success: false,
+      error: 'App chưa được cấu hình installer key. Liên hệ nhà phát triển.',
+      state: {
+        status: 'needsRegistration',
+        machineHash,
+        message: 'Thiếu cấu hình xác thực. Vui lòng cài lại app hoặc liên hệ hỗ trợ.',
+      },
+    }
+  }
+
   try {
     const stored = readStoredTicket()
     if (stored?.requestId) {
@@ -289,10 +308,23 @@ export async function evaluateLicenseState(forceRemote = false): Promise<License
       message: result.reason ?? 'License bị từ chối bởi server',
     }
   } catch (error: any) {
-    const canUseOffline =
-      stored.lastSuccessAt && Date.now() - stored.lastSuccessAt < OFFLINE_TTL_MS
-        ? true
-        : false
+    // FIX M25: Defend against system clock rollback attacks.
+    // If Date.now() is earlier than stored.lastSuccessAt, the user rolled their clock backward
+    // to keep the offline grace period valid indefinitely.
+    // Also cap maximum offline window to prevent editing the JSON to a future timestamp.
+    const now = Date.now()
+    let canUseOffline = false
+    if (stored.lastSuccessAt) {
+      const age = now - stored.lastSuccessAt
+      // Clock rollback detection: if age is negative, the system clock is behind the stored timestamp.
+      // This means either (1) clock was rolled back, or (2) JSON was edited with a future timestamp.
+      // Either way, deny offline access.
+      if (age >= 0 && age < OFFLINE_TTL_MS) {
+        canUseOffline = true
+      } else if (age < 0) {
+        console.warn('[License] Clock rollback detected: stored.lastSuccessAt is in the future. Denying offline grace.')
+      }
+    }
 
     if (canUseOffline) {
       return {

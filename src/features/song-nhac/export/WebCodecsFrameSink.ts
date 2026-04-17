@@ -80,19 +80,27 @@ export async function createWebCodecsFrameSink(
   let canvasSet: CanvasSet | null = null
   const KEYFRAME_INTERVAL = Math.round(fps * 2) // Keyframe every 2 seconds
 
+  // FIX H2: Queue of frame indices corresponding to pending encodes.
+  // VideoEncoder.output fires asynchronously — by then frameIndex has advanced.
+  // We push the correct index before encode() and shift it in output().
+  const pendingFrameIndices: number[] = []
+
   try {
     encoder = new VideoEncoder({
       output: (chunk: EncodedVideoChunk) => {
+        // FIX H2: Dequeue the captured frame index (FIFO — matches encode order)
+        const capturedIndex = pendingFrameIndices.shift() ?? frameIndex
+
         // Copy encoded H.264 chunk to ArrayBuffer
         const buf = new Uint8Array(chunk.byteLength)
         chunk.copyTo(buf)
 
         // Send via IPC — same channel as JPEG, but data is H.264 Annex B
-        sendFrame({ jobId, frameIndex: frameIndex, width: safeW, height: safeH, buffer: buf.buffer })
+        sendFrame({ jobId, frameIndex: capturedIndex, width: safeW, height: safeH, buffer: buf.buffer })
 
         // Throttle progress
-        if (frameIndex % 10 === 0 || frameIndex === totalFrames) {
-          sendProgress({ jobId, frameIndex, totalFrames })
+        if (capturedIndex % 10 === 0 || capturedIndex === totalFrames) {
+          sendProgress({ jobId, frameIndex: capturedIndex, totalFrames })
         }
       },
       error: (e: DOMException) => {
@@ -145,6 +153,8 @@ export async function createWebCodecsFrameSink(
         alpha: 'discard',
       })
 
+      // FIX H2: Capture current frameIndex BEFORE encode() fires the async output callback
+      pendingFrameIndices.push(frameIndex)
       encoder.encode(vf, { keyFrame: isKey })
       vf.close() // Critical: free GPU texture immediately
       frameIndex++

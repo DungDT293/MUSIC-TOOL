@@ -148,7 +148,66 @@ export async function checkAndCleanCacheOnUpdate(): Promise<void> {
   }
 }
 
+// ═══════════════════════════════════════════════════════════════
+// FIX H-03: Startup sweep for orphaned scratch directories.
+//
+// If the app crashes/is killed mid-export, the `finally` block never runs
+// and temp dirs accumulate indefinitely. This function cleans them up.
+//
+// Call this ONCE at app startup (main process ready event).
+// ═══════════════════════════════════════════════════════════════
 
+/** Max age for a scratch dir before it's considered stale (24 hours). */
+const STALE_SCRATCH_DIR_MS = 24 * 60 * 60 * 1000
+
+/**
+ * Sweep `userData/temp/final-export/` for orphaned scratch dirs.
+ * Deletes any subdirectory older than 24 hours (stale by definition —
+ * no single export should take that long).
+ *
+ * Safe to call at any time — only deletes dirs with the expected naming pattern.
+ */
+export async function cleanupStaleScratchDirs(): Promise<void> {
+  try {
+    const userDataPath = getUserDataPath()
+    const scratchRoot = path.join(userDataPath, 'temp', 'final-export')
+
+    if (!fs.existsSync(scratchRoot)) {
+      return // Nothing to clean
+    }
+
+    const entries = fs.readdirSync(scratchRoot, { withFileTypes: true })
+    const now = Date.now()
+    let cleaned = 0
+
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue
+      // Only touch dirs that match our naming pattern
+      if (!entry.name.startsWith('final-export-')) continue
+
+      const dirPath = path.join(scratchRoot, entry.name)
+      try {
+        const stat = fs.statSync(dirPath)
+        const age = now - stat.mtimeMs
+
+        if (age > STALE_SCRATCH_DIR_MS) {
+          fs.rmSync(dirPath, { recursive: true, force: true })
+          cleaned++
+          console.log(`[cacheCleanup] Removed stale scratch dir (age=${Math.round(age / 3600000)}h): ${entry.name}`)
+        }
+      } catch (err: any) {
+        console.warn(`[cacheCleanup] Failed to check/remove ${dirPath}:`, err.message)
+      }
+    }
+
+    if (cleaned > 0) {
+      console.log(`[cacheCleanup] Cleaned up ${cleaned} stale scratch directories`)
+    }
+  } catch (err: any) {
+    // Best-effort — don't crash on startup if cleanup fails
+    console.warn('[cacheCleanup] Stale scratch dir cleanup failed:', err.message)
+  }
+}
 
 
 

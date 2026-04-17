@@ -345,6 +345,12 @@ export class VisualizerRuntime {
           console.log('[VisualizerRuntime] ThreeJS re-initialized')
         } catch (e) {
           console.warn('[VisualizerRuntime] ThreeJS re-init failed:', e)
+          // FIX M11: Destroy the partially constructed ThreeJS engine to prevent GPU resource leak.
+          // Without this, the ThreeJsEngine holds WebGL context, buffers, and textures
+          // that are never released because threeInited stays false → render() skips it,
+          // and destroy() only cleans up if threeEngine is non-null (which it still is).
+          this.threeEngine?.destroy()
+          this.threeEngine = null
           this.threeInited = false
         }
       }

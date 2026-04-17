@@ -4,7 +4,7 @@
  */
 
 import { useRef, useState, useEffect } from 'react'
-import { useSongNhacLayerStore } from '../store/songNhacLayerStore'
+import { useSongNhacLayerStore, MAX_LAYERS, MAX_VISUALIZER_LAYERS } from '../store/songNhacLayerStore'
 import { useSongNhacTemplateStore } from '../store/songNhacTemplateStore'
 import { useSongNhacAudioStore } from '../store/songNhacAudioStore'
 import { BUILT_IN_PRESETS } from '../store/builtInPresets'
@@ -96,6 +96,11 @@ export default function LayersPanel() {
   const updateLayerWithHistory = useSongNhacLayerStore((s) => s.updateLayerWithHistory)
   const applyTemplateLayers = useSongNhacLayerStore((s) => s.applyTemplateLayers)
   const [addToGroupLayerId, setAddToGroupLayerId] = useState<string | null>(null)
+
+  // FIX H-03: Layer limit checks for disabling add buttons
+  const atLayerLimit = layers.length >= MAX_LAYERS
+  const vizCount = layers.filter((l) => l.type === 'visualizer').length
+  const atVizLimit = vizCount >= MAX_VISUALIZER_LAYERS
 
   // Close "add to group" dropdown when clicking outside
   useEffect(() => {
@@ -208,31 +213,35 @@ export default function LayersPanel() {
   return (
     <div style={panelStyle}>
       {/* ── Action buttons row ── */}
-      <div style={{ padding: '8px 10px', borderBottom: '1px solid rgba(255,255,255,0.06)', display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-        <button type="button" onClick={handleAddImage} style={addBtn('rgba(30,80,50,0.4)')} title="Thêm layer ảnh">
+      <div style={{ padding: '8px 10px', borderBottom: '1px solid rgba(255,255,255,0.06)', display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' }}>
+        <button type="button" onClick={handleAddImage} disabled={atLayerLimit} style={addBtn('rgba(30,80,50,0.4)')} title={atLayerLimit ? `Tối đa ${MAX_LAYERS} layer` : 'Thêm layer ảnh'}>
           Anh
         </button>
-        <button type="button" onClick={() => addTextLayer()} style={addBtn('rgba(60,60,20,0.4)')} title="Thêm layer chữ">
+        <button type="button" onClick={() => addTextLayer()} disabled={atLayerLimit} style={addBtn('rgba(60,60,20,0.4)')} title={atLayerLimit ? `Tối đa ${MAX_LAYERS} layer` : 'Thêm layer chữ'}>
           Text
         </button>
-        <button type="button" onClick={() => addVisualizerLayer()} style={addBtn('rgba(20,40,80,0.4)')} title="Thêm sóng nhạc">
+        <button type="button" onClick={() => addVisualizerLayer()} disabled={atLayerLimit || atVizLimit} style={addBtn('rgba(20,40,80,0.4)')} title={atVizLimit ? `Tối đa ${MAX_VISUALIZER_LAYERS} layer sóng nhạc` : atLayerLimit ? `Tối đa ${MAX_LAYERS} layer` : 'Thêm sóng nhạc'}>
           Wave
         </button>
-        <button type="button" onClick={() => videoInputRef.current?.click()} style={addBtn('rgba(60,20,60,0.4)')} title="Thêm video">
+        <button type="button" onClick={() => videoInputRef.current?.click()} disabled={atLayerLimit} style={addBtn('rgba(60,20,60,0.4)')} title={atLayerLimit ? `Tối đa ${MAX_LAYERS} layer` : 'Thêm video'}>
           Video
         </button>
-        <button type="button" onClick={() => logoInputRef.current?.click()} style={addBtn('rgba(20,60,60,0.4)')} title="Thêm logo / watermark (luôn trên cùng)">
+        <button type="button" onClick={() => logoInputRef.current?.click()} disabled={atLayerLimit} style={addBtn('rgba(20,60,60,0.4)')} title={atLayerLimit ? `Tối đa ${MAX_LAYERS} layer` : 'Thêm logo / watermark (luôn trên cùng)'}>
           Logo
         </button>
-        <button type="button" onClick={() => introInputRef.current?.click()} style={addBtn('rgba(50,30,10,0.4)')} title="Thêm intro layer (5 giây đầu)">
+        <button type="button" onClick={() => introInputRef.current?.click()} disabled={atLayerLimit} style={addBtn('rgba(50,30,10,0.4)')} title={atLayerLimit ? `Tối đa ${MAX_LAYERS} layer` : 'Thêm intro layer (5 giây đầu)'}>
           Intro
         </button>
-        <button type="button" onClick={() => outroInputRef.current?.click()} style={addBtn('rgba(50,10,30,0.4)')} title="Thêm outro layer (5 giây cuối)">
+        <button type="button" onClick={() => outroInputRef.current?.click()} disabled={atLayerLimit} style={addBtn('rgba(50,10,30,0.4)')} title={atLayerLimit ? `Tối đa ${MAX_LAYERS} layer` : 'Thêm outro layer (5 giây cuối)'}>
           Outro
         </button>
         <button type="button" onClick={() => addGroup()} style={addBtn()} title="Tạo group">
           Group
         </button>
+        {/* Layer count indicator */}
+        <span style={{ marginLeft: 'auto', fontSize: 10, color: atLayerLimit ? '#f87171' : 'rgba(255,255,255,0.35)' }}>
+          {layers.length}/{MAX_LAYERS}
+        </span>
       </div>
 
       {/* ── Quick Presets ── */}

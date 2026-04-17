@@ -18,6 +18,7 @@ import {
   onAutopilotLog,
   getAutopilotLogVerbosity,
   setAutopilotLogVerbosity,
+  forceResetAutopilot,
   type AutopilotConfig as AutopilotBackendConfig,
   type AutopilotLogVerbosity,
   type AutopilotProgress,
@@ -156,6 +157,8 @@ export function registerSongNhacHandlers(getMainWindow: () => BrowserWindow | nu
           resolvedGpuFfmpegPath: healthCheck.resolvedGpuFfmpegPath,
           resolvedGpuEncoder: healthCheck.resolvedGpuEncoder,
           gpuFallbackReason: healthCheck.gpuFallbackReason,
+          gpuNormalizeMode: healthCheck.gpuNormalizeMode,
+          gpuNormalizeReason: healthCheck.gpuNormalizeReason,
         },
       }
 
@@ -174,6 +177,16 @@ export function registerSongNhacHandlers(getMainWindow: () => BrowserWindow | nu
   ipcMain.handle('autopilot:cancel', async () => {
     cancelAutopilot()
     return { ok: true }
+  })
+
+  // FIX H-04: Force-reset Autopilot when stuck (stale lock).
+  // Renderer can call this when the UI detects status hasn't changed for too long.
+  ipcMain.handle('autopilot:forceReset', async () => {
+    const result = forceResetAutopilot()
+    if (result.reset) {
+      console.log(`[Autopilot] Force-reset executed. Previous status: ${result.previousStatus}`)
+    }
+    return { ok: result.reset, previousStatus: result.previousStatus }
   })
 
   // Scan video folders for autopilot
@@ -196,11 +209,30 @@ export function registerSongNhacHandlers(getMainWindow: () => BrowserWindow | nu
     const walkAsync = async (rootDir: string): Promise<number> => {
       let count = 0
       const queue: string[] = [rootDir]
+      // FIX M15: Track active workers to prevent premature exit.
+      // Bug: Workers exit when queue.length === 0, but another worker may be
+      // mid-readdir() and hasn't pushed its subdirectories yet. This causes
+      // incomplete scans because early-finishing workers miss directories that
+      // are discovered later by still-running workers.
+      // Fix: Workers stay alive while ANY other worker is still processing
+      // (activeWorkers > 0), only exiting when both queue is empty AND no
+      // other worker is mid-readdir.
+      let activeWorkers = 0
 
       const worker = async () => {
-        while (queue.length > 0) {
+        while (true) {
+          if (queue.length === 0) {
+            // No items in queue — but another worker might be mid-readdir
+            // and about to push new directories. Only exit if we're the
+            // last worker and queue is still empty.
+            if (activeWorkers === 0) return
+            // Yield and retry — another worker may push items soon
+            await new Promise(resolve => setTimeout(resolve, 1))
+            continue
+          }
           const dir = queue.shift()
-          if (!dir) return
+          if (!dir) continue
+          activeWorkers++
           try {
             const entries = await fsp.readdir(dir, { withFileTypes: true })
             for (const entry of entries) {
@@ -215,6 +247,7 @@ export function registerSongNhacHandlers(getMainWindow: () => BrowserWindow | nu
               } catch {}
             }
           } catch {}
+          activeWorkers--
         }
       }
 
@@ -320,6 +353,7 @@ export function registerSongNhacHandlers(getMainWindow: () => BrowserWindow | nu
     let exportReadyHandler: ((_ev: any) => void) | null = null
     let exportDoneHandler: ((_ev: any, _result: any) => void) | null = null
     let progressReportHandler: ((_ev: any, _progress: any) => void) | null = null
+    let configAckHandler: ((_ev: any, _ack: any) => void) | null = null
 
     try {
       const { startFfmpegPipe } = await import('../../backend/video/songNhacFfmpegPipe')
@@ -452,6 +486,9 @@ export function registerSongNhacHandlers(getMainWindow: () => BrowserWindow | nu
       // ─── Frame handler: renderer → FFmpeg stdin ───
       let framesReceived = 0
       frameHandler = (_ev: any, _jobIdArg: string, frameData: Buffer | ArrayBuffer) => {
+        // FIX M17: Validate jobId — ignore frames from stale/other export jobs
+        if (_jobIdArg !== jobId) return
+
         if (ffmpegProc.stdin && !ffmpegProc.stdin.destroyed) {
           // Electron IPC sends ArrayBuffer from renderer — stdin.write() requires Buffer
           const buf = Buffer.isBuffer(frameData) ? frameData : Buffer.from(frameData)
@@ -479,19 +516,41 @@ export function registerSongNhacHandlers(getMainWindow: () => BrowserWindow | nu
         mainWindow.webContents.send('song-nhac:export-started', { jobId })
       }
 
+      // ─── FIX M18: Export done handler — renderer signals encoding is complete ───
+      // ExportRunner calls sendExportDone() after all frames are encoded.
+      // We forward this to main window for UI updates and log the result.
+      exportDoneHandler = (_ev: any, result: any) => {
+        console.log(`[SongNhac] Export done signal from renderer:`, result?.jobId ?? jobId, result?.ok ?? 'unknown')
+        const mw = getMainWindow()
+        if (mw && !mw.isDestroyed()) {
+          mw.webContents.send('song-nhac:export-done', {
+            jobId: result?.jobId ?? jobId,
+            ok: result?.ok ?? true,
+            error: result?.error,
+          })
+        }
+      }
+      ipcMain.on('song-nhac:export-done', exportDoneHandler)
+
       // ─── End handler: stdin.end() triggers FFmpeg finalization ───
       const END_TIMEOUT_MS = 30 * 60 * 1000 // 30 min for long exports
       const endPromise = new Promise<void>((resolve, reject) => {
         let timeoutHandle: ReturnType<typeof setTimeout> | null = null
-        endHandler = () => {
+        // FIX M17: Use ipcMain.on (not .once) so we can filter by jobId and re-listen if mismatch
+        const onEnd = (_ev: any, endJobId?: string) => {
+          // Ignore end signals from other/stale jobs
+          if (endJobId && endJobId !== jobId) return
+
+          ipcMain.removeListener('song-nhac:end', onEnd)
           if (timeoutHandle) clearTimeout(timeoutHandle)
           console.log(`[SongNhac] End signal received. Frames: ${framesReceived}`)
           if (ffmpegProc.stdin && !ffmpegProc.stdin.destroyed) ffmpegProc.stdin.end()
           resolve()
         }
-        ipcMain.once('song-nhac:end', endHandler)
+        endHandler = onEnd as any
+        ipcMain.on('song-nhac:end', onEnd)
         timeoutHandle = setTimeout(() => {
-          if (endHandler) ipcMain.removeListener('song-nhac:end', endHandler)
+          ipcMain.removeListener('song-nhac:end', onEnd)
           console.warn(`[SongNhac] Export timed out after ${END_TIMEOUT_MS / 1000}s. Frames received: ${framesReceived}`)
           if (ffmpegProc.stdin && !ffmpegProc.stdin.destroyed) ffmpegProc.stdin.end()
           reject(new Error(`Export timed out after ${END_TIMEOUT_MS / 60000} minutes`))
@@ -523,6 +582,14 @@ export function registerSongNhacHandlers(getMainWindow: () => BrowserWindow | nu
       }
       offscreenWindow.webContents.send('song-nhac:export-config', exportConfig)
       console.log('[SongNhac] Export config sent to offscreen window')
+
+      // ─── FIX M19: Listen for config acknowledgement from ExportRunner ───
+      // ExportRunner calls sendExportConfigAck() after receiving and parsing the config.
+      // This confirms the offscreen renderer is ready to start encoding.
+      configAckHandler = (_ev: any, ack: any) => {
+        console.log(`[SongNhac] Config acknowledged by renderer:`, ack?.jobId ?? jobId)
+      }
+      ipcMain.once('song-nhac:export-config-ack', configAckHandler)
 
       // ─── Wait for frames + end ───
       await endPromise
@@ -559,6 +626,7 @@ export function registerSongNhacHandlers(getMainWindow: () => BrowserWindow | nu
       if (exportReadyHandler) ipcMain.removeListener('song-nhac:export-ready', exportReadyHandler)
       if (exportDoneHandler) ipcMain.removeListener('song-nhac:export-done', exportDoneHandler)
       if (progressReportHandler) ipcMain.removeListener('song-nhac:export-progress-report', progressReportHandler)
+      if (configAckHandler) ipcMain.removeListener('song-nhac:export-config-ack', configAckHandler)
       activeSongNhacExports.delete(jobId)
       // Clean up PCM cache for this job
       pcmCacheMap.delete(jobId)

@@ -9,6 +9,7 @@ import { useSongNhacTimelineStore } from '../store/songNhacTimelineStore'
 import { useSongNhacAudioStore } from '../store/songNhacAudioStore'
 import { useSongNhacRuntimeStore } from '../store/songNhacRuntimeStore'
 import { useSongNhacLayerStore } from '../store/songNhacLayerStore'
+import { useExportActivityStore } from '../../../stores/exportActivityStore'
 import type { ExportRange, ExportPresetId, EncoderQualityId } from './exportConfigTypes'
 import { getDimensionsForPresetAndAspectRatio, ENCODER_QUALITY_OPTIONS, estimateExportFileSize, formatFileSize } from './exportConfigTypes'
 import ExportPresetSelector from './ExportPresetSelector'
@@ -136,7 +137,20 @@ export default function ExportDialog() {
   } | null>(null)
   const [exportOutPath, setExportOutPath] = useState<string | null>(null)
   const [customOutputPath, setCustomOutputPath] = useState<string | null>(null)
+  // FIX M-04: Track cancelling state for immediate visual feedback
+  const [isCancelling, setIsCancelling] = useState(false)
   const unsubRef = useRef<(() => void)[]>([])
+
+  // FIX M21: Keep a ref to the latest audioDurationSec so the IPC progress callback
+  // always reads the current value without re-subscribing on every change.
+  const audioDurationRef = useRef(audioDurationSec)
+  useEffect(() => { audioDurationRef.current = audioDurationSec }, [audioDurationSec])
+
+  // FIX M4: Track the actual EXPORT duration (not the full track duration) for progress.
+  // When exporting a range (e.g., 60s-90s of a 300s track), the export duration is 30s.
+  // Using the full track duration (300s) in the progress formula shows "300s" progress
+  // instead of "30s", misleading the user about how long the export will take.
+  const exportDurationRef = useRef(0)
 
   // Sync width/height khi mở dialog hoặc đổi aspect ratio — đảm bảo export đúng tỉ lệ
   useEffect(() => {
@@ -153,9 +167,17 @@ export default function ExportDialog() {
     const api = window.api?.songNhac
     if (!api?.onExportStarted || !api?.onExportProgress) return
     const unsubStarted = api.onExportStarted(({ jobId }) => setCurrentJobId(jobId))
-    const unsubProgress = api.onExportProgress(({ frameIndex, totalFrames }: { frameIndex: number; totalFrames: number }) =>
-      setProgress({ frameIndex, totalFrames, timeSec: totalFrames > 0 ? (frameIndex / totalFrames) * (audioDurationSec ?? 0) : 0 })
-    )
+    const unsubProgress = api.onExportProgress(({ frameIndex, totalFrames }: { frameIndex: number; totalFrames: number }) => {
+      // FIX M4: Use exportDurationRef (the actual export range duration) instead of
+      // audioDurationRef (the full track length). For a range export of 60s-90s on a
+      // 300s track, this shows "30s" progress instead of the incorrect "300s".
+      const progressDurationSec = exportDurationRef.current || (audioDurationRef.current ?? 0)
+      setProgress({
+        frameIndex,
+        totalFrames,
+        timeSec: totalFrames > 0 ? (frameIndex / totalFrames) * progressDurationSec : 0,
+      })
+    })
     unsubRef.current = [unsubStarted, unsubProgress]
     return () => {
       unsubRef.current.forEach((u) => u())
@@ -177,12 +199,17 @@ export default function ExportDialog() {
   const durationWarning = durationSec > 0 && durationSec < MIN_DURATION_SEC
 
   const runExport = async (config: { width: number; height: number; fps: number; durationSec: number; audioFileUrl?: string; forceCpuEncoder?: boolean; encoderQuality?: string; audioDisplayName?: string; presetId?: string }) => {
+    // FIX M-01: Prevent duplicate exports on spam-click
+    if (isExporting) return
     const api = window.api?.songNhac
     if (!api?.exportVideo) return
+    const exportId = `song-nhac-${Date.now()}`
     setError(null)
     setExportSummary(null)
     setExportOutPath(null)
     setExporting(true)
+    // FIX C-01: Register with global export activity store
+    useExportActivityStore.getState().registerExport(exportId, `Sóng Nhạc: ${config.audioDisplayName || 'visualizer'}`)
     setExportStartedAt(Date.now())
     setExportDialogMode('progress')
     try {
@@ -210,6 +237,9 @@ export default function ExportDialog() {
     } finally {
       setExporting(false)
       setCurrentJobId(null)
+      setIsCancelling(false)
+      // FIX C-01: Unregister from global export activity store
+      useExportActivityStore.getState().unregisterExport(exportId)
     }
   }
 
@@ -227,6 +257,10 @@ export default function ExportDialog() {
       isLowend ? true : undefined // forceCpuEncoder
     )
     if (!cfg) return
+
+    // FIX M4: Store the actual export duration (range-aware) so the progress callback
+    // uses the correct value. cfg.durationSec is already calculated from the range.
+    exportDurationRef.current = cfg.durationSec
 
     // Snapshot layers + runtime settings for the offscreen export window
     const layers = useSongNhacLayerStore.getState().layers
@@ -293,9 +327,17 @@ export default function ExportDialog() {
   }
 
   const handleCancel = async () => {
+    if (isCancelling) return
+    // FIX M-04: Immediate visual feedback on cancel click
+    setIsCancelling(true)
     if (currentJobId && window.api?.songNhac?.cancelExport) {
-      await window.api.songNhac.cancelExport(currentJobId)
+      try {
+        await window.api.songNhac.cancelExport(currentJobId)
+      } catch (e) {
+        console.warn('[ExportDialog] cancelExport error:', e)
+      }
     }
+    // isCancelling resets when runExport's finally block fires
   }
 
   const handleClose = async () => {
@@ -523,6 +565,7 @@ export default function ExportDialog() {
             resHeight={height}
             resFps={fps}
             onCancel={handleCancel}
+            isCancelling={isCancelling}
             onRetryCpu={suggestedRetryWithCpu && !hasRetriedOnce ? handleRetryCpu : undefined}
             suggestedRetryWithCpu={suggestedRetryWithCpu && !hasRetriedOnce}
           />

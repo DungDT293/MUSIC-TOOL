@@ -71,6 +71,10 @@ export class ButterchurnEngine implements WebGLVisualizerEngine {
   private destroyed = false
   /** Butterchurn lib reference (cached after lazy load). */
   private bcLib: any = null
+  // FIX H-01: WebGL context loss recovery state
+  private contextLost = false
+  private glContextLostHandler: ((e: Event) => void) | null = null
+  private glContextRestoredHandler: (() => void) | null = null
 
   constructor(config: ButterchurnConfig = {}) {
     this.config = config
@@ -100,6 +104,11 @@ export class ButterchurnEngine implements WebGLVisualizerEngine {
       this.glCanvas = document.createElement('canvas')
       this.glCanvas.width = size.width
       this.glCanvas.height = size.height
+
+      // FIX H-01: Register WebGL context loss/restore listeners.
+      // GPU driver resets (sleep/wake, driver crash, resource pressure) cause silent
+      // context loss — without these listeners the canvas goes permanently black.
+      this._setupContextLossHandlers(this.glCanvas)
 
       // Defer createVisualizer until attachAudioSource provides the real AudioContext.
       // If audio is already attached (re-init scenario), create now.
@@ -216,6 +225,8 @@ export class ButterchurnEngine implements WebGLVisualizerEngine {
 
   render(frame: EngineRenderFrame): void {
     if (!this.visualizer || !this.inited || !this.targetCanvas || !this.glCanvas) return
+    // FIX H-01: Skip rendering while GPU context is lost — avoid WebGL errors
+    if (this.contextLost) return
     try {
       // Render into our offscreen WebGL canvas
       this.visualizer.render()
@@ -235,6 +246,8 @@ export class ButterchurnEngine implements WebGLVisualizerEngine {
   destroy(): void {
     this.destroyed = true
     this.inited = false
+    // FIX H-01: Remove context loss listeners before destroying canvas
+    this._teardownContextLossHandlers()
     if (this.visualizer) {
       try {
         this.visualizer.dispose?.()
@@ -258,5 +271,67 @@ export class ButterchurnEngine implements WebGLVisualizerEngine {
     this.bcLib = null
     this.presets = {}
     this.presetNames = []
+    this.contextLost = false
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // FIX H-01: WebGL context loss/restore handling.
+  //
+  // GPU drivers can reset at any time (sleep/wake, TDR on Windows,
+  // driver crash, resource pressure). When this happens:
+  //   1. webglcontextlost fires — we must call preventDefault() to
+  //      ALLOW the browser to attempt restoration (without it, the
+  //      context is permanently dead).
+  //   2. webglcontextrestored fires — we rebuild the Butterchurn
+  //      visualizer on the same canvas (shaders, buffers, state).
+  // ═══════════════════════════════════════════════════════════════
+
+  private _setupContextLossHandlers(canvas: HTMLCanvasElement): void {
+    this._teardownContextLossHandlers() // idempotent
+
+    this.glContextLostHandler = (e: Event) => {
+      e.preventDefault() // CRITICAL: allows browser to attempt restoration
+      this.contextLost = true
+      console.warn('[ButterchurnEngine] WebGL context lost — GPU driver reset detected. Waiting for restore...')
+    }
+
+    this.glContextRestoredHandler = () => {
+      console.log('[ButterchurnEngine] WebGL context restored — rebuilding visualizer...')
+      this.contextLost = false
+
+      // Rebuild the Butterchurn visualizer with the same canvas.
+      // The old visualizer's WebGL state is gone, but the canvas element
+      // gets a fresh context from the browser.
+      const savedPreset = this.currentPresetName
+      if (this.visualizer) {
+        try { this.visualizer.dispose?.() } catch {}
+        this.visualizer = null
+      }
+      this.inited = false
+
+      // Re-create visualizer if we have all the pieces
+      if (this.bcLib && this.glCanvas && this.audioContext) {
+        this._createVisualizer()
+        // Restore the preset that was playing
+        if (savedPreset && this.presets[savedPreset]) {
+          this.loadPreset(savedPreset, false)
+        }
+        console.log(`[ButterchurnEngine] Visualizer rebuilt successfully, preset: ${this.currentPresetName}`)
+      }
+    }
+
+    canvas.addEventListener('webglcontextlost', this.glContextLostHandler)
+    canvas.addEventListener('webglcontextrestored', this.glContextRestoredHandler)
+  }
+
+  private _teardownContextLossHandlers(): void {
+    if (this.glCanvas && this.glContextLostHandler) {
+      this.glCanvas.removeEventListener('webglcontextlost', this.glContextLostHandler)
+    }
+    if (this.glCanvas && this.glContextRestoredHandler) {
+      this.glCanvas.removeEventListener('webglcontextrestored', this.glContextRestoredHandler)
+    }
+    this.glContextLostHandler = null
+    this.glContextRestoredHandler = null
   }
 }

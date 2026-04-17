@@ -80,11 +80,12 @@ export async function confirmResourcesForVideoJob(
 }
 
 // ─── Register handlers ─────────────────────────────────────────────────────
-export function registerSystemHandlers(mainWindow: Electron.BrowserWindow | null) {
-  // Job queue listeners
+export function registerSystemHandlers(getMainWindow: () => Electron.BrowserWindow | null) {
+  // Job queue listeners — dùng getter để luôn lấy window mới nhất (FIX: H1)
   jobQueue.on('update', (job) => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('jobQueue:update', job)
+    const mw = getMainWindow()
+    if (mw && !mw.isDestroyed()) {
+      mw.webContents.send('jobQueue:update', job)
     }
   })
 

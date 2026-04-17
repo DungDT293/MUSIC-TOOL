@@ -5,33 +5,28 @@
 
 /**
  * Detect DevTools (Chrome DevTools, Firefox DevTools)
+ *
+ * FIX M-06: The previous outerHeight-innerHeight check produces constant false
+ * positives in Electron because the app frame/titlebar/toolbar eat 160+ pixels.
+ * Removed that unreliable heuristic. Timing-based detection is kept as it has
+ * no false-positive issue in Electron.
  */
 export function detectDevTools(): boolean {
   if (typeof window === 'undefined') {
     return false
   }
 
-  // Method 1: Check console size
-  const threshold = 160
-  if (
-    window.outerHeight - window.innerHeight > threshold ||
-    window.outerWidth - window.innerWidth > threshold
-  ) {
-    return true
-  }
-
-  // Method 2: Timing-based detection (no console side-effects)
-  let devtools = false
+  // Timing-based detection: DevTools presence adds measurable overhead
+  // to property access and evaluation.
   const before = performance.now()
   // eslint-disable-next-line no-unused-expressions
   void ('' + before)
   const after = performance.now()
-  // DevTools presence adds measurable overhead on repeated access
   if (after - before > 10) {
-    devtools = true
+    return true
   }
 
-  return devtools
+  return false
 }
 
 /**

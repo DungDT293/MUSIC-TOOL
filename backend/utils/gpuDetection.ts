@@ -4,7 +4,6 @@
  */
 
 import { spawn } from 'child_process'
-import { getFfmpegPaths } from '../ffmpeg/config'
 import {
   getPreferredGpuFfmpegProfile,
   listGpuFfmpegCandidates,
@@ -12,6 +11,7 @@ import {
   type ResolvedGpuFfmpegProfile,
 } from '../ffmpeg/gpuProfile'
 import fs from 'node:fs'
+import { buildNormalizeCudaHybridVfFilter } from '../video/utils/normalizeVf'
 
 export type GpuEncoder = 'nvenc' | 'amf' | 'videotoolbox' | 'cpu'
 
@@ -23,6 +23,8 @@ export interface GpuInfo {
   ffmpegProfile?: ResolvedGpuFfmpegProfile
   ffmpegPath?: string
   ffprobePath?: string
+  normalizeCudaAvailable?: boolean
+  normalizeCudaReason?: string
 }
 
 const cachedGpuInfo = new Map<GpuFfmpegProfile, GpuInfo>()
@@ -284,6 +286,42 @@ async function runGpuSmokeTest(ffmpeg: string, encoder: UsableGpuEncoder): Promi
   return `${encoder.toUpperCase()} encoder detected but smoke test failed: ${formatProcessFailure(result)}`
 }
 
+function getNormalizeCudaSmokeTestArgs(): string[] {
+  return [
+    '-hide_banner',
+    '-loglevel',
+    'error',
+    '-f',
+    'lavfi',
+    '-i',
+    `color=c=black:s=${GPU_SMOKE_TEST_FRAME_SIZE}:r=30`,
+    '-t',
+    '0.2',
+    '-an',
+    '-vf',
+    buildNormalizeCudaHybridVfFilter('1920x1080', '30'),
+    '-c:v',
+    'h264_nvenc',
+    '-preset',
+    'p1',
+    '-pix_fmt',
+    'yuv420p',
+    '-f',
+    'null',
+    '-',
+  ]
+}
+
+async function runNormalizeCudaSmokeTest(ffmpeg: string, encoder: UsableGpuEncoder): Promise<string | null> {
+  if (encoder !== 'nvenc') {
+    return `${encoder.toUpperCase()} normalize path is not implemented for hybrid CUDA pre-transcode`
+  }
+
+  const result = await runProcess(ffmpeg, getNormalizeCudaSmokeTestArgs(), GPU_SMOKE_TEST_TIMEOUT_MS)
+  if (result.ok) return null
+  return `NVENC hybrid normalize smoke test failed: ${formatProcessFailure(result)}`
+}
+
 async function getNvidiaGpuName(): Promise<string | undefined> {
   const result = await runProcess(
     'nvidia-smi',
@@ -367,6 +405,7 @@ async function detectGpuEncoder(
 
       if (encoder === 'nvenc') {
         const gpuName = await getNvidiaGpuName()
+        const normalizeCudaFailure = await runNormalizeCudaSmokeTest(candidate.ffmpeg, encoder)
         return {
           encoder: 'nvenc',
           available: true,
@@ -378,6 +417,8 @@ async function detectGpuEncoder(
           ffmpegProfile: candidate.profile,
           ffmpegPath: candidate.ffmpeg,
           ffprobePath: candidate.ffprobe,
+          normalizeCudaAvailable: !normalizeCudaFailure,
+          normalizeCudaReason: normalizeCudaFailure || 'NVENC hybrid normalize smoke test passed',
         }
       }
 
@@ -392,6 +433,8 @@ async function detectGpuEncoder(
           ffmpegProfile: candidate.profile,
           ffmpegPath: candidate.ffmpeg,
           ffprobePath: candidate.ffprobe,
+          normalizeCudaAvailable: false,
+          normalizeCudaReason: 'Hybrid CUDA normalize path is only supported for NVENC right now',
         }
       }
 
@@ -405,6 +448,8 @@ async function detectGpuEncoder(
         ffmpegProfile: candidate.profile,
         ffmpegPath: candidate.ffmpeg,
         ffprobePath: candidate.ffprobe,
+        normalizeCudaAvailable: false,
+        normalizeCudaReason: 'Hybrid CUDA normalize path is only supported for NVENC right now',
       }
     }
   }

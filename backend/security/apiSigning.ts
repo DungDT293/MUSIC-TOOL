@@ -150,7 +150,28 @@ export async function verifyRequest(
     const signatureString = createSignatureString(timestamp, nonce, method, path, body)
     const expectedSignature = await calculateSignature(signatureString, signingKey)
 
-    const isValid = crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSignature))
+    // FIX H7 & M22: Pre-validate lengths before timingSafeEqual.
+    // crypto.timingSafeEqual throws RangeError on length mismatch, which:
+    //  - H7: Skips security monitoring (caught by generic catch, returns false silently)
+    //  - M22: Leaks the length difference in the error message
+    // By checking length first with strict equality (constant-time for this comparison
+    // since HMAC-SHA256 hex is always 64 chars — length mismatch means invalid input format),
+    // we log the attempt and return false cleanly.
+    const sigBuf = Buffer.from(signature, 'utf8')
+    const expectedBuf = Buffer.from(expectedSignature, 'utf8')
+
+    if (sigBuf.length !== expectedBuf.length) {
+      // Log the invalid attempt — format mismatch is suspicious
+      await reportSignatureInvalid({
+        path,
+        method,
+        expectedSignature: '(length mismatch)',
+        receivedSignature: `(${sigBuf.length} bytes vs expected ${expectedBuf.length})`,
+      })
+      return false
+    }
+
+    const isValid = crypto.timingSafeEqual(sigBuf, expectedBuf)
 
     if (!isValid) {
       // Report invalid signature
@@ -164,7 +185,16 @@ export async function verifyRequest(
 
     return isValid
   } catch (error) {
+    // FIX H7: Always log verification failures — even unexpected errors could be attacks
     console.warn('[APISigning] Signature verification failed:', error)
+    try {
+      await reportSignatureInvalid({
+        path: path ?? 'unknown',
+        method: method ?? 'unknown',
+        expectedSignature: '(verification threw)',
+        receivedSignature: signature ?? '(null)',
+      })
+    } catch (_) {} // Don't let monitoring failure mask the original error
     return false
   }
 }

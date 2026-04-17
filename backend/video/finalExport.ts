@@ -11,9 +11,9 @@ import { validateInputFiles, type ValidatedInputFile } from './videoUtils'
 import { videoJobManager } from './videoJobManager'
 import { verifyOutputVideo } from './outputVerification'
 import { runPlaybackTest } from './playbackTest'
-import { getDiskSpace, formatBytes } from '../utils/diskSpace'
-import { buildVideoEncoderArgsWithChoice } from '../utils/gpuDetection'
-import { buildNormalizeVfFilter } from './utils/normalizeVf'
+import { getDiskSpace, formatBytes, assertMinDiskSpace } from '../utils/diskSpace'
+import { buildVideoEncoderArgsWithChoice, getGpuInfo } from '../utils/gpuDetection'
+import { buildNormalizeCudaHybridVfFilter, buildNormalizeVfFilter } from './utils/normalizeVf'
 import {
   buildPlaylistToFillDuration,
   shuffleOnce,
@@ -212,10 +212,49 @@ function getFinalExportScratchRoot(): string {
   return path.join(localAppData, '93-media-tool-mix-nhac', 'temp', 'final-export')
 }
 
-async function ensureTempDir(baseName: string): Promise<string> {
+/**
+ * FIX H-03: Same-drive scratch directory architecture.
+ *
+ * Problem: Previously, temp files always went to `userData/temp/final-export/` (C: drive).
+ * This caused two issues:
+ *   1. C: drive could run out of space while the target drive (D:, E:, etc.) had plenty.
+ *   2. The final `fs.rename()` from temp to output required a cross-drive copy (O(n) bytes),
+ *      which was slow for large video files (1-5 GB).
+ *
+ * Solution: Create the scratch dir INSIDE the output destination directory.
+ *   - e.g. outputFolder = "D:/Exports/" → scratch = "D:/Exports/.93media-temp-<uuid>/"
+ *   - `fs.rename()` from scratch to same-drive output is O(1) — just a metadata pointer update.
+ *   - If the target dir is read-only or the write fails, fall back to `userData/temp`.
+ *
+ * @param baseName   Prefix for mkdtemp (e.g. "final-export-abc123-")
+ * @param outputDir  The user's chosen export destination folder (optional — falls back to userData)
+ */
+async function ensureTempDir(baseName: string, outputDir?: string): Promise<string> {
+  // Strategy 1: Same-drive scratch inside outputDir (preferred — enables O(1) rename)
+  if (outputDir) {
+    try {
+      const sameDriveRoot = path.join(outputDir, '.93media-temp')
+      await fsp.mkdir(sameDriveRoot, { recursive: true })
+      const dir = await fsp.mkdtemp(path.join(sameDriveRoot, baseName))
+
+      // Verify we can actually write here (some dirs are read-only or network shares with limited perms)
+      const testFile = path.join(dir, '.write-test')
+      await fsp.writeFile(testFile, 'ok')
+      await fsp.unlink(testFile)
+
+      console.log(`[FinalExport] Scratch dir: same-drive (${dir})`)
+      return dir
+    } catch (err) {
+      console.warn(`[FinalExport] Cannot create same-drive scratch in ${outputDir}, falling back to userData:`, err)
+      // Fall through to Strategy 2
+    }
+  }
+
+  // Strategy 2: Fallback — userData/temp (always writable, but may be cross-drive)
   const scratchRoot = getFinalExportScratchRoot()
   await fsp.mkdir(scratchRoot, { recursive: true })
   const dir = await fsp.mkdtemp(path.join(scratchRoot, baseName))
+  console.log(`[FinalExport] Scratch dir: userData fallback (${dir})`)
   return dir
 }
 
@@ -460,6 +499,25 @@ export async function planFinalExport(
     }
   })
 
+  // FIX: Dedup output filenames — khi nhiều audio cùng tên (từ thư mục khác nhau),
+  // outputPath trùng sẽ khiến job sau ghi đè lên job trước (FFmpeg -y).
+  // Thêm suffix _2, _3... cho các file trùng.
+  const usedOutputPaths = new Set<string>()
+  for (const job of jobs) {
+    let finalPath = job.outputPath
+    let counter = 2
+    while (usedOutputPaths.has(finalPath.toLowerCase())) {
+      const ext = path.extname(job.outputFileName)
+      const base = path.basename(job.outputFileName, ext)
+      const newName = `${base}_${counter}${ext}`
+      finalPath = path.join(outputFolder, newName)
+      job.outputFileName = newName
+      counter++
+    }
+    job.outputPath = finalPath
+    usedOutputPaths.add(finalPath.toLowerCase())
+  }
+
   // 4. Calculate totals
   const totalAudioDurationSec = audioItems.reduce((sum, a) => sum + a.durationSec, 0)
   const totalVideoDurationSec = videoClips.reduce((sum, v) => sum + v.durationSec, 0)
@@ -509,14 +567,24 @@ export async function executeFinalExport(
   deleteSourceFiles: boolean = false,
   unifyFormat: boolean = false,
   targetResolution?: string,
-  targetFps?: string
+  targetFps?: string,
+  preferredPreTranscodeMode: PreTranscodeMode = 'software',
 ): Promise<void> {
-  const tempDir = await ensureTempDir(`final-export-${requestId}-`)
+  // FIX H-03: Same-drive scratch — derive output directory from the first job's outputPath
+  const outputDir = plan.jobs.length > 0 ? path.dirname(plan.jobs[0].outputPath) : undefined
+  const tempDir = await ensureTempDir(`final-export-${requestId}-`, outputDir)
 
   // Build vf filter for resolution/FPS normalization if requested
   const normalizeVfFilter = unifyFormat && targetResolution && targetFps
     ? buildNormalizeVfFilter(targetResolution, targetFps)
     : null
+  const gpuHybridNormalizeVfFilter = unifyFormat && targetResolution && targetFps
+    ? buildNormalizeCudaHybridVfFilter(targetResolution, targetFps)
+    : null
+  const gpuInfo =
+    preferredPreTranscodeMode === 'gpu_heavy' && useGpuEncoding !== 'cpu'
+      ? await getGpuInfo()
+      : null
 
   try {
     // Generate tracklist cho từng job nếu tracklistAuto = true
@@ -772,6 +840,22 @@ export async function executeFinalExport(
         forceReencode,
         jobLabel: `${currentJobIndex}/${plan.totalJobs}`,
       })
+      const effectiveGpuHybridNormalizeVfFilter = resolveEffectiveGpuHybridNormalizeVfFilter({
+        explicitNormalizeVfFilter: normalizeVfFilter,
+        explicitGpuHybridVfFilter: gpuHybridNormalizeVfFilter,
+        clips: videoPlaylist,
+        forceReencode,
+      })
+      const resolvedPreTranscodeMode: PreTranscodeMode =
+        effectiveNormalizeVfFilter &&
+        preferredPreTranscodeMode === 'gpu_heavy' &&
+        useGpuEncoding !== 'cpu' &&
+        gpuInfo?.available &&
+        gpuInfo.encoder === 'nvenc' &&
+        gpuInfo.normalizeCudaAvailable &&
+        !!effectiveGpuHybridNormalizeVfFilter
+          ? 'gpu_heavy'
+          : 'software'
 
       await runFinalCommand({
         requestId,
@@ -785,6 +869,8 @@ export async function executeFinalExport(
         normalizeAudio,
         useGpuEncoding,
         normalizeVfFilter: effectiveNormalizeVfFilter,
+        gpuHybridNormalizeVfFilter: effectiveGpuHybridNormalizeVfFilter,
+        preTranscodeMode: effectiveNormalizeVfFilter ? resolvedPreTranscodeMode : 'software',
         failedVideoSourcePaths: quarantinedClipPaths,
         reusableTranscodedClipCache,
         emitProgress: (progressPayload) => {
@@ -1131,6 +1217,13 @@ function chooseAutoNormalizeResolution(clips: ClipItem[]): string {
   return ranked[0]?.[0] ?? DEFAULT_AUTO_NORMALIZE_RESOLUTION
 }
 
+function getEffectiveNormalizeTarget(clips: ClipItem[]): { targetResolution: string; targetFps: string } {
+  return {
+    targetResolution: chooseAutoNormalizeResolution(clips),
+    targetFps: DEFAULT_AUTO_NORMALIZE_FPS,
+  }
+}
+
 function resolveEffectiveNormalizeVfFilter(opts: {
   explicitNormalizeVfFilter: string | null
   clips: ClipItem[]
@@ -1148,7 +1241,7 @@ function resolveEffectiveNormalizeVfFilter(opts: {
   const distinctResolutions = collectDistinctClipResolutions(clips)
   const hasMixedResolutions = distinctResolutions.length > 1
   const hasUnsafeDimensions = clips.some((clip) => hasUnsafeFrameDimensions(clip))
-  const targetResolution = chooseAutoNormalizeResolution(clips)
+  const { targetResolution, targetFps } = getEffectiveNormalizeTarget(clips)
   const sampleResolutions =
     distinctResolutions.length > 0 ? distinctResolutions.slice(0, 4).join(', ') : 'unknown'
 
@@ -1156,16 +1249,34 @@ function resolveEffectiveNormalizeVfFilter(opts: {
     console.warn(
       `[FinalExport] Auto-enabled 2-pass normalize for job ${jobLabel}: ` +
         `re-encode input contains ${hasMixedResolutions ? 'mixed' : 'unsafe'} frame sizes (${sampleResolutions}). ` +
-        `Target=${targetResolution} @ ${DEFAULT_AUTO_NORMALIZE_FPS}fps`
+        `Target=${targetResolution} @ ${targetFps}fps`
     )
   } else {
     console.log(
       `[FinalExport] Re-encode mode for job ${jobLabel} will use 2-pass normalize ` +
-        `(${sampleResolutions}) -> ${targetResolution} @ ${DEFAULT_AUTO_NORMALIZE_FPS}fps`
+        `(${sampleResolutions}) -> ${targetResolution} @ ${targetFps}fps`
     )
   }
 
-  return buildNormalizeVfFilter(targetResolution, DEFAULT_AUTO_NORMALIZE_FPS)
+  return buildNormalizeVfFilter(targetResolution, targetFps)
+}
+
+function resolveEffectiveGpuHybridNormalizeVfFilter(opts: {
+  explicitNormalizeVfFilter: string | null
+  explicitGpuHybridVfFilter: string | null
+  clips: ClipItem[]
+  forceReencode: boolean
+}): string | null {
+  const { explicitNormalizeVfFilter, explicitGpuHybridVfFilter, clips, forceReencode } = opts
+  if (explicitNormalizeVfFilter) {
+    return explicitGpuHybridVfFilter
+  }
+  if (!forceReencode || clips.length === 0) {
+    return null
+  }
+
+  const { targetResolution, targetFps } = getEffectiveNormalizeTarget(clips)
+  return buildNormalizeCudaHybridVfFilter(targetResolution, targetFps)
 }
 
 async function ensureFinalExportDiskCapacity(
@@ -1228,6 +1339,8 @@ function getFfmpegExecutable(explicitPath?: string): string {
 //
 // ═══════════════════════════════════════════════════════════════
 
+type PreTranscodeMode = 'software' | 'gpu_heavy'
+
 interface PreTranscodeClipsOptions {
   /** Danh s?ch clip video g?c (path + duration) */
   clips: Array<{ path: string; durationSec: number }>
@@ -1235,6 +1348,10 @@ interface PreTranscodeClipsOptions {
   tempDir: string
   /** VF filter chu?n h?a (resolution + FPS + pad + format) */
   vfFilter: string
+  /** Hybrid CUDA filter cho NVENC path (nếu có) */
+  gpuHybridVfFilter?: string | null
+  /** Chế độ pre-transcode đã resolve */
+  preTranscodeMode?: PreTranscodeMode
   /** GPU encoding choice */
   useGpuEncoding?: 'gpu' | 'cpu' | 'auto'
   /** Request ID ?? cancel */
@@ -1263,6 +1380,23 @@ function sanitizePreTranscodeEncoderArgs(rawEncoderArgs: string[]): string[] {
     sanitizedArgs.push(rawEncoderArgs[i])
   }
   return sanitizedArgs
+}
+
+function buildGpuHeavyPreTranscodeArgs(rawEncoderArgs: string[]): string[] {
+  const normalizedArgs: string[] = []
+  for (let i = 0; i < rawEncoderArgs.length; i++) {
+    if (rawEncoderArgs[i] === '-hwaccel') {
+      i++
+      continue
+    }
+    if (rawEncoderArgs[i] === '-vsync' && rawEncoderArgs[i + 1] === '2') {
+      normalizedArgs.push('-vsync', 'cfr')
+      i++
+      continue
+    }
+    normalizedArgs.push(rawEncoderArgs[i])
+  }
+  return normalizedArgs
 }
 
 function cleanupPreTranscodeOutput(outputFile: string): void {
@@ -1329,6 +1463,8 @@ async function preTranscodeClips(opts: PreTranscodeClipsOptions): Promise<string
     clips,
     tempDir,
     vfFilter,
+    gpuHybridVfFilter,
+    preTranscodeMode = 'software',
     useGpuEncoding,
     requestId,
     onProgress,
@@ -1359,13 +1495,16 @@ async function preTranscodeClips(opts: PreTranscodeClipsOptions): Promise<string
   }
 
   const primaryEncoder = await buildVideoEncoderArgsWithChoice(true, effectiveEncoderChoice, 'fast')
-  const primaryArgs = sanitizePreTranscodeEncoderArgs(primaryEncoder.args)
+  const gpuHeavyRequested = preTranscodeMode === 'gpu_heavy' && primaryEncoder.usedEncoder === 'gpu'
+  const primaryArgs = gpuHeavyRequested
+    ? buildGpuHeavyPreTranscodeArgs(primaryEncoder.args)
+    : sanitizePreTranscodeEncoderArgs(primaryEncoder.args)
   const cpuFallback = primaryEncoder.usedEncoder === 'gpu'
     ? await buildVideoEncoderArgsWithChoice(true, 'cpu', 'fast')
     : null
   const cpuFallbackArgs = cpuFallback
     ? sanitizePreTranscodeEncoderArgs(cpuFallback.args)
-    : primaryArgs
+    : sanitizePreTranscodeEncoderArgs(primaryEncoder.args)
   const gpuFfmpegPath =
     primaryEncoder.usedEncoder === 'gpu' && primaryEncoder.gpuInfo?.ffmpegPath
       ? getFfmpegExecutable(primaryEncoder.gpuInfo.ffmpegPath)
@@ -1376,12 +1515,19 @@ async function preTranscodeClips(opts: PreTranscodeClipsOptions): Promise<string
     console.log(
       `[PreTranscode] Using ${(primaryEncoder.gpuInfo as any).encoder?.toUpperCase()} encoder (${(primaryEncoder.gpuInfo as any).name || 'GPU'})`
     )
+    console.log(
+      `[PreTranscode] Mode: ${gpuHeavyRequested ? 'gpu_heavy hybrid CUDA normalize' : 'software normalize (GPU encode only)'}`
+    )
   } else {
     console.log('[PreTranscode] Using CPU encoder (libx264)')
+    console.log('[PreTranscode] Mode: software normalize (CPU only)')
   }
 
   console.log(`[PreTranscode] Starting pre-transcode of ${clips.length} candidate clips to uniform format...`)
   console.log(`[PreTranscode] vf filter: ${vfFilter}`)
+  if (gpuHeavyRequested && gpuHybridVfFilter) {
+    console.log(`[PreTranscode] hybrid CUDA filter: ${gpuHybridVfFilter}`)
+  }
 
   const isCancelRequested = (childRequestId?: string): boolean => {
     return videoJobManager.isCancelled(requestId) || (!!childRequestId && videoJobManager.isCancelled(childRequestId))
@@ -1402,6 +1548,8 @@ async function preTranscodeClips(opts: PreTranscodeClipsOptions): Promise<string
       const safeResolve = () => { if (!settled) { settled = true; resolve() } }
       const safeReject = (err: Error) => { if (!settled) { settled = true; reject(err) } }
 
+      const selectedVfFilter =
+        mode === 'gpu' && gpuHeavyRequested && gpuHybridVfFilter ? gpuHybridVfFilter : vfFilter
       const args =
         source.kind === 'file'
           ? [
@@ -1409,7 +1557,7 @@ async function preTranscodeClips(opts: PreTranscodeClipsOptions): Promise<string
               '-y',
               '-fflags', '+genpts+igndts+discardcorrupt',
               '-i', source.path,
-              '-vf', vfFilter,
+              '-vf', selectedVfFilter,
               ...encoderArgs,
               '-map', '0:v:0',
               '-an',
@@ -1423,7 +1571,7 @@ async function preTranscodeClips(opts: PreTranscodeClipsOptions): Promise<string
               '-f', 'lavfi',
               '-i', source.spec,
               '-t', source.durationSec.toFixed(3),
-              '-vf', vfFilter,
+              '-vf', selectedVfFilter,
               ...encoderArgs,
               '-map', '0:v:0',
               '-an',
@@ -1587,7 +1735,7 @@ async function preTranscodeClips(opts: PreTranscodeClipsOptions): Promise<string
 
       if (primaryMode === 'gpu') {
         console.warn(
-          `[PreTranscode] GPU failed for clip ${i + 1}/${clips.length} (${path.basename(clip.path)}). Retrying on CPU.\n${primaryMessage}`
+          `[PreTranscode] GPU ${gpuHeavyRequested ? 'hybrid normalize ' : ''}failed for clip ${i + 1}/${clips.length} (${path.basename(clip.path)}). Retrying on CPU software normalize.\n${primaryMessage}`
         )
         cleanupPreTranscodeOutput(outputFile)
         try {
@@ -1748,6 +1896,8 @@ interface RunFinalCommandOptions {
   emitProgress: (payload: FinalExportProgressPayload) => void
   useGpuEncoding?: 'gpu' | 'cpu' | 'auto' // GPU encoding choice
   normalizeVfFilter?: string | null // vf filter for resolution/FPS normalization
+  gpuHybridNormalizeVfFilter?: string | null
+  preTranscodeMode?: PreTranscodeMode
   failedVideoSourcePaths?: Set<string>
   reusableTranscodedClipCache?: Map<string, string>
 }
@@ -1766,6 +1916,8 @@ async function runFinalCommand(opts: RunFinalCommandOptions): Promise<void> {
     emitProgress,
     useGpuEncoding,
     normalizeVfFilter,
+    gpuHybridNormalizeVfFilter,
+    preTranscodeMode,
     failedVideoSourcePaths,
     reusableTranscodedClipCache,
   } = opts
@@ -1789,7 +1941,11 @@ async function runFinalCommand(opts: RunFinalCommandOptions): Promise<void> {
   // ═══════════════════════════════════════════════════════════════
   if (normalizeVfFilter) {
     console.log('[FinalExport] *** 2-PASS MODE *** vf filter active → pre-transcode từng clip để tránh frame freeze')
-    await runFinalCommand_TwoPass(opts)
+    await runFinalCommand_TwoPass({
+      ...opts,
+      gpuHybridNormalizeVfFilter,
+      preTranscodeMode,
+    })
     return
   }
 
@@ -1866,6 +2022,8 @@ async function runFinalCommand_TwoPass(opts: RunFinalCommandOptions): Promise<vo
     emitProgress,
     useGpuEncoding,
     normalizeVfFilter,
+    gpuHybridNormalizeVfFilter,
+    preTranscodeMode = 'software',
     failedVideoSourcePaths,
     reusableTranscodedClipCache,
   } = opts
@@ -1889,6 +2047,9 @@ async function runFinalCommand_TwoPass(opts: RunFinalCommandOptions): Promise<vo
   try {
     // ──── PASS 1: Pre-transcode từng clip riêng lẻ ────
     console.log(`[FinalExport 2-Pass] === PASS 1: Pre-transcoding ${clips.length} clips ===`)
+    console.log(
+      `[FinalExport 2-Pass] Pass 1 normalize mode: ${preTranscodeMode === 'gpu_heavy' ? 'GPU-heavy hybrid CUDA' : 'software'}${gpuHybridNormalizeVfFilter ? '' : ' (no GPU hybrid filter available)'}`,
+    )
     emitProgress({
       requestId,
       stage: 'export',
@@ -1903,6 +2064,8 @@ async function runFinalCommand_TwoPass(opts: RunFinalCommandOptions): Promise<vo
         clips,
         tempDir,
         vfFilter: normalizeVfFilter!,
+        gpuHybridVfFilter: gpuHybridNormalizeVfFilter,
+        preTranscodeMode,
         useGpuEncoding: useGpuEncoding || 'auto',
         requestId,
         minimumDurationSec: totalDurationSec,
@@ -2119,6 +2282,9 @@ async function runFinalCommand_TwoPass(opts: RunFinalCommandOptions): Promise<vo
         if (!retriedMissingPass2Inputs && error?.missingPass2Inputs) {
           retriedMissingPass2Inputs = true
           console.warn('[FinalExport 2-Pass] Pass 2 lost one or more temp inputs during runtime. Rebuilding Pass 1 and retrying Pass 2 once...')
+          // FIX M-04: Clean up partial/corrupt output file before retrying.
+          // Pass 2 may have written a partial output before failing.
+          try { await fsp.rm(outputPath, { force: true }) } catch {}
           for (const outputFile of Array.from(new Set(transcodedPaths))) {
             cleanupPreTranscodeOutput(outputFile)
           }
@@ -2407,6 +2573,23 @@ async function cleanupTempDir(dir: string | null): Promise<void> {
   if (!dir) return
   try {
     await fsp.rm(dir, { recursive: true, force: true })
+
+    // FIX H-03: Clean up parent .93media-temp directory if it's now empty.
+    // When using same-drive scratch, the structure is:
+    //   outputDir/.93media-temp/final-export-<uuid>/
+    // After removing the uuid dir, the .93media-temp parent may be empty → clean it up.
+    const parent = path.dirname(dir)
+    if (path.basename(parent) === '.93media-temp') {
+      try {
+        const remaining = await fsp.readdir(parent)
+        if (remaining.length === 0) {
+          await fsp.rmdir(parent)
+          console.log('[FinalExport] Cleaned up empty .93media-temp parent directory')
+        }
+      } catch {
+        // Parent dir cleanup is best-effort — ignore errors
+      }
+    }
   } catch (error) {
     console.warn('[FinalExport] Không thể xoá thư mục tạm:', error)
   }
@@ -2469,6 +2652,20 @@ export async function exportFinalVideo(
       request.priorityVideoSource
     )
 
+    // FIX C-02: Disk space pre-check BEFORE spawning FFmpeg (manual export path).
+    // Autopilot has its own checks (ensureAudioDiskSpaceEstimate / ensureVideoDiskSpaceEstimate),
+    // but manual export via FinalExportTab was missing this entirely.
+    // Estimate: total video clip bytes + 500MB overhead for temp files + re-encoding.
+    const estimatedClipBytes = plan.videoClips.reduce(
+      (sum, v) => sum + (v.sizeBytes ?? 200 * 1024 * 1024), 0
+    )
+    const estimatedOutputBytes = estimatedClipBytes + plan.totalJobs * 500 * 1024 * 1024
+    await assertMinDiskSpace(
+      estimatedOutputBytes,
+      request.outputFolder,
+      `Xuất ${plan.totalJobs} video (Final Export)`
+    )
+
     // Emit initial progress
     emitter.progress({
       requestId,
@@ -2500,7 +2697,8 @@ export async function exportFinalVideo(
       !!request.deleteSourceFiles,
       !!request.unifyFormat,
       request.targetResolution,
-      request.targetFps
+      request.targetFps,
+      'software'
     )
   } catch (error: any) {
     console.error('[FinalExport] Lỗi export video hoàn chỉnh:', error)

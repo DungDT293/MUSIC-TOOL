@@ -24,6 +24,8 @@ vi.mock('../../../backend/utils/gpuDetection', () => ({
     reason: 'mock',
     ffmpegProfile: 'modern',
     ffmpegPath: '/mock/ffmpeg',
+    normalizeCudaAvailable: true,
+    normalizeCudaReason: 'NVENC hybrid normalize smoke test passed',
   })),
   buildVideoEncoderArgsWithChoice: vi.fn(async () => ({
     usedEncoder: 'gpu',
@@ -163,9 +165,11 @@ describe('runAutopilotHealthCheck', () => {
     expect(result.noticeLevel).toBe('info')
     expect(result.notice).toContain('passed via legacy profile')
     expect(result.notice).toContain('Auto da resolve sang Legacy GPU profile')
+    expect(result.notice).toContain('GPU-heavy hybrid CUDA')
     expect(result.resolvedGpuProfile).toBe('legacy')
     expect(result.resolvedGpuFfmpegPath).toBe('/mock/ffmpeg-legacy')
     expect(result.resolvedGpuEncoder).toBe('nvenc')
+    expect(result.gpuNormalizeMode).toBe('gpu_heavy')
   })
 
   it('keeps legacy hint when auto detection reports old-driver incompatibility without usable GPU', async () => {
@@ -205,7 +209,7 @@ describe('runAutopilotHealthCheck', () => {
     expect(result.ok).toBe(true)
     expect(result.recommendedUseGpuEncoding).toBe('cpu')
     expect(result.notice).toContain('GPU encoder not ready')
-    expect(result.notice).toContain('vao Settings > FFmpeg GPU va chon file ffmpeg.exe cua bo legacy')
+    expect(result.notice).toContain('Hay thu chuyen GPU FFmpeg profile sang Legacy')
   })
 
   it('still fails when GPU is mandatory and auto cannot resolve to a usable profile', async () => {
@@ -244,5 +248,50 @@ describe('runAutopilotHealthCheck', () => {
     expect(result.ok).toBe(false)
     expect(result.error).toContain('GPU encoder was requested but no usable GPU encoder was detected')
     expect(result.error).toContain('khong duoc phep roi ve CPU')
+  })
+
+  it('downgrades normalize mode to software when hybrid CUDA normalize probe fails', async () => {
+    vi.mocked(getGpuInfo).mockResolvedValueOnce({
+      available: true,
+      encoder: 'nvenc',
+      name: 'Mock GPU',
+      reason: 'mock',
+      ffmpegProfile: 'modern',
+      ffmpegPath: '/mock/ffmpeg',
+      normalizeCudaAvailable: false,
+      normalizeCudaReason: 'No such filter: scale_cuda',
+    } as any)
+
+    const result = await runAutopilotHealthCheck({
+      dayPlans: [
+        {
+          id: 'day-1',
+          dateCode: '1004',
+          playlistCount: 1,
+          minutesPerPlaylist: 60,
+          presetId: 'tomorrowland',
+          overrides: {
+            unifyVideoFormat: true,
+            targetResolution: '1920x1080',
+            targetFps: '30',
+          },
+        },
+      ],
+      folders: {
+        rootAudio: 'E:\\audio',
+        rootVideo: 'E:\\video',
+        rootFinal: 'E:\\final',
+        autoCreateDailySubfolder: true,
+      },
+      runtimeOverrides: {
+        finalExportUseGpuEncoding: 'auto',
+      },
+    })
+
+    expect(result.ok).toBe(true)
+    expect(result.recommendedUseGpuEncoding).toBe('gpu')
+    expect(result.gpuNormalizeMode).toBe('software')
+    expect(result.gpuNormalizeReason).toContain('No such filter: scale_cuda')
+    expect(result.notice).toContain('software fallback')
   })
 })

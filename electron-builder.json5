@@ -20,6 +20,10 @@
       filter: ['**/*'],
     },
     {
+      from: 'resources/bin/ffmpeg.exe',
+      to: 'bin/ffmpeg-legacy.exe',
+    },
+    {
       from: 'security',
       to: 'security',
       filter: ['license_public_key.pem'],

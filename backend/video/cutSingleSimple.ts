@@ -410,7 +410,11 @@ export async function cutVideoIntoSegmentsSimple(
 
     // File-count progress tracker: đếm số file output đã tạo để cập nhật currentSegment chính xác
     // Cần thiết vì FFmpeg -f segment -c copy xuất file rất nhanh nhưng stderr time= rất thưa
-    const partPattern = new RegExp(`^${basename.replace(/[.*+?^${}()|[\]\\\\]/g, '\\\\$&')}_part_\\d+\\.${format.replace('.', '\\\\.')}$`)
+    // FIX M5: Use correctly-escaped regex — identical to the final listing pattern (line 630).
+    // Previously this used double-escaped '\\\\$&' which produced literal backslashes in the
+    // regex, causing filenames with regex-special characters (e.g., parentheses, brackets)
+    // to fail matching and show 0% progress throughout the entire cut.
+    const partPattern = new RegExp(`^${basename.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}_part_\\d+\\.${format.replace('.', '\\.')}$`)
     let lastFileCount = 0
     const fileCountInterval = setInterval(() => {
       try {

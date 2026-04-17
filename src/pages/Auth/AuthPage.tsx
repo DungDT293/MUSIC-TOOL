@@ -143,6 +143,8 @@ const AuthPage: React.FC<AuthPageProps> = ({ onLoggedIn }) => {
   }, [viewMode, authState?.status, authState?.username])
 
   const handleRegister = async () => {
+    // FIX M-01: Prevent duplicate IPC calls on spam-click (React batching race)
+    if (loading) return
     if (!regUsername || !regPassword) {
       setError('Vui lòng nhập đầy đủ tài khoản và mật khẩu.')
       return
@@ -352,6 +354,8 @@ const AuthPage: React.FC<AuthPageProps> = ({ onLoggedIn }) => {
   }
 
   const handleLogin = async () => {
+    // FIX M-01: Prevent duplicate IPC calls on spam-click (React batching race)
+    if (loading) return
     if (!loginUsername || !loginPassword) {
       setError('Vui lòng nhập tài khoản và mật khẩu.')
       return
@@ -627,7 +631,10 @@ const AuthPage: React.FC<AuthPageProps> = ({ onLoggedIn }) => {
                     onChange={async (e) => {
                       setRegPassword(e.target.value)
                       if (e.target.value) {
-                        const { validatePasswordStrength } = await import('../../../backend/auth/passwordValidator')
+                        // FIX M3: Import from shared/ (not backend/) — renderer must NEVER import backend modules.
+                        // backend/auth/passwordValidator is a Node.js module that may use crypto, fs, etc.
+                        // shared/passwordValidator is the isomorphic version safe for both renderer and backend.
+                        const { validatePasswordStrength } = await import('../../../shared/passwordValidator')
                         setPasswordValidation(validatePasswordStrength(e.target.value))
                       } else {
                         setPasswordValidation(null)

@@ -219,3 +219,80 @@ export function createDiskSpaceErrorMessage(
 
   return parts.join('\n')
 }
+
+// ═══════════════════════════════════════════════════════════════
+// FIX C-02: Shared assertMinDiskSpace — fail-fast before spawning FFmpeg.
+// Used by both autopilot AND manual export paths.
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Assert that `targetDir` has at least `requiredBytes` free space.
+ * Throws a descriptive error (with drive letter, free vs required) if insufficient.
+ *
+ * @param requiredBytes  Estimated bytes needed (caller should add a safety margin)
+ * @param targetDir      The directory to check (used to determine drive)
+ * @param label          Human-readable operation label for the error message
+ * @param marginPercent  Extra safety margin on top of requiredBytes (default 15%)
+ */
+export async function assertMinDiskSpace(
+  requiredBytes: number,
+  targetDir: string,
+  label: string = 'Export',
+  marginPercent: number = 15,
+): Promise<void> {
+  const info = await getDiskSpace(targetDir)
+  const withMargin = Math.round(requiredBytes * (1 + marginPercent / 100))
+
+  if (info.free < withMargin) {
+    throw new Error(
+      createDiskSpaceErrorMessage(info, {
+        freeBytes: info.free,
+        requiredBytes: withMargin,
+        enough: false,
+      }, {
+        operation: label,
+        additionalInfo: `Hãy dọn dung lượng ổ ${info.drive} trước khi tiếp tục.`,
+      })
+    )
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// FIX C-02: ENOSPC / disk-full error classifier.
+// FFmpeg and Node.js emit various error patterns when the disk fills up.
+// This centralizes detection so callers can react appropriately.
+// ═══════════════════════════════════════════════════════════════
+
+/** Patterns indicating disk-full in FFmpeg stderr or Node.js error messages */
+const ENOSPC_PATTERNS = [
+  'no space left on device',      // Linux / POSIX
+  'enospc',                       // Node.js error code
+  'not enough space',             // Windows (English)
+  'không đủ dung lượng',          // Vietnamese
+  'disk full',                    // Generic
+  'there is not enough space',    // Windows (long form)
+  'error number 28',              // errno 28 = ENOSPC on Linux
+]
+
+/**
+ * Check if an error (from FFmpeg stderr, Node.js error, or generic string)
+ * indicates the disk is full (ENOSPC).
+ */
+export function isEnospcError(error: unknown): boolean {
+  // Check Node.js error code directly
+  if (error && typeof error === 'object') {
+    const err = error as Record<string, unknown>
+    if (err.code === 'ENOSPC') return true
+    // errno 28 = ENOSPC on POSIX
+    if (err.errno === -28 || err.errno === 28) return true
+  }
+
+  // Check string representation
+  const msg = typeof error === 'string'
+    ? error.toLowerCase()
+    : error instanceof Error
+      ? (error.message + ' ' + (error as any).stderr).toLowerCase()
+      : String(error).toLowerCase()
+
+  return ENOSPC_PATTERNS.some((pattern) => msg.includes(pattern))
+}

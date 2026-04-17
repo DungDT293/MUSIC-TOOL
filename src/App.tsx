@@ -1,5 +1,5 @@
 import { HashRouter } from 'react-router-dom'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import AppLayout from './AppLayout'
 import Router from './router'
 import ExportRunner from './features/song-nhac/export/ExportRunner'
@@ -7,6 +7,7 @@ import type { LicenseState, AuthState, VersionPolicy, VersionGateResult } from '
 import AuthPage from './pages/Auth/AuthPage'
 import { initAntiDebug, checkAntiDebug } from './security/antiDebug'
 import VersionBlockingScreen from './components/VersionBlockingScreen'
+import { useExportActivityStore } from './stores/exportActivityStore'
 
 // Anti-debugging (chỉ trong production)
 // FIX: Moved to useEffect with cleanup to prevent memory leak
@@ -27,16 +28,21 @@ function App() {
   const [currentVersion, setCurrentVersion] = useState<string>('')
   const [versionPolicy, setVersionPolicy] = useState<VersionPolicy | null>(null)
   
-  // FIX: Anti-debugging with cleanup (listeners + interval)
+  // FIX M-06: Anti-debugging with cleanup (listeners + interval).
+  // Only log once per detection period to avoid spamming console.
   useEffect(() => {
     if (!import.meta.env.PROD) return () => {} // Skip in dev mode
 
     const cleanupAntiDebug = initAntiDebug()
+    let lastLogged = false
     const interval = setInterval(() => {
       const detected = checkAntiDebug()
-      if (detected) {
+      if (detected && !lastLogged) {
         console.warn('[Security] Debugging detected')
+        lastLogged = true
         // Có thể thực hiện action: log, alert, exit, etc.
+      } else if (!detected) {
+        lastLogged = false // Reset khi không còn detect
       }
     }, 5000) // Check mỗi 5 giây
 
@@ -173,6 +179,40 @@ function App() {
     }
   }, [])
 
+  // FIX C-01/H-05: Safe auth denial — delay teardown if export is running
+  const safelyDenyAuth = useCallback((reason: string, type: 'auth-blocked' | 'license-denied') => {
+    const { hasActiveExport, setPendingDenial } = useExportActivityStore.getState()
+
+    if (hasActiveExport()) {
+      // Export đang chạy → KHÔNG unmount ngay. Queue denial và hiện warning banner.
+      console.warn(`[App] ${type} detected, but export is active. Delaying teardown.`)
+      setPendingDenial({ reason, type })
+      setBlockMessage(
+        `${reason} — Đang có export chạy. App sẽ đăng xuất sau khi export hoàn tất.`
+      )
+      return // Do NOT call setIsAuthenticated(false) yet
+    }
+
+    // No active export → immediate teardown (original behavior)
+    setBlockMessage(reason)
+    setIsAuthenticated(false)
+  }, [])
+
+  // FIX C-01/H-05: Watch for exports finishing while a denial is pending
+  const activeExports = useExportActivityStore((s) => s.activeExports)
+  const pendingDenial = useExportActivityStore((s) => s.pendingDenial)
+
+  useEffect(() => {
+    if (!pendingDenial) return
+    if (activeExports.length > 0) return // Still exporting — keep waiting
+
+    // All exports finished → now safe to tear down
+    console.warn(`[App] Pending ${pendingDenial.type} — exports finished. Tearing down now.`)
+    setBlockMessage(pendingDenial.reason)
+    setIsAuthenticated(false)
+    useExportActivityStore.getState().clearPendingDenial()
+  }, [activeExports.length, pendingDenial])
+
   // Tự động kiểm tra lại trạng thái tài khoản trong khi đang sử dụng tool.
   useEffect(() => {
     if (!isAuthenticated) return
@@ -185,10 +225,11 @@ function App() {
         const next: AuthState = await window.api.auth.refresh()
         if (cancelled) return
         if (next.status === 'blocked') {
-          // Nếu tài khoản / máy bị chặn từ xa → tự logout về màn hình đăng ký / đăng nhập
-          // MED-03 fix: replace alert() with inline banner message
-          setBlockMessage('Tài khoản hoặc máy này đã bị admin chặn quyền sử dụng. Bạn sẽ được đưa về màn hình đăng ký.')
-          setIsAuthenticated(false)
+          // FIX C-01: Use safelyDenyAuth instead of immediate teardown
+          safelyDenyAuth(
+            'Tài khoản hoặc máy này đã bị admin chặn quyền sử dụng. Bạn sẽ được đưa về màn hình đăng ký.',
+            'auth-blocked'
+          )
         }
         // Kiểm tra có bản mới không
         if (next.latestVersion && next.downloadUrl) {
@@ -211,7 +252,7 @@ function App() {
       cancelled = true
       if (timer) clearTimeout(timer)
     }
-  }, [isAuthenticated])
+  }, [isAuthenticated, safelyDenyAuth])
 
   // Tạm thời vẫn giữ logic load license (phục vụ future), nhưng KHÔNG chặn giao diện đăng ký / đăng nhập.
   useEffect(() => {
@@ -309,92 +350,22 @@ function App() {
     )
   }
 
-  try {
-    // Bước 1: chờ đọc trạng thái đăng nhập từ persistent storage
-    if (isAuthenticated === null) {
-      return (
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            minHeight: '100vh',
-            backgroundColor: '#111827',
-            color: '#f9fafb',
-            fontFamily: '"Segoe UI", sans-serif',
-          }}
-        >
-          <div>Đang khởi tạo...</div>
-        </div>
-      )
-    }
+  // FIX M1: Removed useless try/catch wrapper. React child component errors are NOT caught
+  // by try/catch in the render body — they bypass it entirely. The ErrorBoundary in main.tsx
+  // already wraps <App> and properly catches React rendering errors via getDerivedStateFromError.
+  // The old try/catch only caught synchronous errors in THIS function's own code, giving
+  // a false sense of safety while child component crashes still caused a white screen.
 
-    // Bước 2: nếu chưa authenticated → vào thẳng trang ĐĂNG KÝ / ĐĂNG NHẬP tài khoản
-    if (!isAuthenticated) {
-      return (
-        <>
-          {blockMessage && (
-            <div style={{
-              background: '#ef4444',
-              color: '#ffffff',
-              padding: '12px 20px',
-              textAlign: 'center',
-              fontWeight: 600,
-              fontSize: 14,
-              position: 'fixed',
-              top: 0,
-              left: 0,
-              right: 0,
-              zIndex: 9999,
-            }}>
-              {blockMessage}
-              <button
-                onClick={() => setBlockMessage(null)}
-                style={{ marginLeft: 12, background: 'transparent', border: '1px solid #fff', color: '#fff', borderRadius: 4, padding: '2px 8px', cursor: 'pointer' }}
-              >
-                ✕
-              </button>
-            </div>
-          )}
-          <AuthPage
-            onLoggedIn={() => {
-              setBlockMessage(null)
-              setIsAuthenticated(true)
-            }}
-          />
-        </>
-      )
-    }
+  // FIX M2: Version gate check MUST happen BEFORE auth check.
+  // Previously: auth check → version gate → app
+  // This allowed users on blocked/outdated versions to still see and use the login/register
+  // page, potentially submitting credentials on a version that should be fully blocked.
+  // Now: version gate → auth check → app
 
-    // Version gate check (Rule A/B) - show blocking screen
-    if (versionGateResult === 'block-old' || versionGateResult === 'block-version') {
-      if (!versionPolicy || !currentVersion) {
-        // Still loading policy/version
-        return (
-          <div style={{ width: '100vw', height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#0f172a', color: '#e2e8f0' }}>
-            <div>Đang kiểm tra phiên bản...</div>
-          </div>
-        )
-      }
-      
-      return (
-        <VersionBlockingScreen
-          rule={versionGateResult}
-          currentVersion={currentVersion}
-          policy={versionPolicy}
-          onUpdate={() => {
-            // Update check will be handled by updater
-          }}
-          onExit={() => {
-            window.close()
-          }}
-        />
-      )
-    }
-    
-    // Rule C: Allow app (or still checking)
-    if (versionGateResult !== 'allow') {
-      // Still checking version gate
+  // Bước 0 (FIX M2): Version gate — block BEFORE any auth UI is shown
+  if (versionGateResult === 'block-old' || versionGateResult === 'block-version') {
+    if (!versionPolicy || !currentVersion) {
+      // Still loading policy/version
       return (
         <div style={{ width: '100vw', height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#0f172a', color: '#e2e8f0' }}>
           <div>Đang kiểm tra phiên bản...</div>
@@ -402,88 +373,159 @@ function App() {
       )
     }
 
-    // Bước 3: đã authenticated → vào app chính
     return (
-      <HashRouter>
-        <AppLayout>
-          {licenseState?.status === 'offline' && (
-            <div
-              style={{
-                background: '#fbbf24',
-                color: '#1f2937',
-                padding: '8px 16px',
-                textAlign: 'center',
-                fontWeight: 600,
-              }}
-            >
-              Đang chạy ở chế độ offline (chưa kiểm tra được license). Hãy kết nối mạng để xác thực lại.
-            </div>
-          )}
-          {updateInfo && updateInfo.downloadUrl && (
-            <div
-              style={{
-                background: '#3b82f6',
-                color: '#ffffff',
-                padding: '12px 16px',
-                textAlign: 'center',
-                fontWeight: 600,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: '12px',
-              }}
-            >
-              <span>Đã có bản mới {updateInfo.latestVersion}. Vui lòng cập nhật để tiếp tục sử dụng.</span>
-              <a
-                href={updateInfo.downloadUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                style={{
-                  background: '#ffffff',
-                  color: '#3b82f6',
-                  padding: '6px 16px',
-                  borderRadius: '4px',
-                  textDecoration: 'none',
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                }}
-                onClick={(e) => {
-                  e.preventDefault()
-                  if (updateInfo.downloadUrl) {
-                    window.open(updateInfo.downloadUrl, '_blank')
-                  }
-                }}
-              >
-                Tải ngay
-              </a>
-            </div>
-          )}
-          {updateInfo && !updateInfo.downloadUrl && (
-            <div
-              style={{
-                background: '#f59e0b',
-                color: '#ffffff',
-                padding: '12px 16px',
-                textAlign: 'center',
-                fontWeight: 600,
-              }}
-            >
-              Đã có bản mới {updateInfo.latestVersion}. Vui lòng liên hệ admin để nhận bản cập nhật.
-            </div>
-          )}
-          <Router />
-        </AppLayout>
-      </HashRouter>
+      <VersionBlockingScreen
+        rule={versionGateResult}
+        currentVersion={currentVersion}
+        policy={versionPolicy}
+        onUpdate={() => {
+          // Update check will be handled by updater
+        }}
+        onExit={() => {
+          window.close()
+        }}
+      />
     )
-  } catch (error) {
-    console.error('[App] Render error:', error)
+  }
+
+  // Still checking version gate — wait before showing anything
+  if (versionGateResult !== 'allow') {
     return (
-      <div style={{ padding: '20px', color: 'red', fontFamily: 'monospace', backgroundColor: '#1e1e1e' }}>
-        <h1>Error rendering app</h1>
-        <pre>{error instanceof Error ? error.message : String(error)}</pre>
+      <div style={{ width: '100vw', height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#0f172a', color: '#e2e8f0' }}>
+        <div>Đang kiểm tra phiên bản...</div>
       </div>
     )
   }
+
+  // Bước 1: chờ đọc trạng thái đăng nhập từ persistent storage
+  if (isAuthenticated === null) {
+    return (
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          minHeight: '100vh',
+          backgroundColor: '#111827',
+          color: '#f9fafb',
+          fontFamily: '"Segoe UI", sans-serif',
+        }}
+      >
+        <div>Đang khởi tạo...</div>
+      </div>
+    )
+  }
+
+  // Bước 2: nếu chưa authenticated → vào thẳng trang ĐĂNG KÝ / ĐĂNG NHẬP tài khoản
+  if (!isAuthenticated) {
+    return (
+      <>
+        {blockMessage && (
+          <div style={{
+            background: '#ef4444',
+            color: '#ffffff',
+            padding: '12px 20px',
+            textAlign: 'center',
+            fontWeight: 600,
+            fontSize: 14,
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            zIndex: 9999,
+          }}>
+            {blockMessage}
+            <button
+              onClick={() => setBlockMessage(null)}
+              style={{ marginLeft: 12, background: 'transparent', border: '1px solid #fff', color: '#fff', borderRadius: 4, padding: '2px 8px', cursor: 'pointer' }}
+            >
+              ✕
+            </button>
+          </div>
+        )}
+        <AuthPage
+          onLoggedIn={() => {
+            setBlockMessage(null)
+            setIsAuthenticated(true)
+          }}
+        />
+      </>
+    )
+  }
+
+  // Bước 3: đã authenticated → vào app chính
+  return (
+    <HashRouter>
+      <AppLayout>
+        {licenseState?.status === 'offline' && (
+          <div
+            style={{
+              background: '#fbbf24',
+              color: '#1f2937',
+              padding: '8px 16px',
+              textAlign: 'center',
+              fontWeight: 600,
+            }}
+          >
+            Đang chạy ở chế độ offline (chưa kiểm tra được license). Hãy kết nối mạng để xác thực lại.
+          </div>
+        )}
+        {updateInfo && updateInfo.downloadUrl && (
+          <div
+            style={{
+              background: '#3b82f6',
+              color: '#ffffff',
+              padding: '12px 16px',
+              textAlign: 'center',
+              fontWeight: 600,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '12px',
+            }}
+          >
+            <span>Đã có bản mới {updateInfo.latestVersion}. Vui lòng cập nhật để tiếp tục sử dụng.</span>
+            <a
+              href={updateInfo.downloadUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                background: '#ffffff',
+                color: '#3b82f6',
+                padding: '6px 16px',
+                borderRadius: '4px',
+                textDecoration: 'none',
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+              onClick={(e) => {
+                e.preventDefault()
+                if (updateInfo.downloadUrl) {
+                  window.open(updateInfo.downloadUrl, '_blank')
+                }
+              }}
+            >
+              Tải ngay
+            </a>
+          </div>
+        )}
+        {updateInfo && !updateInfo.downloadUrl && (
+          <div
+            style={{
+              background: '#f59e0b',
+              color: '#ffffff',
+              padding: '12px 16px',
+              textAlign: 'center',
+              fontWeight: 600,
+            }}
+          >
+            Đã có bản mới {updateInfo.latestVersion}. Vui lòng liên hệ admin để nhận bản cập nhật.
+          </div>
+        )}
+        <Router />
+      </AppLayout>
+    </HashRouter>
+  )
 }
 
 export default App

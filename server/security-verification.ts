@@ -17,6 +17,19 @@ interface VerificationResult {
 const TIMESTAMP_TOLERANCE_MS = 5 * 60 * 1000 // 5 phút
 const NONCE_EXPIRY_MS = 10 * 60 * 1000 // 10 phút
 
+// FIX H3: In-memory nonce store as fallback when D1 is unavailable.
+// Without this, when env.DB is falsy, nonce checks are completely skipped,
+// allowing infinite replay attacks within the timestamp window.
+const inMemoryNonces = new Map<string, number>() // nonceKey → expiresAt
+const IN_MEMORY_NONCE_MAX_SIZE = 50_000 // prevent OOM on workers
+
+function inMemoryNonceCleanup(now: number) {
+  if (inMemoryNonces.size < IN_MEMORY_NONCE_MAX_SIZE / 2) return
+  for (const [key, expiresAt] of inMemoryNonces) {
+    if (expiresAt < now) inMemoryNonces.delete(key)
+  }
+}
+
 /**
  * Derive signing key từ machineId (giống client)
  * Sử dụng Web Crypto API cho Cloudflare Workers
@@ -118,9 +131,9 @@ export async function verifyRequestSignature(
       return { valid: false, error: `Request timestamp too old/new: ${age}ms` }
     }
 
-    // 4. Check nonce reuse (chống replay) - chỉ nếu có DB
+    // 4. Check nonce reuse (chống replay) — FIX H3: ALWAYS enforce, DB or in-memory fallback
+    const nonceKey = `${machineId}:${nonce}:${timestampNum}`
     if (env.DB) {
-      const nonceKey = `${machineId}:${nonce}:${timestampNum}`
       const usedNonce = await env.DB.prepare(
         'SELECT 1 FROM used_nonces WHERE nonce_key = ? AND expires_at > ?'
       )
@@ -129,6 +142,13 @@ export async function verifyRequestSignature(
 
       if (usedNonce) {
         return { valid: false, error: 'Nonce already used (replay attack)' }
+      }
+    } else {
+      // FIX H3: In-memory fallback — nonces are still checked even without D1
+      inMemoryNonceCleanup(now)
+      const existingExpiry = inMemoryNonces.get(nonceKey)
+      if (existingExpiry !== undefined && existingExpiry > now) {
+        return { valid: false, error: 'Nonce already used (replay attack — in-memory check)' }
       }
     }
 
@@ -145,14 +165,19 @@ export async function verifyRequestSignature(
       return { valid: false, error: 'Invalid signature' }
     }
 
-    // 6. Mark nonce as used (chỉ nếu có DB)
+    // 6. Mark nonce as used — FIX H3: ALWAYS record, DB or in-memory fallback
     if (env.DB) {
-      const nonceKey = `${machineId}:${nonce}:${timestampNum}`
       await env.DB.prepare(
         'INSERT INTO used_nonces (nonce_key, machine_id, expires_at) VALUES (?, ?, ?)'
       )
         .bind(nonceKey, machineId, now + NONCE_EXPIRY_MS)
         .run()
+    } else {
+      // FIX H3: In-memory fallback — enforce size limit to prevent OOM
+      if (inMemoryNonces.size >= IN_MEMORY_NONCE_MAX_SIZE) {
+        inMemoryNonceCleanup(now)
+      }
+      inMemoryNonces.set(nonceKey, now + NONCE_EXPIRY_MS)
     }
 
     return { valid: true }

@@ -99,6 +99,28 @@ const HISTORY_LIMIT = 50
 
 const PASTE_OFFSET = 30
 
+/** FIX H-03: Layer count limits to prevent GPU exhaustion. */
+export const MAX_LAYERS = 20
+export const MAX_VISUALIZER_LAYERS = 5
+
+/** Check if adding N layers (of optional type) would exceed limits. Returns error string or null. */
+function checkLayerLimit(
+  currentLayers: SongNhacLayer[],
+  addCount: number,
+  type?: SongNhacLayer['type'],
+): string | null {
+  if (currentLayers.length + addCount > MAX_LAYERS) {
+    return `Đã đạt giới hạn ${MAX_LAYERS} layer. Hãy xóa bớt layer trước khi thêm mới.`
+  }
+  if (type === 'visualizer') {
+    const currentVizCount = currentLayers.filter((l) => l.type === 'visualizer').length
+    if (currentVizCount + addCount > MAX_VISUALIZER_LAYERS) {
+      return `Tối đa ${MAX_VISUALIZER_LAYERS} layer sóng nhạc (visualizer) để tránh giật lag GPU.`
+    }
+  }
+  return null
+}
+
 export const useSongNhacLayerStore = create<SongNhacLayerState>((set, get) => ({
   layers: [],
   selectedLayerId: null,
@@ -114,7 +136,12 @@ export const useSongNhacLayerStore = create<SongNhacLayerState>((set, get) => ({
   /** Áp dụng layers từ template (push history trước). */
   applyTemplateLayers: (layers: SongNhacLayer[]) => {
     get().pushHistorySnapshot(get().layers)
-    set({ layers, selectedLayerId: null })
+    // FIX M-05: Enforce layer limit when loading templates
+    const capped = layers.length > MAX_LAYERS ? layers.slice(0, MAX_LAYERS) : layers
+    if (capped.length < layers.length) {
+      console.warn(`[LayerStore] Template có ${layers.length} layers, giới hạn ${MAX_LAYERS}. Đã cắt bớt.`)
+    }
+    set({ layers: capped, selectedLayerId: null })
   },
 
   setSelectedLayerId: (id) =>
@@ -235,6 +262,8 @@ export const useSongNhacLayerStore = create<SongNhacLayerState>((set, get) => ({
   canRedo: () => get().historyFuture.length > 0,
 
   addImageLayer: (name, src) => {
+    const err = checkLayerLimit(get().layers, 1, 'image')
+    if (err) { console.warn('[LayerStore]', err); return '' }
     get().pushHistorySnapshot(get().layers)
     const id = nextId('img')
     const layer: SongNhacImageLayer = {
@@ -251,6 +280,8 @@ export const useSongNhacLayerStore = create<SongNhacLayerState>((set, get) => ({
   },
 
   addTextLayer: (name, text) => {
+    const err = checkLayerLimit(get().layers, 1, 'text')
+    if (err) { console.warn('[LayerStore]', err); return '' }
     get().pushHistorySnapshot(get().layers)
     const id = nextId('txt')
     const layer: SongNhacTextLayer = {
@@ -268,6 +299,8 @@ export const useSongNhacLayerStore = create<SongNhacLayerState>((set, get) => ({
   },
 
   addVisualizerLayer: (name, waveStyle) => {
+    const err = checkLayerLimit(get().layers, 1, 'visualizer')
+    if (err) { console.warn('[LayerStore]', err); return '' }
     get().pushHistorySnapshot(get().layers)
     const id = nextId('viz')
     const layer: SongNhacVisualizerLayer = {
@@ -283,6 +316,8 @@ export const useSongNhacLayerStore = create<SongNhacLayerState>((set, get) => ({
   },
 
   addVideoLayer: (name, src) => {
+    const err = checkLayerLimit(get().layers, 1, 'video')
+    if (err) { console.warn('[LayerStore]', err); return '' }
     get().pushHistorySnapshot(get().layers)
     const id = nextId('vid')
     const layer: SongNhacVideoLayer = {
@@ -300,6 +335,8 @@ export const useSongNhacLayerStore = create<SongNhacLayerState>((set, get) => ({
   },
 
   addLogoLayer: (src) => {
+    const err = checkLayerLimit(get().layers, 1, 'image')
+    if (err) { console.warn('[LayerStore]', err); return '' }
     get().pushHistorySnapshot(get().layers)
     const id = nextId('logo')
     const layer: SongNhacImageLayer = {
@@ -324,6 +361,8 @@ export const useSongNhacLayerStore = create<SongNhacLayerState>((set, get) => ({
   },
 
   addIntroLayer: (durationSec = 5) => {
+    const err = checkLayerLimit(get().layers, 1, 'image')
+    if (err) { console.warn('[LayerStore]', err); return '' }
     get().pushHistorySnapshot(get().layers)
     const id = nextId('intro')
     const layer: SongNhacImageLayer = {
@@ -345,6 +384,8 @@ export const useSongNhacLayerStore = create<SongNhacLayerState>((set, get) => ({
   },
 
   addOutroLayer: (totalDurationSec, durationSec = 5) => {
+    const err = checkLayerLimit(get().layers, 1, 'image')
+    if (err) { console.warn('[LayerStore]', err); return '' }
     get().pushHistorySnapshot(get().layers)
     const id = nextId('outro')
     const startSec = Math.max(0, totalDurationSec - durationSec)
@@ -422,6 +463,8 @@ export const useSongNhacLayerStore = create<SongNhacLayerState>((set, get) => ({
   duplicateLayer: (id) => {
     const layer = get().getLayer(id)
     if (!layer || layer.type === 'group') return null
+    const err = checkLayerLimit(get().layers, 1, layer.type)
+    if (err) { console.warn('[LayerStore]', err); return null }
     get().pushHistorySnapshot(get().layers)
     const prefixMap: Record<string, string> = { image: 'img', text: 'txt', visualizer: 'viz', video: 'vid' }
     const newId = nextId(prefixMap[layer.type] ?? layer.type)
@@ -456,9 +499,13 @@ export const useSongNhacLayerStore = create<SongNhacLayerState>((set, get) => ({
   pasteLayers: () => {
     const { clipboard, layers } = get()
     if (clipboard.length === 0) return null
+    // FIX H-03: Enforce total layer limit on paste
+    const allowed = MAX_LAYERS - layers.length
+    if (allowed <= 0) { console.warn('[LayerStore] Đã đạt giới hạn layer, không thể paste.'); return null }
+    const toPaste = clipboard.slice(0, allowed)
     get().pushHistorySnapshot(layers)
     const prefixMap: Record<string, string> = { image: 'img', text: 'txt', visualizer: 'viz', video: 'vid' }
-    const newLayers: SongNhacLayer[] = clipboard.map((l) => {
+    const newLayers: SongNhacLayer[] = toPaste.map((l) => {
       const newId = nextId(prefixMap[l.type] ?? l.type)
       const t = l.transform ? { ...l.transform } : { ...DEFAULT_TRANSFORM }
       t.x += PASTE_OFFSET
@@ -474,11 +521,15 @@ export const useSongNhacLayerStore = create<SongNhacLayerState>((set, get) => ({
   duplicateSelectedLayers: () => {
     const { selectedIds, layers } = get()
     if (selectedIds.length === 0) return
+    // FIX H-03: Enforce total layer limit on duplicate
+    const allowed = MAX_LAYERS - layers.length
+    if (allowed <= 0) { console.warn('[LayerStore] Đã đạt giới hạn layer, không thể duplicate.'); return }
     get().pushHistorySnapshot(layers)
     const prefixMap: Record<string, string> = { image: 'img', text: 'txt', visualizer: 'viz', video: 'vid' }
     const toDup = selectedIds
       .map((id) => layers.find((l) => l.id === id))
       .filter((l): l is SongNhacLayer => !!l && l.type !== 'group')
+      .slice(0, allowed)
     const newLayers: SongNhacLayer[] = []
     for (const layer of toDup) {
       const newId = nextId(prefixMap[layer.type] ?? layer.type)

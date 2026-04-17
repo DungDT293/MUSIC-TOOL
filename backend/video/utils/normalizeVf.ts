@@ -37,6 +37,37 @@ export const FPS_OPTIONS = [
   { label: '60.00 fps (Gaming / HFR)', value: '60' },
 ] as const
 
+interface NormalizeTargetSpec {
+  evenW: number
+  evenH: number
+  safeFps: string
+}
+
+function resolveNormalizeTargetSpec(resolution: string, fps: string): NormalizeTargetSpec {
+  const FPS_ALLOWLIST = new Set<string>(FPS_OPTIONS.map((o) => o.value))
+  const safeFps = FPS_ALLOWLIST.has(fps) ? fps : '30'
+
+  const [wStr, hStr] = resolution.split('x')
+  const w = parseInt(wStr, 10)
+  const h = parseInt(hStr, 10)
+  const evenW = Math.floor(w / 2) * 2
+  const evenH = Math.floor(h / 2) * 2
+
+  if (!Number.isFinite(w) || !Number.isFinite(h) || evenW < 2 || evenH < 2) {
+    return {
+      evenW: 0,
+      evenH: 0,
+      safeFps,
+    }
+  }
+
+  return {
+    evenW,
+    evenH,
+    safeFps,
+  }
+}
+
 /**
  * Build FFmpeg -vf filter để chuẩn hóa resolution + aspect ratio + FPS.
  *
@@ -51,41 +82,59 @@ export const FPS_OPTIONS = [
  * @returns FFmpeg -vf filter string
  */
 export function buildNormalizeVfFilter(resolution: string, fps: string): string {
-  // Sanitize fps: chỉ cho phép giá trị từ FPS_OPTIONS (hoặc dạng số/phân số hợp lệ)
-  // Phòng injection: fps được nội suy trực tiếp vào FFmpeg filter string,
-  // nên chuỗi như "30,drawtext=text=hacked" sẽ inject filter tùy ý.
-  const FPS_ALLOWLIST = new Set<string>(FPS_OPTIONS.map((o) => o.value))
-  const safeFps = FPS_ALLOWLIST.has(fps) ? fps : '30'
+  const { evenW, evenH, safeFps } = resolveNormalizeTargetSpec(resolution, fps)
 
-  const [wStr, hStr] = resolution.split('x')
-  const w = parseInt(wStr, 10)
-  const h = parseInt(hStr, 10)
-
-  // Đảm bảo w, h chẵn (bắt buộc cho libx264/h264_nvenc)
-  // Tính trong TypeScript thay vì dùng trunc(ow/2)*2 trong FFmpeg (gây self-reference error)
-  const evenW = Math.floor(w / 2) * 2
-  const evenH = Math.floor(h / 2) * 2
-
-  // Fallback nếu parse không thành công hoặc kích thước quá nhỏ/âm
-  // Cần evenW >= 2 && evenH >= 2
-  if (!Number.isFinite(w) || !Number.isFinite(h) || evenW < 2 || evenH < 2) {
+  if (evenW < 2 || evenH < 2) {
     return `scale=trunc(iw/2)*2:trunc(ih/2)*2,setsar=1,fps=${safeFps},format=yuv420p`
   }
 
-  // scale: giữ tỉ lệ gốc, fit vào WxH (không cắt), dùng lanczos cho chất lượng cao
-  // Dùng evenW/evenH đã tính sẵn — tránh scale lần 2 với ow/oh tự tham chiếu
   const scaleFilter = `scale=${evenW}:${evenH}:force_original_aspect_ratio=decrease:flags=lanczos`
-  // pad: thêm dải đen để đủ kích thước target (letterbox/pillarbox), căn giữa
-  // Dùng evenW:evenH thay vì ow:oh để đảm bảo kích thước chẵn
   const padFilter = `pad=${evenW}:${evenH}:(ow-iw)/2:(oh-ih)/2:black`
-  // setsar=1: đảm bảo pixel aspect ratio = 1:1 (quan trọng cho compatibility)
   const sarFilter = `setsar=1`
-  // fps: chuẩn hóa frame rate (dùng safeFps đã sanitize)
   const fpsFilter = `fps=${safeFps}`
-
-  // format=yuv420p: đảm bảo pixel format tương thích mọi encoder (GPU & CPU)
-  // Phải đặt SAU fps filter để tránh color space mismatch
   const formatFilter = `format=yuv420p`
 
   return `${scaleFilter},${padFilter},${sarFilter},${fpsFilter},${formatFilter}`
+}
+
+/**
+ * Build hybrid CUDA normalize filter cho Pass 1 của Final Export.
+ *
+ * Mục tiêu của path này là offload phần scale nặng sang GPU bằng scale_cuda,
+ * sau đó hwdownload về CPU để pad/fps/format vẫn đi theo path an toàn hiện có.
+ *
+ * Điều này KHÔNG phải full-GPU filter graph — pad/fps vẫn chạy trên CPU để giữ
+ * tính tương thích và giảm nguy cơ crash so với việc trộn hwaccel decode + filter.
+ */
+export function buildNormalizeCudaHybridVfFilter(resolution: string, fps: string): string {
+  const { evenW, evenH, safeFps } = resolveNormalizeTargetSpec(resolution, fps)
+
+  if (evenW < 2 || evenH < 2) {
+    return [
+      'format=nv12',
+      'hwupload_cuda',
+      "scale_cuda=w='trunc(iw/2)*2':h='trunc(ih/2)*2'",
+      'hwdownload',
+      'format=nv12',
+      'setsar=1',
+      `fps=${safeFps}`,
+      'format=yuv420p',
+    ].join(',')
+  }
+
+  const targetAspectExpr = `${evenW}/${evenH}`
+  const scaleWidthExpr = `if(gte(iw/ih,${targetAspectExpr}),${evenW},trunc(${evenH}*(iw/ih)/2)*2)`
+  const scaleHeightExpr = `if(gte(iw/ih,${targetAspectExpr}),trunc(${evenW}/(iw/ih)/2)*2,${evenH})`
+
+  return [
+    'format=nv12',
+    'hwupload_cuda',
+    `scale_cuda=w='${scaleWidthExpr}':h='${scaleHeightExpr}'`,
+    'hwdownload',
+    'format=nv12',
+    `pad=${evenW}:${evenH}:(ow-iw)/2:(oh-ih)/2:black`,
+    'setsar=1',
+    `fps=${safeFps}`,
+    'format=yuv420p',
+  ].join(',')
 }

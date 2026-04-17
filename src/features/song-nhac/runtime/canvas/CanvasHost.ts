@@ -45,6 +45,13 @@ export class CanvasHost {
   private onRender: RenderCallback
   /** Track whether webglCanvas has ever been given a WebGL context. */
   private webglCanvasHasGLContext = false
+  // FIX H-01: WebGL context loss recovery
+  private contextLost = false
+  private onContextLost: ((e: Event) => void) | null = null
+  private onContextRestored: (() => void) | null = null
+  /** Optional callback for external consumers to react to context loss/restore. */
+  onWebGLContextLost: (() => void) | null = null
+  onWebGLContextRestored: (() => void) | null = null
 
   constructor(onRender: RenderCallback, options: CanvasHostOptions) {
     this.onRender = onRender
@@ -74,9 +81,12 @@ export class CanvasHost {
     if (this.compositeCanvas.parentNode) {
       this.compositeCanvas.parentNode.removeChild(this.compositeCanvas)
     }
+    // FIX H-01: Detach context loss listeners before releasing
+    this._detachContextLossListeners(this.webglCanvas)
     // Release WebGL context on webglCanvas to free GPU resources
     this.releaseWebGLContext(this.webglCanvas)
     this.webglCanvasHasGLContext = false
+    this.contextLost = false
     this.container = null
   }
 
@@ -102,6 +112,8 @@ export class CanvasHost {
    * Trả về canvas mới + fire resize callback.
    */
   replaceWebglCanvas(): HTMLCanvasElement {
+    // FIX H-01: Detach context loss listeners from old canvas
+    this._detachContextLossListeners(this.webglCanvas)
     // Release WebGL context on old canvas only if it actually had one
     this.releaseWebGLContext(this.webglCanvas)
 
@@ -109,6 +121,7 @@ export class CanvasHost {
     newCanvas.style.background = '#0d0d14'
     this.webglCanvas = newCanvas
     this.webglCanvasHasGLContext = false
+    this.contextLost = false
 
     // Resize ALL canvases (not just webgl) to ensure dimensions stay consistent
     if (this.lastRect.width > 0) {
@@ -126,6 +139,13 @@ export class CanvasHost {
   /** Mark that the current webglCanvas has been given a WebGL context externally. */
   markWebGLContextCreated(): void {
     this.webglCanvasHasGLContext = true
+    // FIX H-01: Attach context loss listeners now that we know this canvas has a GL context
+    this._attachContextLossListeners(this.webglCanvas)
+  }
+
+  /** FIX H-01: Whether the WebGL context is currently lost (GPU driver reset). */
+  isContextLost(): boolean {
+    return this.contextLost
   }
 
   getWebglCanvas(): HTMLCanvasElement {
@@ -169,5 +189,51 @@ export class CanvasHost {
       displayWidth: this.lastRect.width,
       displayHeight: this.lastRect.height,
     })
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // FIX H-01: WebGL context loss/restore listeners.
+  //
+  // When a GPU driver resets (sleep/wake, TDR, crash), the browser
+  // fires `webglcontextlost` on affected canvases. We MUST call
+  // `e.preventDefault()` to allow the browser to attempt automatic
+  // restoration. When it succeeds, `webglcontextrestored` fires.
+  //
+  // External consumers (e.g., VisualizerRuntime) can subscribe via
+  // the public `onWebGLContextLost` / `onWebGLContextRestored`
+  // callbacks to re-initialize their engine state.
+  // ═══════════════════════════════════════════════════════════════
+
+  private _attachContextLossListeners(canvas: HTMLCanvasElement): void {
+    this._detachContextLossListeners(canvas) // idempotent
+
+    this.onContextLost = (e: Event) => {
+      e.preventDefault() // CRITICAL: allows browser to attempt restoration
+      this.contextLost = true
+      console.warn('[CanvasHost] WebGL context lost — GPU driver reset detected')
+      this.onWebGLContextLost?.()
+    }
+
+    this.onContextRestored = () => {
+      this.contextLost = false
+      console.log('[CanvasHost] WebGL context restored')
+      this.onWebGLContextRestored?.()
+      // Re-fire render so runtime picks up the restored state
+      this.fireRender()
+    }
+
+    canvas.addEventListener('webglcontextlost', this.onContextLost)
+    canvas.addEventListener('webglcontextrestored', this.onContextRestored)
+  }
+
+  private _detachContextLossListeners(canvas: HTMLCanvasElement): void {
+    if (this.onContextLost) {
+      canvas.removeEventListener('webglcontextlost', this.onContextLost)
+      this.onContextLost = null
+    }
+    if (this.onContextRestored) {
+      canvas.removeEventListener('webglcontextrestored', this.onContextRestored)
+      this.onContextRestored = null
+    }
   }
 }

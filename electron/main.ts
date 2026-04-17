@@ -20,7 +20,7 @@ import * as fs from 'fs'
 import { getFfmpegPaths } from '../backend/ffmpeg/config'
 import { runFfprobe } from '../backend/ffmpeg/wrapper'
 import { getMachineHash } from '../backend/license/machineId'
-import { checkAndCleanCacheOnUpdate } from '../backend/utils/cacheCleanup'
+import { checkAndCleanCacheOnUpdate, cleanupStaleScratchDirs } from '../backend/utils/cacheCleanup'
 import { initTamperDetection, checkTampering } from '../backend/security/tamperDetection'
 import { initSecurityMonitoring } from '../backend/security/securityMonitoring'
 import { cleanupYouTubeHandlers } from './youtube/youtubeHandlers'
@@ -140,7 +140,7 @@ app.whenReady()
 
     // Đăng ký IPC handlers trước khi tạo window
     try {
-      registerAllHandlers(getMainWindow(), getMainWindow)
+      registerAllHandlers(null, getMainWindow)
       console.log('[App] IPC handlers registered')
     } catch (err: any) {
       console.error('[App] Failed to register IPC handlers (critical):', err?.message || err)
@@ -181,6 +181,13 @@ app.whenReady()
       console.log('[App] Cache cleanup completed')
     } catch (err: any) {
       console.error('[App] Cache cleanup failed (non-critical):', err?.message || err)
+    }
+
+    // FIX H-03: Clean up stale scratch dirs left by crashed/killed exports
+    try {
+      await cleanupStaleScratchDirs()
+    } catch (err: any) {
+      console.warn('[App] Stale scratch cleanup failed (non-critical):', err?.message || err)
     }
 
     // Security monitoring

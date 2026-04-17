@@ -112,6 +112,7 @@ describe('gpuDetection', () => {
       )
       .mockImplementationOnce(() => makeFakeChild(0) as any)
       .mockImplementationOnce(() => makeFakeChild(0, { stdout: 'Legacy GPU\n' }) as any)
+      .mockImplementationOnce(() => makeFakeChild(0) as any)
 
     const info = await getGpuInfo()
 
@@ -121,6 +122,40 @@ describe('gpuDetection', () => {
     expect(info.ffmpegPath).toContain('ffmpeg-legacy')
     expect(info.reason).toContain('legacy profile')
     expect(info.reason).toContain('after auto fallback from modern due to old NVIDIA driver/API mismatch')
+    expect(info.normalizeCudaAvailable).toBe(true)
+    expect(info.normalizeCudaReason).toContain('passed')
+  })
+
+  it('auto profile can use packaged legacy ffmpeg with global ffprobe fallback when ffprobe-legacy is missing', async () => {
+    vi.mocked(fs.existsSync).mockImplementation((filePath: any) => {
+      const value = String(filePath)
+      if (value.includes('ffmpeg-legacy')) return true
+      if (value.includes('ffprobe-legacy')) return false
+      return true
+    })
+
+    vi.mocked(spawn)
+      .mockImplementationOnce(() =>
+        makeFakeChild(0, { stdout: ' V..... h264_nvenc           NVIDIA NVENC H.264 encoder\n' }) as any,
+      )
+      .mockImplementationOnce(() => makeFakeChild(1, { stderr: OLD_DRIVER_STDERR }) as any)
+      .mockImplementationOnce(() =>
+        makeFakeChild(0, { stdout: ' V..... h264_nvenc           NVIDIA NVENC H.264 encoder\n' }) as any,
+      )
+      .mockImplementationOnce(() => makeFakeChild(0) as any)
+      .mockImplementationOnce(() => makeFakeChild(0, { stdout: 'Legacy GPU\n' }) as any)
+      .mockImplementationOnce(() => makeFakeChild(0) as any)
+
+    const info = await getGpuInfo()
+
+    expect(info.available).toBe(true)
+    expect(info.encoder).toBe('nvenc')
+    expect(info.ffmpegProfile).toBe('legacy')
+    expect(info.ffmpegPath).toContain('ffmpeg-legacy')
+    expect(info.ffprobePath).toBe('/mock/ffprobe')
+    expect(info.reason).toContain('legacy profile')
+    expect(info.reason).toContain('after auto fallback from modern due to old NVIDIA driver/API mismatch')
+    expect(info.normalizeCudaAvailable).toBe(true)
   })
 
   it('modern profile does not silently fall back to legacy when old-driver NVENC smoke test fails', async () => {
@@ -156,6 +191,7 @@ describe('gpuDetection', () => {
       )
       .mockImplementationOnce(() => makeFakeChild(0) as any)
       .mockImplementationOnce(() => makeFakeChild(0, { stdout: 'Legacy GPU\n' }) as any)
+      .mockImplementationOnce(() => makeFakeChild(0) as any)
 
     const info = await getGpuInfo('legacy')
 
@@ -165,6 +201,7 @@ describe('gpuDetection', () => {
     expect(info.ffmpegPath).toBe('/mock/ffmpeg-legacy')
     expect(info.reason).toContain('legacy profile')
     expect(info.reason).not.toContain('after auto fallback')
+    expect(info.normalizeCudaAvailable).toBe(true)
   })
 
   it('keeps detection cache isolated per GPU FFmpeg profile', async () => {
@@ -186,6 +223,7 @@ describe('gpuDetection', () => {
       )
       .mockImplementationOnce(() => makeFakeChild(0) as any)
       .mockImplementationOnce(() => makeFakeChild(0, { stdout: 'Legacy GPU\n' }) as any)
+      .mockImplementationOnce(() => makeFakeChild(0) as any)
 
     const modernInfo = await getGpuInfo('modern')
     const autoInfo = await getGpuInfo('auto')
@@ -194,6 +232,24 @@ describe('gpuDetection', () => {
     expect(autoInfo.available).toBe(true)
     expect(autoInfo.ffmpegProfile).toBe('legacy')
     expect(autoInfo.reason).toContain('after auto fallback from modern due to old NVIDIA driver/API mismatch')
-    expect(vi.mocked(spawn)).toHaveBeenCalledTimes(7)
+    expect(autoInfo.normalizeCudaAvailable).toBe(true)
+    expect(vi.mocked(spawn)).toHaveBeenCalledTimes(8)
+  })
+
+  it('marks NVENC available but normalize CUDA unavailable when hybrid normalize smoke test fails', async () => {
+    vi.mocked(spawn)
+      .mockImplementationOnce(() =>
+        makeFakeChild(0, { stdout: ' V..... h264_nvenc           NVIDIA NVENC H.264 encoder\n' }) as any,
+      )
+      .mockImplementationOnce(() => makeFakeChild(0) as any)
+      .mockImplementationOnce(() => makeFakeChild(0, { stdout: 'RTX Mock\n' }) as any)
+      .mockImplementationOnce(() => makeFakeChild(1, { stderr: 'No such filter: scale_cuda\n' }) as any)
+
+    const info = await getGpuInfo()
+
+    expect(info.available).toBe(true)
+    expect(info.encoder).toBe('nvenc')
+    expect(info.normalizeCudaAvailable).toBe(false)
+    expect(info.normalizeCudaReason).toContain('hybrid normalize smoke test failed')
   })
 })

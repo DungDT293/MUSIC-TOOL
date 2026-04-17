@@ -3,6 +3,29 @@
  * Phát hiện và ngăn chặn debugger, DevTools, reverse engineering
  */
 
+// FIX M8: Use Electron's app.isPackaged instead of process.env.NODE_ENV.
+// NODE_ENV can be spoofed by running `NODE_ENV=development ./app`, entirely
+// disabling all anti-debug checks. app.isPackaged is a read-only Electron
+// property that reflects whether the app is running from an asar archive —
+// it cannot be overridden by environment variables.
+let _isPackaged: boolean | null = null
+function isProductionBuild(): boolean {
+  if (_isPackaged !== null) return _isPackaged
+  try {
+    const { app } = require('electron')
+    _isPackaged = app.isPackaged
+  } catch {
+    // Fallback: if Electron app is not available, check resourcesPath
+    const resourcesPath = (process as any).resourcesPath
+    if (resourcesPath && typeof resourcesPath === 'string' && !resourcesPath.includes('node_modules')) {
+      _isPackaged = true
+    } else {
+      _isPackaged = false
+    }
+  }
+  return _isPackaged
+}
+
 /**
  * Detect DevTools (Chrome DevTools, Firefox DevTools)
  */
@@ -167,8 +190,8 @@ export function disableContextMenu(): void {
  * Returns true if debugging detected
  */
 export async function checkAntiDebug(): Promise<boolean> {
-  // Chỉ check trong production
-  if (process.env.NODE_ENV === 'development' || process.env.ELECTRON_RENDERER_URL) {
+  // FIX M8: Use app.isPackaged instead of spoofable NODE_ENV
+  if (!isProductionBuild()) {
     return false
   }
 
@@ -189,7 +212,8 @@ export async function checkAntiDebug(): Promise<boolean> {
  * Initialize anti-debugging (chỉ trong production)
  */
 export function initAntiDebug(): void {
-  if (process.env.NODE_ENV === 'development' || process.env.ELECTRON_RENDERER_URL) {
+  // FIX M8: Use app.isPackaged instead of spoofable NODE_ENV
+  if (!isProductionBuild()) {
     return // Skip in dev mode
   }
 

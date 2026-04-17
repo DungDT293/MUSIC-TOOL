@@ -132,6 +132,8 @@ export default function PreviewViewport({ onTimelineCompute, audioRef: externalA
   const viewportRef = useRef<HTMLDivElement>(null)
   const runtimeRef = useRef<VisualizerRuntime | null>(null)
   const demoAudioRef = useRef<HTMLAudioElement | null>(null)
+  // FIX M10: Track blob URL to revoke on next play or unmount — prevents Blob URL leak
+  const demoBlobUrlRef = useRef<string | null>(null)
   const quality = useSongNhacRuntimeStore((s) => s.quality)
   const fpsText = useSongNhacRuntimeStore((s) => s.fpsText)
   const setFpsText = useSongNhacRuntimeStore((s) => s.setFpsText)
@@ -254,8 +256,15 @@ export default function PreviewViewport({ onTimelineCompute, audioRef: externalA
       const duration = decoded.duration
       audioCtx.close()
 
+      // FIX M10: Revoke previous blob URL before creating a new one
+      if (demoBlobUrlRef.current) {
+        URL.revokeObjectURL(demoBlobUrlRef.current)
+        demoBlobUrlRef.current = null
+      }
       const blob = new Blob([arrayBuffer], { type: 'audio/mpeg' })
-      demoAudioRef.current.src = URL.createObjectURL(blob)
+      const blobUrl = URL.createObjectURL(blob)
+      demoBlobUrlRef.current = blobUrl
+      demoAudioRef.current.src = blobUrl
       await demoAudioRef.current.play()
       runtimeRef.current.attachAudio(demoAudioRef.current)
 
@@ -282,6 +291,11 @@ export default function PreviewViewport({ onTimelineCompute, audioRef: externalA
       runtime.destroy()
       runtimeRef.current = null
       setFpsText('— fps')
+      // FIX M10: Revoke blob URL on unmount to prevent memory leak
+      if (demoBlobUrlRef.current) {
+        URL.revokeObjectURL(demoBlobUrlRef.current)
+        demoBlobUrlRef.current = null
+      }
     }
   }, [setFpsText])
 

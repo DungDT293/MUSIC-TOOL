@@ -1583,24 +1583,35 @@ function AutopilotControlSection({
       )
     }
 
-    if (runProgress.status === 'running' || runProgress.status === 'cancelling') {
+    if (runProgress.status === 'running' || runProgress.status === 'cancelling' || runProgress.status === 'paused') {
+      const isCancelling = runProgress.status === 'cancelling'
+      const isPaused = runProgress.status === 'paused'
       return (
-        <button
-          type="button"
-          onClick={onCancel}
-          style={{
-            padding: '8px 12px',
-            borderRadius: '4px',
-            border: '1px solid #f87171',
-            backgroundColor: '#450a0a',
-            color: '#fecaca',
-            cursor: 'pointer',
-            fontSize: '13px',
-            minWidth: '120px',
-          }}
-        >
-          Hủy
-        </button>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          {isPaused && (
+            <span style={{ fontSize: '12px', color: '#fbbf24', marginRight: '4px' }}>
+              ⏸ Tạm dừng
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={isCancelling}
+            style={{
+              padding: '8px 12px',
+              borderRadius: '4px',
+              border: '1px solid #f87171',
+              backgroundColor: '#450a0a',
+              color: '#fecaca',
+              cursor: isCancelling ? 'not-allowed' : 'pointer',
+              fontSize: '13px',
+              minWidth: '120px',
+              opacity: isCancelling ? 0.6 : 1,
+            }}
+          >
+            {isCancelling ? 'Đang hủy...' : 'Hủy'}
+          </button>
+        </div>
       )
     }
 

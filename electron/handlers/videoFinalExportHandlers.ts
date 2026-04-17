@@ -173,6 +173,13 @@ export function registerVideoFinalExportHandlers(getMainWindow: () => BrowserWin
             audioCount: payload.audioSource?.type === 'folder' ? 0 : (payload.audioSource?.paths?.length ?? 0),
             videoCount: payload.videoSource?.type === 'folder' ? 0 : (payload.videoSource?.paths?.length ?? 0),
           },
+          // FIX M14: Kill the FFmpeg process when the job is cancelled from UI.
+          // Without this, jobQueue.cancel() only aborts the AbortController but the
+          // FFmpeg child process spawned by exportFinalVideo() continues running in
+          // the background, consuming CPU/disk until it finishes on its own.
+          onCancel: () => {
+            videoJobManager.cancelJob(requestId)
+          },
           task: async (ctx) => {
             try {
               await exportFinalVideo({ ...payload, requestId: requestId || ctx.jobId }, emitter)

@@ -12,12 +12,22 @@ import {
 // Global downloader instance
 let downloader: YouTubeDownloader | null = null;
 let currentYoutubeJobId: string | null = null;
+let youtubeHandlersRegistered = false; // FIX M20: Guard against double-registration
 
 /**
- * Initialize YouTube downloader và setup IPC handlers
+ * Initialize YouTube downloader và setup IPC handlers.
+ * Safe to call multiple times (macOS dock-icon re-launch calls createWindow() again).
+ * On second+ call: cleans up old handlers first, then re-registers with fresh mainWindow.
  */
 export function setupYouTubeHandlers(mainWindow: BrowserWindow) {
   console.log('[IPC] Setting up YouTube handlers...');
+
+  // FIX M20: If handlers are already registered (macOS re-launch), clean up first
+  // to avoid "Attempted to register a second handler" crash.
+  if (youtubeHandlersRegistered) {
+    console.log('[IPC] YouTube handlers already registered — cleaning up before re-registering...');
+    cleanupYouTubeHandlers();
+  }
   
   // Create downloader instance
   downloader = new YouTubeDownloader();
@@ -359,6 +369,7 @@ export function setupYouTubeHandlers(mainWindow: BrowserWindow) {
   });
 
   console.log('[IPC] YouTube handlers setup complete')
+  youtubeHandlersRegistered = true; // FIX M20: Mark as registered
 
   // ── Auto-update yt-dlp on startup (background, silent) ──────────────────────
   // Chạy sau 5s để không block startup UI
@@ -412,23 +423,30 @@ export function setupYouTubeHandlers(mainWindow: BrowserWindow) {
  */
 export function cleanupYouTubeHandlers() {
   console.log('[IPC] Cleaning up YouTube handlers...');
-  
+
   if (downloader) {
     downloader.removeAllListeners();
     downloader = null;
   }
-  
-  // Remove IPC handlers
-  ipcMain.removeHandler('youtube:verify');
-  ipcMain.removeHandler('youtube:validate-url');
-  ipcMain.removeHandler('youtube:get-video-info');
-  ipcMain.removeHandler('youtube:get-channel-info');
-  ipcMain.removeHandler('youtube:get-channel-videos');
-  ipcMain.removeHandler('youtube:estimate-channel-size');
-  ipcMain.removeHandler('youtube:download-video');
-  ipcMain.removeHandler('youtube:download-channel');
-  ipcMain.removeHandler('youtube:update-ytdlp');
-  
+
+  // Remove IPC handlers — wrap each in try/catch to avoid crash if already removed
+  const channels = [
+    'youtube:verify',
+    'youtube:validate-url',
+    'youtube:get-video-info',
+    'youtube:get-channel-info',
+    'youtube:get-channel-videos',
+    'youtube:estimate-channel-size',
+    'youtube:download-video',
+    'youtube:download-channel',
+    'youtube:cancel-download',
+    'youtube:update-ytdlp',
+  ];
+  for (const ch of channels) {
+    try { ipcMain.removeHandler(ch); } catch (_) {}
+  }
+
+  youtubeHandlersRegistered = false; // FIX M20: Reset flag
   console.log('[IPC] YouTube handlers cleaned up');
 }
 

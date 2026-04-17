@@ -14,6 +14,8 @@ interface ExportProgressViewProps {
   resHeight?: number
   resFps?: number
   onCancel: () => void
+  /** FIX M-04: Whether a cancel request is in-flight */
+  isCancelling?: boolean
   onRetryCpu?: () => void
   suggestedRetryWithCpu: boolean
 }
@@ -35,6 +37,7 @@ export default function ExportProgressView({
   resHeight,
   resFps,
   onCancel,
+  isCancelling,
   onRetryCpu,
   suggestedRetryWithCpu,
 }: ExportProgressViewProps) {
@@ -158,17 +161,19 @@ export default function ExportProgressView({
         <button
           type="button"
           onClick={onCancel}
+          disabled={isCancelling}
           style={{
             padding: '6px 12px',
             border: '1px solid rgba(255,80,80,0.5)',
             borderRadius: 4,
             background: 'transparent',
             color: 'rgba(255,120,120,0.9)',
-            cursor: 'pointer',
+            cursor: isCancelling ? 'not-allowed' : 'pointer',
             fontSize: 12,
+            opacity: isCancelling ? 0.6 : 1,
           }}
         >
-          Cancel
+          {isCancelling ? 'Đang hủy...' : 'Cancel'}
         </button>
         {suggestedRetryWithCpu && onRetryCpu && (
           <button

@@ -59,6 +59,7 @@ export async function runFfmpeg(opts: FfmpegExecOptions): Promise<{
       cwd: cwd || process.cwd(),
       env: { ...process.env, ...env },
       stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true, // FIX M16: Prevent CMD flash on Windows
     })
 
     // Register process vào videoJobManager để có thể cancel (nếu có requestId)
@@ -84,6 +85,9 @@ export async function runFfmpeg(opts: FfmpegExecOptions): Promise<{
     }
 
     // Listen AbortSignal để cancel khi cần
+    // FIX M9: Use { once: true } to prevent listener leak — each runFfmpeg call
+    // adds a listener to a potentially long-lived AbortSignal (e.g. from AbortController
+    // shared across retries). Without { once: true }, listeners accumulate and never GC.
     if (signal) {
       signal.addEventListener('abort', () => {
         console.log(`[runFfmpeg] Job ${requestId || 'unknown'} cancelled via AbortSignal`)
@@ -95,7 +99,7 @@ export async function runFfmpeg(opts: FfmpegExecOptions): Promise<{
             try { if (!child.killed) child.kill('SIGKILL') } catch {}
           }, 2000)
         }
-      })
+      }, { once: true })
     }
 
     child.stdout?.on('data', (chunk: Buffer) => {
@@ -178,6 +182,7 @@ export async function runFfprobe(args: string[], timeoutMs = 30_000): Promise<st
 
     const child = spawn(ffprobePath, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true, // FIX M16: Prevent CMD flash on Windows
     })
 
     // Bug #30 fix: add timeout so a hung ffprobe never blocks forever

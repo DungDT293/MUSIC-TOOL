@@ -302,7 +302,7 @@ export default function EnhanceAudioMain() {
             </select>
             {outputFormat !== 'keep' && (
               <input type="number" min={64} max={512} step={32} value={bitrateKbps}
-                onChange={e => setBitrateKbps(Number(e.target.value))} disabled={loading}
+                onChange={e => setBitrateKbps(Math.max(64, Math.min(512, Number(e.target.value) || 64)))} disabled={loading}
                 style={{ width: '70px', backgroundColor: '#1a1a1a', color: '#ccc', border: '1px solid #333', borderRadius: '4px', padding: '4px 6px', fontSize: '12px' }} />
             )}
           </div>

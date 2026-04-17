@@ -25,8 +25,35 @@ function getPackagedBinDir(): string {
   return path.dirname(ffmpeg)
 }
 
-function hasBinaryPair(ffmpegPath: string, ffprobePath: string): boolean {
-  return fs.existsSync(ffmpegPath) && fs.existsSync(ffprobePath)
+function hasBinary(binaryPath: string | undefined | null): binaryPath is string {
+  return !!binaryPath && fs.existsSync(binaryPath)
+}
+
+function buildGpuCandidatePaths(
+  profile: ResolvedGpuFfmpegProfile,
+  ffmpegPath: string | undefined | null,
+  preferredFfprobePath: string | undefined | null,
+  fallbackFfprobePath: string | undefined | null,
+): GpuFfmpegCandidatePaths | null {
+  if (!hasBinary(ffmpegPath)) {
+    return null
+  }
+
+  const resolvedFfprobe = hasBinary(preferredFfprobePath)
+    ? preferredFfprobePath
+    : hasBinary(fallbackFfprobePath)
+      ? fallbackFfprobePath
+      : null
+
+  if (!resolvedFfprobe) {
+    return null
+  }
+
+  return {
+    profile,
+    ffmpeg: ffmpegPath,
+    ffprobe: resolvedFfprobe,
+  }
 }
 
 function deriveSiblingBinaryPath(filePath: string, targetName: 'ffmpeg' | 'ffprobe'): string {
@@ -49,12 +76,10 @@ function getModernCandidate(): GpuFfmpegCandidatePaths | null {
   const envFfmpeg = process.env.FFMPEG_GPU_MODERN_PATH?.trim()
   const envFfprobe = process.env.FFPROBE_GPU_MODERN_PATH?.trim()
 
-  if (envFfmpeg && envFfprobe) {
-    return {
-      profile: 'modern',
-      ffmpeg: envFfmpeg,
-      ffprobe: envFfprobe,
-    }
+  const globalCandidate = buildGpuCandidatePaths('modern', globalPaths.ffmpeg, envFfprobe || globalPaths.ffprobe, globalPaths.ffprobe)
+
+  if (envFfmpeg) {
+    return buildGpuCandidatePaths('modern', envFfmpeg, envFfprobe || deriveSiblingBinaryPath(envFfmpeg, 'ffprobe'), globalPaths.ffprobe) || globalCandidate
   }
 
   const isWindows = process.platform === 'win32'
@@ -65,42 +90,35 @@ function getModernCandidate(): GpuFfmpegCandidatePaths | null {
     ffprobe: path.join(binDir, `ffprobe-modern${exeExt}`),
   }
 
-  if (hasBinaryPair(namedModern.ffmpeg, namedModern.ffprobe)) {
-    return {
-      profile: 'modern',
-      ffmpeg: namedModern.ffmpeg,
-      ffprobe: namedModern.ffprobe,
-    }
+  const namedModernCandidate = buildGpuCandidatePaths('modern', namedModern.ffmpeg, namedModern.ffprobe, globalPaths.ffprobe)
+  if (namedModernCandidate) {
+    return namedModernCandidate
   }
 
-  return {
-    profile: 'modern',
-    ffmpeg: globalPaths.ffmpeg,
-    ffprobe: globalPaths.ffprobe,
-  }
+  return globalCandidate
 }
 
 function getLegacyCandidate(): GpuFfmpegCandidatePaths | null {
   const envFfmpeg = process.env.FFMPEG_GPU_LEGACY_PATH?.trim()
   const envFfprobe = process.env.FFPROBE_GPU_LEGACY_PATH?.trim()
 
-  if (envFfmpeg && envFfprobe) {
-    return {
-      profile: 'legacy',
-      ffmpeg: envFfmpeg,
-      ffprobe: envFfprobe,
-    }
+  const globalPaths = getFfmpegPaths()
+
+  if (envFfmpeg) {
+    return buildGpuCandidatePaths('legacy', envFfmpeg, envFfprobe || deriveSiblingBinaryPath(envFfmpeg, 'ffprobe'), globalPaths.ffprobe)
   }
 
   const configuredLegacyFfmpeg = getLegacyGpuFfmpegPathSetting()
   if (configuredLegacyFfmpeg) {
     const configuredLegacyFfprobe = deriveSiblingBinaryPath(configuredLegacyFfmpeg, 'ffprobe')
-    if (hasBinaryPair(configuredLegacyFfmpeg, configuredLegacyFfprobe)) {
-      return {
-        profile: 'legacy',
-        ffmpeg: configuredLegacyFfmpeg,
-        ffprobe: configuredLegacyFfprobe,
-      }
+    const configuredCandidate = buildGpuCandidatePaths(
+      'legacy',
+      configuredLegacyFfmpeg,
+      configuredLegacyFfprobe,
+      globalPaths.ffprobe,
+    )
+    if (configuredCandidate) {
+      return configuredCandidate
     }
   }
 
@@ -112,15 +130,7 @@ function getLegacyCandidate(): GpuFfmpegCandidatePaths | null {
     ffprobe: path.join(binDir, `ffprobe-legacy${exeExt}`),
   }
 
-  if (!hasBinaryPair(namedLegacy.ffmpeg, namedLegacy.ffprobe)) {
-    return null
-  }
-
-  return {
-    profile: 'legacy',
-    ffmpeg: namedLegacy.ffmpeg,
-    ffprobe: namedLegacy.ffprobe,
-  }
+  return buildGpuCandidatePaths('legacy', namedLegacy.ffmpeg, namedLegacy.ffprobe, globalPaths.ffprobe)
 }
 
 export function getPreferredGpuFfmpegProfile(): GpuFfmpegProfile {

@@ -154,8 +154,36 @@ export interface InternalAuthState {
 export let authState: InternalAuthState | null = null
 let _authStateInitPromise: Promise<InternalAuthState> | null = null
 
+// FIX H6: Simple async mutex via promise chain.
+// Serializes all setAuthState calls so concurrent handlers cannot interleave writes.
+// This prevents race conditions where a login handler and a license-refresh handler
+// both try to update authState simultaneously, with one overwriting the other's result.
+let _authStateMutexChain: Promise<void> = Promise.resolve()
+
 export function setAuthState(state: InternalAuthState | null) {
-  authState = state
+  // FIX H6: Queue the write behind the current chain — serialized, not concurrent.
+  _authStateMutexChain = _authStateMutexChain.then(() => {
+    authState = state
+  }).catch(() => {
+    // Swallow errors from previous chain links — they are independent operations
+    authState = state
+  })
+}
+
+/**
+ * Async version of setAuthState for handlers that need to await completion.
+ * Ensures the write is fully serialized before the caller proceeds.
+ */
+export async function setAuthStateAsync(state: InternalAuthState | null): Promise<void> {
+  return new Promise<void>((resolve) => {
+    _authStateMutexChain = _authStateMutexChain.then(() => {
+      authState = state
+      resolve()
+    }).catch(() => {
+      authState = state
+      resolve()
+    })
+  })
 }
 
 export async function getOrInitAuthState(): Promise<InternalAuthState> {
@@ -234,8 +262,11 @@ export async function getOrInitAuthState(): Promise<InternalAuthState> {
           : 'Máy này chưa đăng ký tài khoản sử dụng.',
       }
       return authState
-    } finally {
+    } catch (err) {
+      // FIX H6: On error, clear the cached promise so a retry is possible,
+      // but don't clear it on success — initialization should only run once.
       _authStateInitPromise = null
+      throw err
     }
   })()
   return _authStateInitPromise

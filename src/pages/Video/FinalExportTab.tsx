@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, useRef, type CSSProperties } from 'react'
 import { DiskSpaceErrorModal } from '../../components/DiskSpaceErrorModal'
+import { useExportActivityStore } from '../../stores/exportActivityStore'
 import type {
   FinalExportDonePayload,
   FinalExportErrorPayload,
@@ -263,6 +264,8 @@ function FinalExportTab() {
       if (activeRequestId && payload.requestId !== activeRequestId) return
       isExportingRef.current = false
       setIsExporting(false)
+      // FIX C-01: Unregister from global export activity store
+      useExportActivityStore.getState().unregisterExport(payload.requestId)
       const totalOutputs = payload.outputs?.length ?? 0
       const failedCount = payload.failedJobs?.length ?? 0
 
@@ -309,6 +312,8 @@ function FinalExportTab() {
       if (activeRequestId && payload.requestId !== activeRequestId) return
       isExportingRef.current = false
       setIsExporting(false)
+      // FIX C-01: Unregister from global export activity store
+      useExportActivityStore.getState().unregisterExport(payload.requestId)
       const message = payload?.message || payload?.error || 'Đã xảy ra lỗi trong quá trình export.'
       setStatusText(message)
       if (message.startsWith('CẢNH BÁO: Dung lượng ổ đĩa không đủ')) {
@@ -347,9 +352,6 @@ function FinalExportTab() {
     audioItems.length > 0 &&
     parsedOutputNames.length !== audioItems.length
 
-  const tracklistMismatch =
-    false
-
   const canExport = useMemo(() => {
     const hasOutputName = multipleAudio ? true : outputFilename.trim().length > 0
     return Boolean(
@@ -358,8 +360,7 @@ function FinalExportTab() {
       outputFolder &&
       hasOutputName &&
       !isExporting &&
-      !nameMismatch &&
-      !tracklistMismatch
+      !nameMismatch
     )
   }, [
     audioSource,
@@ -369,7 +370,6 @@ function FinalExportTab() {
     isExporting,
     multipleAudio,
     nameMismatch,
-    tracklistMismatch,
   ])
 
   const handlePickSource = async (target: 'audio' | 'video', type: 'file' | 'folder' | 'file-single') => {
@@ -546,12 +546,6 @@ function FinalExportTab() {
       setErrorMessage('Số dòng tên output không khớp số job. Vui lòng nhập đủ hoặc để trống để dùng output_1..N.')
       return
     }
-    if (tracklistMismatch) {
-      setErrorMessage(
-        'Số block tracklist không hợp lệ. Nhập 1 block (áp dụng cho tất cả) hoặc đúng số job (theo thứ tự).'
-      )
-      return
-    }
 
     const requestId =
       typeof crypto !== 'undefined' && crypto.randomUUID
@@ -597,6 +591,8 @@ function FinalExportTab() {
     isExportingRef.current = true
     setActiveRequestId(requestId)
     setIsExporting(true)
+    // FIX C-01: Register with global export activity store
+    useExportActivityStore.getState().registerExport(requestId, `Final Export: ${outputFilename || 'video'}`)
     setExportOutputs(null)
     setErrorMessage(null)
     setDiskSpaceError(null)
@@ -621,6 +617,8 @@ function FinalExportTab() {
       console.error('[FinalExportTab] Không thể gửi yêu cầu final export', error)
       isExportingRef.current = false
       setIsExporting(false)
+      // FIX C-01: Unregister on start failure
+      useExportActivityStore.getState().unregisterExport(requestId)
       setStatusText('Không thể khởi tạo job xuất video.')
       setErrorMessage('Không thể khởi tạo job xuất video.')
       setActiveRequestId(null)
@@ -1351,16 +1349,21 @@ function FinalExportTab() {
           <button
             onClick={async () => {
               if (!activeRequestId) return
+              const cancellingId = activeRequestId
               try {
-                await api.videoFinalExport.cancel(activeRequestId)
-                isExportingRef.current = false
-                setIsExporting(false)
+                await api.videoFinalExport.cancel(cancellingId)
                 setStatusText('Đã hủy xuất video')
                 setErrorMessage('Người dùng đã hủy xuất video.')
-                setActiveRequestId(null)
               } catch (err) {
                 console.error('[FinalExportTab] Cancel error:', err)
-                setErrorMessage('Không thể hủy xuất video. Vui lòng thử lại.')
+                setErrorMessage('Không thể hủy xuất video — đã dừng tiến trình.')
+              } finally {
+                // FIX H-01 + M-03: Always reset state, even if cancel IPC throws.
+                // Unregister from global export activity store to prevent auth deferral leak.
+                isExportingRef.current = false
+                setIsExporting(false)
+                useExportActivityStore.getState().unregisterExport(cancellingId)
+                setActiveRequestId(null)
               }
             }}
             style={{

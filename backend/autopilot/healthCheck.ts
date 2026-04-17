@@ -12,6 +12,7 @@ import {
   getGpuInfo,
   type GpuInfo,
 } from '../utils/gpuDetection'
+import { buildNormalizeCudaHybridVfFilter } from '../video/utils/normalizeVf'
 import type { AutopilotConfig } from './autopilotRunner'
 
 type EncoderChoice = 'gpu' | 'cpu' | 'auto'
@@ -27,6 +28,8 @@ export interface AutopilotHealthCheckResult {
   resolvedGpuFfmpegPath?: string
   resolvedGpuEncoder?: ResolvedGpuEncoder
   gpuFallbackReason?: string
+  gpuNormalizeMode?: 'gpu_heavy' | 'software'
+  gpuNormalizeReason?: string
 }
 
 interface CommandCheckResult {
@@ -41,6 +44,8 @@ const VERSION_CHECK_TIMEOUT_MS = 5_000
 const ENCODE_CHECK_TIMEOUT_MS = 15_000
 const STDERR_TAIL_LIMIT = 4_000
 const GPU_SMOKE_TEST_SIZE = '320x180'
+const GPU_NORMALIZE_SMOKE_TEST_RESOLUTION = '1920x1080'
+const GPU_NORMALIZE_SMOKE_TEST_FPS = '30'
 
 function normalizeExecutablePath(binaryPath: string): string {
   if (
@@ -315,6 +320,47 @@ async function checkGpuVideoEncode(ffmpegPath: string, gpuInfo: GpuInfo): Promis
   return null
 }
 
+async function checkGpuNormalizePath(ffmpegPath: string, gpuInfo: GpuInfo): Promise<string | null> {
+  if (gpuInfo.encoder !== 'nvenc') {
+    return `${gpuInfo.encoder.toUpperCase()} normalize path will stay on software mode`
+  }
+
+  const gpuFfmpegPath = gpuInfo.ffmpegPath || ffmpegPath
+  const result = await runCommandCheck(
+    normalizeExecutablePath(gpuFfmpegPath),
+    [
+      '-hide_banner',
+      '-loglevel',
+      'error',
+      '-f',
+      'lavfi',
+      '-i',
+      `color=c=black:s=${GPU_SMOKE_TEST_SIZE}:r=30`,
+      '-t',
+      '0.2',
+      '-an',
+      '-vf',
+      buildNormalizeCudaHybridVfFilter(GPU_NORMALIZE_SMOKE_TEST_RESOLUTION, GPU_NORMALIZE_SMOKE_TEST_FPS),
+      '-c:v',
+      'h264_nvenc',
+      '-preset',
+      'p1',
+      '-pix_fmt',
+      'yuv420p',
+      '-f',
+      'null',
+      '-',
+    ],
+    ENCODE_CHECK_TIMEOUT_MS,
+  )
+
+  if (!result.ok) {
+    return `GPU hybrid normalize test failed: ${formatFailureDetail(result)}`
+  }
+
+  return null
+}
+
 export async function runAutopilotHealthCheck(
   config: AutopilotConfig,
 ): Promise<AutopilotHealthCheckResult> {
@@ -449,19 +495,32 @@ export async function runAutopilotHealthCheck(
     }
   }
 
+  const gpuNormalizeReason =
+    gpuInfo.normalizeCudaAvailable === false
+      ? gpuInfo.normalizeCudaReason || 'GPU hybrid normalize path is unavailable'
+      : gpuInfo.normalizeCudaAvailable === true
+        ? null
+        : await checkGpuNormalizePath(ffmpeg, gpuInfo)
+  const gpuNormalizeMode = gpuNormalizeReason ? 'software' : 'gpu_heavy'
   const resolvedProfile = gpuInfo.ffmpegProfile || 'modern'
   const resolvedViaLegacyNotice =
     requestedEncoder === 'auto' && resolvedProfile === 'legacy'
       ? ' Auto da resolve sang Legacy GPU profile cho may/driver hien tai.'
       : ''
+  const normalizeNotice =
+    gpuNormalizeMode === 'gpu_heavy'
+      ? ' Final export normalize path: GPU-heavy hybrid CUDA.'
+      : ` Final export normalize path: software fallback (${gpuNormalizeReason || gpuInfo.normalizeCudaReason || 'unknown reason'}).`
 
   return {
     ok: true,
     recommendedUseGpuEncoding: 'gpu',
-    notice: `Health-check OK: FFmpeg/FFprobe/AAC/libx264 ready, GPU ${gpuInfo.encoder.toUpperCase()} smoke test passed via ${resolvedProfile} profile.${resolvedViaLegacyNotice}`,
+    notice: `Health-check OK: FFmpeg/FFprobe/AAC/libx264 ready, GPU ${gpuInfo.encoder.toUpperCase()} smoke test passed via ${resolvedProfile} profile.${resolvedViaLegacyNotice}${normalizeNotice}`,
     noticeLevel: 'info',
     resolvedGpuProfile: gpuInfo.ffmpegProfile,
     resolvedGpuFfmpegPath: gpuInfo.ffmpegPath || ffmpeg,
     resolvedGpuEncoder: gpuInfo.encoder === 'cpu' ? undefined : gpuInfo.encoder,
+    gpuNormalizeMode,
+    gpuNormalizeReason: gpuNormalizeReason || gpuInfo.normalizeCudaReason,
   }
 }
