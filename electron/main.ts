@@ -489,7 +489,7 @@ app.on('before-quit', async (e) => {
       console.log('[Updater] Skipping autoUpdater setup in development mode')
       return
     }
-    const { autoUpdater } = await import('electron-updater')
+    const autoUpdater = await (await import('./autoUpdaterSingleton')).getAutoUpdater()
     if (!autoUpdater) {
       console.warn('[Updater] electron-updater did not expose autoUpdater')
       return

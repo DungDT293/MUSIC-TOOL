@@ -33,6 +33,7 @@ import {
   type AppGpuFfmpegProfile,
 } from '../../backend/app/appSettings'
 import { hasActiveExport, setHasActiveExport } from '../main'
+import { getAutoUpdater } from '../autoUpdaterSingleton'
 
 // Chia sẻ licenseState với main.ts
 let licenseState: LicenseState = { status: 'checking', machineHash: '' }
@@ -617,7 +618,10 @@ export function registerAuthHandlers() {
     lastCheckTimestamp = now
 
     try {
-      const { autoUpdater } = await import('electron-updater')
+      const autoUpdater = await getAutoUpdater()
+      if (!autoUpdater) {
+        return { updateAvailable: false, error: 'AutoUpdater không khả dụng' }
+      }
       // FIX: Thêm timeout 30s để tránh treo vô hạn khi GitHub không phản hồi
       const checkPromise = autoUpdater.checkForUpdates()
       const timeoutPromise = new Promise<null>((_, reject) =>
@@ -634,7 +638,10 @@ export function registerAuthHandlers() {
   // FIX 1.3: New handler — user explicitly requests download (autoDownload is now false)
   ipcMain.handle('app:downloadUpdate', async () => {
     try {
-      const { autoUpdater } = await import('electron-updater')
+      const autoUpdater = await getAutoUpdater()
+      if (!autoUpdater) {
+        return { ok: false, error: 'AutoUpdater không khả dụng' }
+      }
       await autoUpdater.downloadUpdate()
       return { ok: true }
     } catch (err) {
@@ -656,7 +663,10 @@ export function registerAuthHandlers() {
     }
 
     try {
-      const { autoUpdater } = await import('electron-updater')
+      const autoUpdater = await getAutoUpdater()
+      if (!autoUpdater) {
+        return { ok: false, error: 'AutoUpdater không khả dụng' }
+      }
       // isSilent=false so user sees the installer; isForceRunAfter=true to restart after install
       autoUpdater.quitAndInstall(false, true)
       return { ok: true }
@@ -668,7 +678,10 @@ export function registerAuthHandlers() {
 
   ipcMain.handle('app:getUpdateChannel', async () => {
     try {
-      const { autoUpdater } = await import('electron-updater')
+      const autoUpdater = await getAutoUpdater()
+      if (!autoUpdater) {
+        return { ok: true, channel: 'stable' as const }
+      }
       const raw = autoUpdater.channel || 'latest'
       return { ok: true, channel: raw === 'latest' ? 'stable' : raw as 'stable' | 'beta' }
     } catch {
@@ -678,7 +691,10 @@ export function registerAuthHandlers() {
 
   ipcMain.handle('app:setUpdateChannel', async (_event, channel: string) => {
     try {
-      const { autoUpdater } = await import('electron-updater')
+      const autoUpdater = await getAutoUpdater()
+      if (!autoUpdater) {
+        return { ok: false, error: 'AutoUpdater không khả dụng' }
+      }
       autoUpdater.channel = channel === 'stable' ? 'latest' : channel
       autoUpdater.checkForUpdates().catch(() => {})
       return { ok: true }
