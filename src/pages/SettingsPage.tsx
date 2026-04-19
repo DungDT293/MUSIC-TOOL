@@ -73,10 +73,18 @@ export default function SettingsPage() {
 
     try {
       useUpdaterStore.getState().setStatus({ state: 'checking' })
+      let result: any
       if (window.api?.updater?.check) {
-        await window.api.updater.check()
+        result = await window.api.updater.check()
       } else if (window.api?.app?.checkUpdate) {
-        await window.api.app.checkUpdate()
+        result = await window.api.app.checkUpdate()
+      }
+      // FIX: Nếu IPC trả về error (vd timeout), cập nhật state ngay thay vì chờ event
+      if (result?.error) {
+        useUpdaterStore.getState().setStatus({
+          state: 'error',
+          message: result.error,
+        })
       }
     } catch (err: any) {
       useUpdaterStore.getState().setStatus({

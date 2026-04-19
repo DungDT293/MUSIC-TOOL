@@ -3,7 +3,7 @@
  * IPC handlers: auth:*, license:*, app:*, policy:*
  */
 
-import { app, ipcMain } from 'electron'
+import { app, ipcMain, net } from 'electron'
 import {
   authState,
   setAuthState,
@@ -618,11 +618,16 @@ export function registerAuthHandlers() {
 
     try {
       const { autoUpdater } = await import('electron-updater')
-      const result = await autoUpdater.checkForUpdates()
+      // FIX: Thêm timeout 30s để tránh treo vô hạn khi GitHub không phản hồi
+      const checkPromise = autoUpdater.checkForUpdates()
+      const timeoutPromise = new Promise<null>((_, reject) =>
+        setTimeout(() => reject(new Error('Kiểm tra cập nhật timeout sau 30 giây')), 30_000)
+      )
+      const result = await Promise.race([checkPromise, timeoutPromise])
       return { updateAvailable: !!result?.updateInfo, version: result?.updateInfo?.version }
     } catch (err) {
       console.warn('[app:checkUpdate] Failed:', (err as any)?.message)
-      return { updateAvailable: false }
+      return { updateAvailable: false, error: (err as any)?.message }
     }
   })
 
@@ -735,14 +740,35 @@ export function registerAuthHandlers() {
   })
 
   ipcMain.handle('policy:get', async () => {
-    const version = app.getVersion()
-    return {
-      latest_version: version,
-      min_supported_version: version,
-      blocked_versions: [],
-      recommended_version: version,
-      force_update: false,
-      message: null,
+    // FIX: Fetch version policy từ server thay vì trả về version app hiện tại
+    const serverUrl = process.env.AUTH_BASE || 'https://license-server.dungdong333.workers.dev'
+    const url = `${serverUrl}/api/version-policy`
+    try {
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), 10_000)
+      let response: Response
+      try {
+        response = await net.fetch(url, { signal: controller.signal })
+      } finally {
+        clearTimeout(timeout)
+      }
+
+      if (!response.ok) {
+        throw new Error(`Server returned ${response.status}`)
+      }
+      const policy = await response.json() as Record<string, unknown>
+      return policy
+    } catch (err) {
+      console.warn('[policy:get] Failed to fetch from server, returning local fallback:', (err as any)?.message)
+      const version = app.getVersion()
+      return {
+        latest_version: version,
+        min_supported_version: version,
+        blocked_versions: [],
+        recommended_version: version,
+        force_update: false,
+        message: null,
+      }
     }
   })
 }
