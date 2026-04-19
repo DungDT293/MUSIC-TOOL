@@ -66,7 +66,8 @@ const api: IPCAPI = {
     spotifyMeta: (url: string) => ipcRenderer.invoke('music:spotifyMeta', url),
     getExportHistory: () => ipcRenderer.invoke('music:getExportHistory'),
     deleteExportHistory: (ids: string[]) => ipcRenderer.invoke('music:deleteExportHistory', ids),
-    downloadPlaylistHistory: (dates: string[], outputDir?: string) => ipcRenderer.invoke('music:downloadPlaylistHistory', dates, outputDir),
+    downloadPlaylistHistory: (payload: { dates?: string[]; entryIds?: string[]; outputDir?: string }) =>
+      ipcRenderer.invoke('music:downloadPlaylistHistory', payload),
     enhanceAudio: (req: any) => ipcRenderer.invoke('music:enhance:run', req),
     cancelEnhanceAudio: () => ipcRenderer.invoke('music:enhance:cancel'),
     renderLoudnormPreview: (opts: any) => ipcRenderer.invoke('music:enhance:renderPreview', opts),
@@ -326,7 +327,6 @@ const api: IPCAPI = {
       }
     },
   },
-  videoSeoApply: (payload: any) => ipcRenderer.invoke('video:seo:apply', payload),
   videoPoolMarkUsed: (filePaths: string[]) => ipcRenderer.invoke('video:pool-mark-used', filePaths),
   videoPoolPickLRU: (folderPath: string, count: number) => ipcRenderer.invoke('video:pool-pick-lru', folderPath, count),
   autopilot: {
@@ -336,6 +336,7 @@ const api: IPCAPI = {
     setLogVerbosity: (verbosity: 'normal' | 'verbose') => ipcRenderer.invoke('autopilot:setLogVerbosity', verbosity),
     start: (config: any) => ipcRenderer.invoke('autopilot:start', config),
     cancel: () => ipcRenderer.invoke('autopilot:cancel'),
+    forceReset: () => ipcRenderer.invoke('autopilot:forceReset'),
     scanVideoFolders: (rootVideo: string) => ipcRenderer.invoke('autopilot:scan-video-folders', rootVideo),
     getVideoPoolStats: () => ipcRenderer.invoke('autopilot:video-pool-stats'),
     clearVideoPool: () => ipcRenderer.invoke('autopilot:video-pool-clear'),
@@ -440,6 +441,7 @@ const api: IPCAPI = {
   updater: {
     check: () => ipcRenderer.invoke('app:checkUpdate'),
     install: () => ipcRenderer.invoke('app:installUpdate'),
+    download: () => ipcRenderer.invoke('app:downloadUpdate'),
     getChannel: () => ipcRenderer.invoke('app:getUpdateChannel'),
     setChannel: (channel: string) => ipcRenderer.invoke('app:setUpdateChannel', channel),
     onStatus: (handler: (status: any) => void) => {
@@ -448,6 +450,8 @@ const api: IPCAPI = {
       return () => { ipcRenderer.removeListener('updater:status', listener) }
     },
   },
+  // FIX 1.1: Sync export activity state to main process for updater guard
+  setExportActive: (isActive: boolean) => ipcRenderer.invoke('app:setExportActive', isActive),
   policy: {
     get: () => ipcRenderer.invoke('policy:get'),
   },

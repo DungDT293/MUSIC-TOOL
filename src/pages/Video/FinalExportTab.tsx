@@ -148,8 +148,9 @@ function FinalExportTab() {
     if (!w.api?.preset?.save) return
     const name = presetName.trim() || `Preset ${new Date().toLocaleString('vi-VN')}`
     const settings = {
-      outputFilename, tracklistEnabled, forceReencode, normalizeAudio,
+      outputFilename, outputNamesText, tracklistEnabled, forceReencode, normalizeAudio,
       useGpuEncoding, deleteSourceFiles, usePriorityVideos,
+      priorityVideoFolder: priorityVideoFolder ?? undefined,
     }
     const res = await w.api.preset.save(name, settings)
     if (res?.success) {
@@ -160,12 +161,14 @@ function FinalExportTab() {
 
   const handleApplyPreset = (settings: any) => {
     if (settings.outputFilename !== undefined) setOutputFilename(settings.outputFilename)
+    if (settings.outputNamesText !== undefined) setOutputNamesText(settings.outputNamesText)
     if (settings.tracklistEnabled !== undefined) setTracklistEnabled(settings.tracklistEnabled)
     if (settings.forceReencode !== undefined) setForceReencode(settings.forceReencode)
     if (settings.normalizeAudio !== undefined) setNormalizeAudio(settings.normalizeAudio)
     if (settings.useGpuEncoding !== undefined) setUseGpuEncoding(settings.useGpuEncoding)
     if (settings.deleteSourceFiles !== undefined) setDeleteSourceFiles(settings.deleteSourceFiles)
     if (settings.usePriorityVideos !== undefined) setUsePriorityVideos(settings.usePriorityVideos)
+    if (settings.priorityVideoFolder !== undefined) setPriorityVideoFolder(settings.priorityVideoFolder)
   }
 
   const handleDeletePreset = async (id: string) => {
@@ -268,6 +271,7 @@ function FinalExportTab() {
       useExportActivityStore.getState().unregisterExport(payload.requestId)
       const totalOutputs = payload.outputs?.length ?? 0
       const failedCount = payload.failedJobs?.length ?? 0
+      const warningText = payload.warnings?.filter(Boolean).join(' ') || ''
 
       if (failedCount > 0 && totalOutputs > 0) {
         // Partial success
@@ -275,15 +279,15 @@ function FinalExportTab() {
           .map(f => `• Job ${f.jobIndex + 1} (${f.fileName}): ${f.error.slice(0, 100)}`)
           .join('\n')
         setStatusText(
-          `⚠️ Đã xuất ${totalOutputs} video thành công, ${failedCount} video thất bại.\n${failDetails}`
+          `⚠️ Đã xuất ${totalOutputs} video thành công, ${failedCount} video thất bại. ${warningText}`.trim()
         )
         setErrorMessage(null)
       } else {
-        setStatusText(
+        const baseStatus =
           totalOutputs <= 1
             ? 'Đã xuất video hoàn chỉnh.'
             : `Đã xuất xong ${totalOutputs} video, mỗi video khớp với một audio trong playlist.`
-        )
+        setStatusText(`${baseStatus} ${warningText}`.trim())
         setErrorMessage(null)
       }
 
@@ -333,7 +337,7 @@ function FinalExportTab() {
       unsubscribeDone?.()
       unsubscribeError?.()
     }
-  }, [api, activeRequestId, outputFilename])
+  }, [api, activeRequestId])
 
   // Logic: Nếu có nhiều audio/video → disable input "Tên file output" (single)
   // Nếu chỉ có 1 audio và 1 video → disable textarea "Tên file output (mỗi dòng một tên)"
@@ -352,6 +356,12 @@ function FinalExportTab() {
     audioItems.length > 0 &&
     parsedOutputNames.length !== audioItems.length
 
+  const strictFilesPairingCountMismatch =
+    videoSource?.type === 'files' &&
+    audioItems.length > 0 &&
+    videoItems.length > 0 &&
+    audioItems.length !== videoItems.length
+
   const canExport = useMemo(() => {
     const hasOutputName = multipleAudio ? true : outputFilename.trim().length > 0
     return Boolean(
@@ -360,7 +370,8 @@ function FinalExportTab() {
       outputFolder &&
       hasOutputName &&
       !isExporting &&
-      !nameMismatch
+      !nameMismatch &&
+      !strictFilesPairingCountMismatch
     )
   }, [
     audioSource,
@@ -370,6 +381,7 @@ function FinalExportTab() {
     isExporting,
     multipleAudio,
     nameMismatch,
+    strictFilesPairingCountMismatch,
   ])
 
   const handlePickSource = async (target: 'audio' | 'video', type: 'file' | 'folder' | 'file-single') => {
@@ -546,6 +558,12 @@ function FinalExportTab() {
       setErrorMessage('Số dòng tên output không khớp số job. Vui lòng nhập đủ hoặc để trống để dùng output_1..N.')
       return
     }
+    if (strictFilesPairingCountMismatch) {
+      setErrorMessage(
+        `Tab 6 ghép cố định audio[i] với video[i]. Hiện có ${audioItems.length} audio và ${videoItems.length} video, cần bằng nhau mới xuất được.`
+      )
+      return
+    }
 
     const requestId =
       typeof crypto !== 'undefined' && crypto.randomUUID
@@ -684,13 +702,20 @@ function FinalExportTab() {
   }, [isExporting, progressState, exportOutputs])
 
   const renderAVRelation = () => {
-    // 1-1 mapping: không cần so sánh duration như cũ
     if (audioItems.length > 0 && videoItems.length > 0) {
       if (audioItems.length !== videoItems.length) {
+        // Chỉ cảnh báo khi ở files mode (strict 1-1) — folder mode cho phép số lượng khác nhau
+        if (videoSource?.type === 'files') {
+          return (
+            <div style={{ color: '#ffaa66' }}>
+              Cảnh báo: Số lượng không khớp: {audioItems.length} audio vs {videoItems.length} video.
+              Chế độ ghép file yêu cầu số lượng bằng nhau để ghép 1-1.
+            </div>
+          )
+        }
         return (
-          <div style={{ color: '#ffaa66' }}>
-            Cảnh báo: Số lượng không khớp: {audioItems.length} audio vs {videoItems.length} video.
-            Tab 6 yêu cầu số lượng bằng nhau để ghép 1-1.
+          <div style={{ color: '#9fcf9f' }}>
+            {audioItems.length} audio + {videoItems.length} video — Chế độ thư mục: video sẽ được tự động ghép theo pool.
           </div>
         )
       }

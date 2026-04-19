@@ -643,6 +643,7 @@ export async function getUsers(request: Request, env: Env): Promise<Response> {
     let hasMatKhauColumn = false
     let hasVersionColumn = false
     let hasKeyStatusColumn = false
+    let hasLicenseExpiresAtColumn = false
     try {
       const schemaCheck = await env.DB.prepare(
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='registrations'"
@@ -651,12 +652,13 @@ export async function getUsers(request: Request, env: Env): Promise<Response> {
         hasMatKhauColumn = schemaCheck.sql.includes('mat_khau')
         hasVersionColumn = schemaCheck.sql.includes('version')
         hasKeyStatusColumn = schemaCheck.sql.includes('key_status')
+        hasLicenseExpiresAtColumn = schemaCheck.sql.includes('license_expires_at')
       }
     } catch (e) {
-      // If we can't check schema, assume columns exist and let query fail naturally
       hasMatKhauColumn = true
       hasVersionColumn = true
       hasKeyStatusColumn = true
+      hasLicenseExpiresAtColumn = false
     }
 
     // Check if video_exports table exists
@@ -681,6 +683,7 @@ export async function getUsers(request: Request, env: Env): Promise<Response> {
         r.key_kich_hoat,
         ${hasKeyStatusColumn ? 'r.key_status,' : '\'PENDING\' as key_status,'}
         ${hasVersionColumn ? 'r.version,' : 'NULL as version,'}
+        ${hasLicenseExpiresAtColumn ? 'r.license_expires_at,' : 'NULL as license_expires_at,'}
         (SELECT COUNT(*) FROM machine_id_tracking WHERE username = r.tai_khoan) as machine_count,
         (SELECT MAX(last_seen) FROM machine_id_tracking WHERE username = r.tai_khoan) as last_active,
         ${hasVideoExportsTable ? `
@@ -829,8 +832,8 @@ export async function updateUserStatus(request: Request, env: Env): Promise<Resp
         updateParams.push(key_kich_hoat)
       }
     } else if (status === 'CHAN' && isStatusChanging) {
-      // Khi block user → revoke key_status
-      updateQuery += `, key_status = 'REVOKED'`
+      // Khi block user → revoke key_status + clear ALL tokens
+      updateQuery += `, key_status = 'REVOKED', device_token = NULL, device_token_expires_at = NULL, refresh_token = NULL, refresh_token_expires_at = NULL`
     }
     
     updateQuery += ` WHERE id = ?${updateParams.length + 1}`
@@ -920,7 +923,7 @@ export async function getUser(request: Request, env: Env): Promise<Response> {
     }
 
     const user = await env.DB.prepare(
-      `SELECT id, tai_khoan, mat_khau, ma_may, trang_thai, thoi_gian_tao, key_kich_hoat, version
+      `SELECT id, tai_khoan, mat_khau, ma_may, trang_thai, thoi_gian_tao, key_kich_hoat, key_status, version, license_expires_at
        FROM registrations
        WHERE id = ?`
     )
@@ -933,7 +936,9 @@ export async function getUser(request: Request, env: Env): Promise<Response> {
         trang_thai: string
         thoi_gian_tao: number
         key_kich_hoat: string | null
+        key_status: string | null
         version: string | null
+        license_expires_at: number | null
       }>()
 
     if (!user) {
@@ -1064,11 +1069,12 @@ export async function editUser(request: Request, env: Env): Promise<Response> {
     const id = parts.length >= 4 ? parts[parts.length - 2] : null
     
     const body = await request.json().catch(() => ({}))
-    const { tai_khoan, mat_khau, ma_may, trang_thai } = body as {
+    const { tai_khoan, mat_khau, ma_may, trang_thai, license_expires_at } = body as {
       tai_khoan?: string
       mat_khau?: string
       ma_may?: string
       trang_thai?: string
+      license_expires_at?: number | null
     }
 
     if (!id) {
@@ -1114,20 +1120,41 @@ export async function editUser(request: Request, env: Env): Promise<Response> {
       params.push(trang_thai)
       
       // Only generate new activation key if status is changing TO CHO_PHEP
-      // (not if it's already CHO_PHEP and we're just editing other fields)
+      // AND user doesn't already have a key (avoid overwriting existing valid key)
       if (trang_thai === 'CHO_PHEP' && isStatusChanging) {
-        updates.push('key_kich_hoat = ?')
-        params.push(crypto.randomUUID())
+        // Check if user already has a key
+        const existingKey = await env.DB.prepare('SELECT key_kich_hoat FROM registrations WHERE id = ?').bind(id).first<{ key_kich_hoat: string | null }>()
+        if (!existingKey?.key_kich_hoat) {
+          updates.push('key_kich_hoat = ?')
+          params.push(crypto.randomUUID())
+        }
         // V2: Set key_status='ACTIVE' when approving
         updates.push('key_status = ?')
         params.push('ACTIVE')
-        console.log('[Dashboard API] Generating new activation key and setting key_status=ACTIVE for status change to CHO_PHEP')
+        console.log('[Dashboard API] Setting key_status=ACTIVE for status change to CHO_PHEP')
       }
+
+      // Khi block user via editUser → revoke key + clear ALL tokens
+      if (trang_thai === 'CHAN' && isStatusChanging) {
+        updates.push('key_status = ?')
+        params.push('REVOKED')
+        updates.push('device_token = NULL, device_token_expires_at = NULL, refresh_token = NULL, refresh_token_expires_at = NULL')
+        // Note: NULL fields don't need params
+      }
+    }
+
+    // License expiry — NULL = vĩnh viễn, number = timestamp hết hạn
+    if (license_expires_at !== undefined) {
+      updates.push('license_expires_at = ?')
+      params.push(license_expires_at) // null or timestamp
     }
 
     if (updates.length === 0) {
       return json({ error: 'No fields to update' }, 400)
     }
+
+    // Read old values BEFORE update for accurate activity log
+    const oldUser = await env.DB.prepare('SELECT tai_khoan, ma_may, trang_thai FROM registrations WHERE id = ?').bind(id).first<{ tai_khoan: string; ma_may: string; trang_thai: string }>()
 
     params.push(id) // Add id at the end for WHERE clause
 
@@ -1152,9 +1179,8 @@ export async function editUser(request: Request, env: Env): Promise<Response> {
       }, 404)
     }
 
-    // Log activity
+    // Log activity (oldUser was read BEFORE update for accurate logging)
     const adminInfo = getAdminInfo(request)
-    const oldUser = await env.DB.prepare('SELECT tai_khoan, ma_may, trang_thai FROM registrations WHERE id = ?').bind(id).first<{ tai_khoan: string; ma_may: string; trang_thai: string }>()
     const newUser = { tai_khoan: tai_khoan || oldUser?.tai_khoan, ma_may: ma_may || oldUser?.ma_may, trang_thai: trang_thai || oldUser?.trang_thai }
     await logAdminActivity(
       env,
@@ -1293,6 +1319,10 @@ export async function handleDashboardAPI(request: Request, env: Env): Promise<Re
 
   if (pathname.startsWith('/api/admin/licenses/') && pathname.endsWith('/regenerate') && request.method === 'POST') {
     return regenerateLicense(request, env)
+  }
+
+  if (pathname.startsWith('/api/admin/users/') && pathname.endsWith('/delete') && request.method === 'POST') {
+    return deleteUser(request, env)
   }
 
   return json({ error: 'Not found' }, 404)
@@ -1496,7 +1526,7 @@ export async function exportEvents(request: Request, env: Env): Promise<Response
 
     let query = `
       SELECT id, event_type, severity, message, machine_id, username, 
-             app_version, timestamp, metadata
+             app_version, timestamp, details
       FROM security_events
       WHERE timestamp > ?
     `
@@ -1523,7 +1553,7 @@ export async function exportEvents(request: Request, env: Env): Promise<Response
       username: string | null
       app_version: string | null
       timestamp: number
-      metadata: string | null
+      details: string | null
     }>()
 
     const events = result.results || []
@@ -1548,7 +1578,7 @@ export async function exportEvents(request: Request, env: Env): Promise<Response
       e.username || '',
       e.app_version || '',
       new Date(e.timestamp).toISOString(),
-      e.metadata || '',
+      e.details || '',
     ])
 
     const csv = [
@@ -1667,8 +1697,8 @@ export async function revokeLicense(request: Request, env: Env): Promise<Respons
       return json({ error: 'User not found' }, 404)
     }
 
-    // Revoke key — clear key and set status to REVOKED
-    const result = await env.DB.prepare('UPDATE registrations SET key_kich_hoat = NULL, key_status = ? WHERE id = ?')
+    // Revoke key — clear key, set status to REVOKED, and invalidate all tokens
+    const result = await env.DB.prepare('UPDATE registrations SET key_kich_hoat = NULL, key_status = ?, device_token = NULL, device_token_expires_at = NULL, refresh_token = NULL, refresh_token_expires_at = NULL WHERE id = ?')
       .bind('REVOKED', userId)
       .run()
 
@@ -1730,8 +1760,15 @@ export async function regenerateLicense(request: Request, env: Env): Promise<Res
     // Generate new key
     const newKey = crypto.randomUUID()
     // V2: Set key_status='ACTIVE' when regenerating key
-    const result = await env.DB.prepare('UPDATE registrations SET key_kich_hoat = ?, key_status = ? WHERE id = ?')
-      .bind(newKey, 'ACTIVE', userId)
+    // FIX: Also invalidate old tokens so user must re-authenticate with new key
+    const result = await env.DB.prepare(
+      `UPDATE registrations
+       SET key_kich_hoat = ?, key_status = 'ACTIVE',
+           device_token = NULL, device_token_expires_at = NULL,
+           refresh_token = NULL, refresh_token_expires_at = NULL
+       WHERE id = ?`
+    )
+      .bind(newKey, userId)
       .run()
 
     // Log activity
@@ -1755,6 +1792,74 @@ export async function regenerateLicense(request: Request, env: Env): Promise<Res
     })
   } catch (error: any) {
     console.error('[Dashboard API] Error regenerating license:', error)
+    return json({ error: error.message || 'Internal error' }, 500)
+  }
+}
+
+/**
+ * POST /api/admin/users/:id/delete
+ * Delete a user permanently
+ */
+export async function deleteUser(request: Request, env: Env): Promise<Response> {
+  if (!verifyAdminToken(request, env)) {
+    return json({ error: 'Unauthorized' }, 401)
+  }
+
+  if (!env.DB) {
+    return json({ error: 'Database not available' }, 500)
+  }
+
+  try {
+    const url = new URL(request.url)
+    const parts = url.pathname.split('/')
+    const userId = parts[parts.length - 2] // /api/admin/users/:id/delete
+
+    // Get user info before deleting (for audit log)
+    const user = await env.DB.prepare('SELECT tai_khoan, ma_may FROM registrations WHERE id = ?')
+      .bind(userId)
+      .first<{ tai_khoan: string; ma_may: string }>()
+
+    if (!user) {
+      return json({ error: 'User not found' }, 404)
+    }
+
+    // Delete from machine_id_tracking first (foreign key)
+    await env.DB.prepare('DELETE FROM machine_id_tracking WHERE username = ?')
+      .bind(user.tai_khoan)
+      .run()
+
+    // Delete audit logs for this user
+    try {
+      await env.DB.prepare('DELETE FROM auth_audit_logs WHERE username = ?')
+        .bind(user.tai_khoan)
+        .run()
+    } catch (e) { /* table may not exist */ }
+
+    // Delete the user registration
+    await env.DB.prepare('DELETE FROM registrations WHERE id = ?')
+      .bind(userId)
+      .run()
+
+    // Log admin activity
+    const adminInfo = getAdminInfo(request)
+    await logAdminActivity(
+      env,
+      'delete_user',
+      'user',
+      userId,
+      user.tai_khoan,
+      { tai_khoan: user.tai_khoan, ma_may: user.ma_may },
+      null,
+      adminInfo.ip,
+      adminInfo.session
+    )
+
+    return json({
+      ok: true,
+      message: `Đã xóa user ${user.tai_khoan} thành công`,
+    })
+  } catch (error: any) {
+    console.error('[Dashboard API] Error deleting user:', error)
     return json({ error: error.message || 'Internal error' }, 500)
   }
 }
@@ -1786,19 +1891,33 @@ export async function bulkUpdateUsers(request: Request, env: Env): Promise<Respo
 
     // Update all users
     if (status === 'CHO_PHEP') {
-      // Approve: tạo key RIÊNG cho từng user (không dùng chung 1 key)
-      const stmtApprove = env.DB.prepare(
+      // Approve: set key_status=ACTIVE, only generate new key if user doesn't have one
+      const stmtApproveWithKey = env.DB.prepare(
         `UPDATE registrations SET trang_thai = ?, key_kich_hoat = ?, key_status = 'ACTIVE' WHERE id = ?`
       )
-      const batch = userIds.map((id) =>
-        stmtApprove.bind(status, crypto.randomUUID(), id)
+      const stmtApproveNoKey = env.DB.prepare(
+        `UPDATE registrations SET trang_thai = ?, key_status = 'ACTIVE' WHERE id = ?`
       )
+      // Check which users already have keys
+      const placeholders = userIds.map(() => '?').join(',')
+      const existingKeys = await env.DB.prepare(
+        `SELECT id, key_kich_hoat FROM registrations WHERE id IN (${placeholders})`
+      ).bind(...userIds).all<{ id: string; key_kich_hoat: string | null }>()
+      const keysMap = new Map((existingKeys.results || []).map(r => [r.id, r.key_kich_hoat]))
+
+      const batch = userIds.map((id) => {
+        if (keysMap.get(id)) {
+          // Already has key — don't overwrite
+          return stmtApproveNoKey.bind(status, id)
+        }
+        return stmtApproveWithKey.bind(status, crypto.randomUUID(), id)
+      })
       await env.DB.batch(batch)
     } else if (status === 'CHAN') {
-      // Block: set key_status to REVOKED
+      // Block: set key_status to REVOKED + clear ALL tokens
       const placeholders = userIds.map(() => '?').join(',')
       await env.DB.prepare(
-        `UPDATE registrations SET trang_thai = ?, key_status = 'REVOKED' WHERE id IN (${placeholders})`
+        `UPDATE registrations SET trang_thai = ?, key_status = 'REVOKED', device_token = NULL, device_token_expires_at = NULL, refresh_token = NULL, refresh_token_expires_at = NULL WHERE id IN (${placeholders})`
       ).bind(status, ...userIds).run()
     } else {
       const placeholders = userIds.map(() => '?').join(',')
@@ -1825,6 +1944,7 @@ export async function bulkUpdateUsers(request: Request, env: Env): Promise<Respo
     return json({
       ok: true,
       message: `Đã cập nhật ${userIds.length} người dùng`,
+      changes: userIds.length,
     })
   } catch (error: any) {
     console.error('[Dashboard API] Error bulk updating users:', error)

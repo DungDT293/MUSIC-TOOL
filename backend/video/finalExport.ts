@@ -13,7 +13,7 @@ import { verifyOutputVideo } from './outputVerification'
 import { runPlaybackTest } from './playbackTest'
 import { getDiskSpace, formatBytes, assertMinDiskSpace } from '../utils/diskSpace'
 import { buildVideoEncoderArgsWithChoice, getGpuInfo } from '../utils/gpuDetection'
-import { buildNormalizeCudaHybridVfFilter, buildNormalizeVfFilter } from './utils/normalizeVf'
+import { buildConcatSafeOutputArgs, buildNormalizeCudaHybridVfFilter, buildNormalizeVfFilter, detectEncoderFromArgs, extractFpsFromVfFilter } from './utils/normalizeVf'
 import {
   buildPlaylistToFillDuration,
   shuffleOnce,
@@ -51,6 +51,8 @@ export interface FinalExportEmitter {
 export interface AudioSourceItem {
   path: string
   durationSec: number
+  /** Codec đã probe sẵn ở plan phase — tránh probe lại trong processJob */
+  codecName?: string | null
 }
 
 export interface VideoClipItem {
@@ -68,6 +70,7 @@ export interface ExportJob {
   outputFileName: string
   customOutputName?: string // Tên tùy chỉnh từ outputNames array
   tracklistText?: string // Tracklist text nếu có
+  mappedVideo?: VideoClipItem // Tab 6 files mode: audio[i] ghép đúng video[i]
 }
 
 export interface ExportPlan {
@@ -84,33 +87,29 @@ export interface ExportPlan {
 function escapePathForFfmpegList(filePath: string): string {
   // Normalize backslash Windows → forward slash trước (FFmpeg concat demuxer yêu cầu)
   const normalized = filePath.replace(/\\/g, '/')
-  return normalized.replace(/'/g, "'\\''")
+  // Escape special chars: single quote, backslash, # (comment char in concat files), semicolon
+  return normalized
+    .replace(/'/g, "'\\''")
+    .replace(/#/g, "'\\#'")
 }
 
+// FIX PERF-12: Pre-compiled regex — tránh compile lại mỗi lần gọi sanitizeFilename
+const RX_PIPE = /\|/g
+const RX_INVALID_CHARS = /[<>:"/\\?*\x00-\x1F]/g
+const RX_MULTI_SPACE = /\s+/g
+const RX_MULTI_UNDERSCORE_MID = /([^ ])_+([^ ])/g
+const RX_MULTI_UNDERSCORE_END = /([^ ])_+$/g
+const RX_MULTI_UNDERSCORE_START = /^_+([^ ])/g
+const RX_TRIM_UNDERSCORE_SPACE = /^[\s_]+|[\s_]+$/g
+
 function sanitizeFilename(name: string): string {
-  // Loại bỏ các ký tự không hợp lệ trong tên file Windows
-  // Đặc biệt: chỉ thay "|" thành " _ " (có khoảng trắng xung quanh để format đẹp)
-  // Format mong muốn: "1 Tomorrowland 2025 _ Tiësto, ..."
-  
-  // Bước 1: Thay "|" thành " _ " (có khoảng trắng xung quanh)
-  let result = name.replace(/\|/g, ' _ ')
-  
-  // Bước 2: Thay các ký tự không hợp lệ khác bằng "_" (trừ dấu cách)
-  result = result.replace(/[<>:"/\\?*\x00-\x1F]/g, '_')
-  
-  // Bước 3: Gộp nhiều khoảng trắng liên tiếp thành 1 khoảng trắng
-  result = result.replace(/\s+/g, ' ')
-  
-  // Bước 4: Gộp nhiều "_" liên tiếp thành 1 "_"
-  // Nhưng cần cẩn thận để không làm mất " _ " đã tạo từ "|"
-  // Cách đơn giản: chỉ gộp các "_" không có khoảng trắng xung quanh
-  result = result.replace(/([^ ])_+([^ ])/g, '$1_$2') // Gộp _ giữa 2 ký tự không phải khoảng trắng
-  result = result.replace(/([^ ])_+$/g, '$1_') // Gộp _ ở cuối
-  result = result.replace(/^_+([^ ])/g, '_$1') // Gộp _ ở đầu
-  
-  // Bước 5: Loại bỏ _ và khoảng trắng ở đầu và cuối
-  result = result.replace(/^[\s_]+|[\s_]+$/g, '')
-  
+  let result = name.replace(RX_PIPE, ' _ ')
+  result = result.replace(RX_INVALID_CHARS, '_')
+  result = result.replace(RX_MULTI_SPACE, ' ')
+  result = result.replace(RX_MULTI_UNDERSCORE_MID, '$1_$2')
+  result = result.replace(RX_MULTI_UNDERSCORE_END, '$1_')
+  result = result.replace(RX_MULTI_UNDERSCORE_START, '_$1')
+  result = result.replace(RX_TRIM_UNDERSCORE_SPACE, '')
   return result.trim()
 }
 
@@ -160,6 +159,40 @@ function generateTracklistFromHistory(audioPath: string): string | undefined {
       return `${timeStr} ${name}`
     })
     
+    const tracklistText = lines.join('\n')
+    console.log(`[FinalExport] Tìm thấy tracklist cho audio: ${audioPath} (${matchingEntry.tracks.length} tracks)`)
+    return tracklistText
+  } catch (error) {
+    console.warn(`[FinalExport] Lỗi khi tìm tracklist cho audio: ${audioPath}`, error)
+    return undefined
+  }
+}
+
+/**
+ * FIX PERF-11: Phiên bản nhận history đã cache sẵn — tránh đọc disk N lần
+ */
+function generateTracklistFromCachedHistory(history: ExportHistoryEntry[], audioPath: string): string | undefined {
+  try {
+    const matchingEntry = history.find(entry => {
+      const entryPath = path.resolve(entry.outputPath).toLowerCase()
+      const audioPathResolved = path.resolve(audioPath).toLowerCase()
+      return entryPath === audioPathResolved
+    })
+
+    if (!matchingEntry || !matchingEntry.tracks || matchingEntry.tracks.length === 0) {
+      console.log(`[FinalExport] Không tìm thấy tracklist cho audio: ${audioPath}`)
+      return undefined
+    }
+
+    const lines = matchingEntry.tracks.map(track => {
+      const timeStr = formatTimeForTracklist(track.startSec)
+      let name = track.name || path.basename(track.path, path.extname(track.path))
+      if (name && path.extname(name)) {
+        name = path.basename(name, path.extname(name))
+      }
+      return `${timeStr} ${name}`
+    })
+
     const tracklistText = lines.join('\n')
     console.log(`[FinalExport] Tìm thấy tracklist cho audio: ${audioPath} (${matchingEntry.tracks.length} tracks)`)
     return tracklistText
@@ -373,6 +406,7 @@ async function scanAudioSourceForPlan(
   return audioFiles.map(f => ({
     path: f.path,
     durationSec: f.durationSec,
+    codecName: f.codecName,  // FIX PERF-1: Propagate codec đã probe — tránh probe lại
   }))
 }
 
@@ -475,14 +509,18 @@ export async function planFinalExport(
     throw new Error('Không có clip video hợp lệ.')
   }
 
-  // Medium: Validate audio/video count match khi dùng nguồn file
+  // Tab 6 strict mapping: khi user chọn danh sách video files, phải ghép audio[i] -> video[i].
+  // Chỉ áp dụng cho files mode CÓ strictPairing (mặc định true cho Tab 6 manual).
+  // Autopilot pool mode gửi strictPairing: false → skip guard, dùng random/LRU pick.
+  const strictFilesVideoPairing =
+    videoSource.type === 'files' && videoSource.strictPairing !== false
+
   if (
-    audioSource.type === 'files' &&
-    videoSource.type === 'files' &&
-    videoClips.length < audioItems.length
+    strictFilesVideoPairing &&
+    videoClips.length !== audioItems.length
   ) {
     throw new Error(
-      `Số video (${videoClips.length}) ít hơn số audio (${audioItems.length}). Hãy bổ sung video hoặc bật shuffle để reuse.`
+      `Tab 6 yêu cầu ghép 1-1: audio[i] -> video[i]. Hiện có ${audioItems.length} audio và ${videoClips.length} video. Hãy làm cho số lượng bằng nhau.`
     )
   }
   
@@ -496,6 +534,7 @@ export async function planFinalExport(
       outputPath: path.join(outputFolder, outputFileName),
       outputFileName,
       customOutputName: customName,
+      mappedVideo: strictFilesVideoPairing ? videoClips[index] : undefined,
     }
   })
 
@@ -548,7 +587,8 @@ async function probeAudioCodec(audioPath: string): Promise<string | null> {
 /**
  * PHASE 5: Execute final export - chạy từng job trong ExportPlan
  *
- * - Mỗi job dùng TOÀN BỘ videoClips pool (không chia subset)
+ * - Tab 6 files mode: mỗi job dùng đúng video[i] của job đó, tự loop nếu video ngắn hơn audio
+ * - Folder/pool mode (Autopilot semantics) giữ nguyên
  * - Audio codec check: AAC/MP3 → copy, WAV/PCM → encode aac
  * - Progress: percentJob + percentTotal
  * - KHÔNG concat audio lại
@@ -587,14 +627,38 @@ export async function executeFinalExport(
       : null
 
   try {
+    const tracklistWarnings: string[] = []
+
     // Generate tracklist cho từng job nếu tracklistAuto = true
     if (tracklistAuto) {
+      // FIX PERF-11: Gọi getRecentHistory() 1 lần, dùng lại cho tất cả jobs
+      const history = getRecentHistory()
+      const unmatchedTracklistJobs: ExportJob[] = []
       for (const job of plan.jobs) {
-        const tracklistText = generateTracklistFromHistory(job.audio.path)
+        const tracklistText = generateTracklistFromCachedHistory(history, job.audio.path)
         if (tracklistText) {
           job.tracklistText = tracklistText
           console.log(`[FinalExport] Generated tracklist for job ${job.jobIndex + 1}: ${job.outputFileName}`)
+        } else {
+          unmatchedTracklistJobs.push(job)
         }
+      }
+
+      if (history.length === 0) {
+        tracklistWarnings.push(
+          'Tracklist tự động đang bật nhưng chưa có lịch sử export audio từ Tab 4, nên không có tracklist nào được tạo.'
+        )
+      } else if (unmatchedTracklistJobs.length > 0) {
+        const preview = unmatchedTracklistJobs
+          .slice(0, 3)
+          .map((job) => path.basename(job.audio.path))
+          .join(', ')
+        const suffix =
+          unmatchedTracklistJobs.length > 3 ? ` và ${unmatchedTracklistJobs.length - 3} file khác` : ''
+        tracklistWarnings.push(
+          `Tracklist tự động chỉ hoạt động khi audio nguồn khớp file đã xuất ở Tab 4. ` +
+            `${unmatchedTracklistJobs.length}/${plan.jobs.length} audio không khớp history (${preview}${suffix}).`
+        )
       }
     }
     
@@ -673,6 +737,17 @@ export async function executeFinalExport(
         jobPriorityPathSet && jobPriorityPathSet.size > 0
           ? jobBaseClips.filter((clip) => !jobPriorityPathSet.has(clip.path))
           : jobBaseClips
+      const mappedClip: ClipItem | null = job.mappedVideo
+        ? {
+            path: job.mappedVideo.path,
+            durationSec: job.mappedVideo.durationSec,
+            id: job.mappedVideo.path,
+            sizeBytes: job.mappedVideo.sizeBytes ?? undefined,
+            width: job.mappedVideo.width ?? undefined,
+            height: job.mappedVideo.height ?? undefined,
+          }
+        : null
+      const strictFilesPairingForJob = !!mappedClip
       const canMapOneToOneForJob = canMapOneToOne && jobBaseClips.length >= plan.jobs.length
 
       if (jobBaseClips.length === 0) {
@@ -687,7 +762,17 @@ export async function executeFinalExport(
 
       let videoPlaylist: ClipItem[]
 
-      if (jobPriorityClips.length > 0) {
+      if (strictFilesPairingForJob && mappedClip) {
+        if (jobPriorityClips.length > 0) {
+          console.warn(
+            `[Job ${currentJobIndex}] Strict audio[i] -> video[i] pairing active; ignoring priority video clips to avoid mixing sources.`
+          )
+        }
+        videoPlaylist = buildPlaylistToFillDuration([mappedClip], targetDurationSec, false)
+        console.log(
+          `[Job ${currentJobIndex}/${plan.totalJobs}] Strict 1:1 pairing with clip: ${path.basename(mappedClip.path)}`
+        )
+      } else if (jobPriorityClips.length > 0) {
         // Có video ưu tiên: luôn cho xuất hiện đầu video mỗi job (bất kể canMapOneToOne)
         // Priority clips được xử lý GIỐNG HỆT như logic ghép video bình thường (buildPlaylistToFillDuration)
         // NHƯNG priority clips LUÔN ở đầu video
@@ -769,23 +854,25 @@ export async function executeFinalExport(
         }
       }
       
-      const reserveDurationSec = Math.min(Math.max(targetDurationSec * 0.2, 180), 900)
-      const reservePrimarySource =
-        jobPriorityClips.length > 0
-          ? (jobNonPriorityClips.length > 0 ? jobNonPriorityClips : jobBaseClips)
-          : jobBaseClips
-      const primaryUsedPaths = new Set(videoPlaylist.map((clip) => clip.path))
-      const reserveSource = reservePrimarySource.filter((clip) => !primaryUsedPaths.has(clip.path))
-      const reserveFallbackSource = reserveSource.length > 0 ? reserveSource : reservePrimarySource
-      if (reserveFallbackSource.length > 0 && reserveDurationSec > 0) {
-        const reserveSeed = Date.now() + job.jobIndex * 3000000 + Math.random() * 1000
-        const reservePlaylist = buildPlaylistToFillDuration(reserveFallbackSource, reserveDurationSec, true, reserveSeed)
-        if (reservePlaylist.length > 0) {
-          const reserveActualDurationSec = reservePlaylist.reduce((sum, clip) => sum + clip.durationSec, 0)
-          videoPlaylist = [...videoPlaylist, ...reservePlaylist]
-          console.log(
-            `[Job ${currentJobIndex}] Added ${reservePlaylist.length} reserve clip(s) (${reserveActualDurationSec.toFixed(1)}s) for bad-clip recovery`
-          )
+      if (!strictFilesPairingForJob) {
+        const reserveDurationSec = Math.min(Math.max(targetDurationSec * 0.2, 180), 900)
+        const reservePrimarySource =
+          jobPriorityClips.length > 0
+            ? (jobNonPriorityClips.length > 0 ? jobNonPriorityClips : jobBaseClips)
+            : jobBaseClips
+        const primaryUsedPaths = new Set(videoPlaylist.map((clip) => clip.path))
+        const reserveSource = reservePrimarySource.filter((clip) => !primaryUsedPaths.has(clip.path))
+        const reserveFallbackSource = reserveSource.length > 0 ? reserveSource : reservePrimarySource
+        if (reserveFallbackSource.length > 0 && reserveDurationSec > 0) {
+          const reserveSeed = Date.now() + job.jobIndex * 3000000 + Math.random() * 1000
+          const reservePlaylist = buildPlaylistToFillDuration(reserveFallbackSource, reserveDurationSec, true, reserveSeed)
+          if (reservePlaylist.length > 0) {
+            const reserveActualDurationSec = reservePlaylist.reduce((sum, clip) => sum + clip.durationSec, 0)
+            videoPlaylist = [...videoPlaylist, ...reservePlaylist]
+            console.log(
+              `[Job ${currentJobIndex}] Added ${reservePlaylist.length} reserve clip(s) (${reserveActualDurationSec.toFixed(1)}s) for bad-clip recovery`
+            )
+          }
         }
       }
       console.log(
@@ -818,8 +905,8 @@ export async function executeFinalExport(
         })
       }
       
-      // 3. Probe audio codec
-      const audioCodec = await probeAudioCodec(job.audio.path)
+      // 3. Dùng codec đã probe sẵn từ plan phase (FIX PERF-1: tránh spawn ffprobe per job)
+      const audioCodec = job.audio.codecName ?? await probeAudioCodec(job.audio.path)
       const codecLower = audioCodec?.toLowerCase() ?? null
       const needAudioEncode = !codecLower || (codecLower !== 'aac' && codecLower !== 'mp3')
       
@@ -1062,6 +1149,7 @@ export async function executeFinalExport(
         tracklistFile: tracklistPaths[j.jobIndex],
       })),
       failedJobs: failedJobs.length > 0 ? failedJobs : undefined,
+      warnings: tracklistWarnings.length > 0 ? tracklistWarnings : undefined,
     })
     
     // Xóa file audio và video nguồn nếu được yêu cầu
@@ -1070,41 +1158,56 @@ export async function executeFinalExport(
       const deletedFiles: string[] = []
       const failedFiles: string[] = []
 
-      for (const job of succeededJobs) {
+      // FIX PERF-10: Dùng async unlink thay vì sync — tránh block event loop
+      // Xóa audio files
+      const audioDeletePromises = succeededJobs.map(async (job) => {
         try {
-          if (fs.existsSync(job.audio.path)) {
-            fs.unlinkSync(job.audio.path)
-            deletedFiles.push(job.audio.path)
-            console.log(`[FinalExport] Đã xóa audio: ${path.basename(job.audio.path)}`)
-          }
+          await fsp.access(job.audio.path)
+          await fsp.unlink(job.audio.path)
+          deletedFiles.push(job.audio.path)
+          console.log(`[FinalExport] Đã xóa audio: ${path.basename(job.audio.path)}`)
         } catch (err: any) {
-          console.error(`[FinalExport] Không thể xóa audio ${job.audio.path}:`, err)
-          failedFiles.push(job.audio.path)
+          if (err?.code !== 'ENOENT') {
+            console.error(`[FinalExport] Không thể xóa audio ${job.audio.path}:`, err)
+            failedFiles.push(job.audio.path)
+          }
         }
-      }
+      })
+      await Promise.allSettled(audioDeletePromises)
 
+      // Collect unique video paths — LOẠI TRỪ priority video (UI hứa không xóa)
       const videoPathsToDelete = new Set<string>()
+      const priorityPathSet = new Set<string>(
+        (plan.priorityVideoClips ?? []).map(c => c.path)
+      )
       for (const job of succeededJobs) {
         const usedPaths = usedVideoSourcePathsBySucceededJob.get(job.jobIndex) ?? []
         for (const videoPath of usedPaths) {
-          if (fs.existsSync(videoPath)) {
+          // Không xóa priority video files
+          if (!priorityPathSet.has(videoPath)) {
             videoPathsToDelete.add(videoPath)
           }
         }
       }
-
-      for (const videoPath of Array.from(videoPathsToDelete)) {
-        try {
-          if (fs.existsSync(videoPath)) {
-            fs.unlinkSync(videoPath)
-            deletedFiles.push(videoPath)
-            console.log(`[FinalExport] Đã xóa video: ${path.basename(videoPath)}`)
-          }
-        } catch (err: any) {
-          console.error(`[FinalExport] Không thể xóa video ${videoPath}:`, err)
-          failedFiles.push(videoPath)
-        }
+      if (priorityPathSet.size > 0) {
+        console.log(`[FinalExport] Bỏ qua ${priorityPathSet.size} priority video (không xóa)`)
       }
+
+      // Xóa video files song song
+      const videoDeletePromises = Array.from(videoPathsToDelete).map(async (videoPath) => {
+        try {
+          await fsp.access(videoPath)
+          await fsp.unlink(videoPath)
+          deletedFiles.push(videoPath)
+          console.log(`[FinalExport] Đã xóa video: ${path.basename(videoPath)}`)
+        } catch (err: any) {
+          if (err?.code !== 'ENOENT') {
+            console.error(`[FinalExport] Không thể xóa video ${videoPath}:`, err)
+            failedFiles.push(videoPath)
+          }
+        }
+      })
+      await Promise.allSettled(videoDeletePromises)
 
       if (deletedFiles.length > 0) {
         console.log(`[FinalExport] Đã xóa ${deletedFiles.length} file nguồn`)
@@ -1224,6 +1327,36 @@ function getEffectiveNormalizeTarget(clips: ClipItem[]): { targetResolution: str
   }
 }
 
+function collectForceReencodeTwoPassReasons(clips: ClipItem[]): string[] {
+  if (clips.length === 0) return []
+
+  const reasons: string[] = []
+  const distinctResolutions = collectDistinctClipResolutions(clips)
+  const hasMixedResolutions = distinctResolutions.length > 1
+  const hasUnsafeDimensions = clips.some((clip) => hasUnsafeFrameDimensions(clip))
+  const seenPaths = new Set<string>()
+  let hasLoopedClip = false
+
+  for (const clip of clips) {
+    if (seenPaths.has(clip.path)) {
+      hasLoopedClip = true
+      break
+    }
+    seenPaths.add(clip.path)
+  }
+
+  const hasVeryShortClip = clips.some(
+    (clip) => Number.isFinite(clip.durationSec) && clip.durationSec > 0 && clip.durationSec <= 5
+  )
+
+  if (hasMixedResolutions) reasons.push('mixed-resolution inputs')
+  if (hasUnsafeDimensions) reasons.push('unsafe frame dimensions')
+  if (hasLoopedClip) reasons.push('looped source clips')
+  if (hasVeryShortClip) reasons.push('very short clips (<= 5s)')
+
+  return reasons
+}
+
 function resolveEffectiveNormalizeVfFilter(opts: {
   explicitNormalizeVfFilter: string | null
   clips: ClipItem[]
@@ -1238,27 +1371,28 @@ function resolveEffectiveNormalizeVfFilter(opts: {
     return null
   }
 
-  const distinctResolutions = collectDistinctClipResolutions(clips)
-  const hasMixedResolutions = distinctResolutions.length > 1
-  const hasUnsafeDimensions = clips.some((clip) => hasUnsafeFrameDimensions(clip))
+  const twoPassReasons = collectForceReencodeTwoPassReasons(clips)
   const { targetResolution, targetFps } = getEffectiveNormalizeTarget(clips)
-  const sampleResolutions =
-    distinctResolutions.length > 0 ? distinctResolutions.slice(0, 4).join(', ') : 'unknown'
+  const sampleResolutions = collectDistinctClipResolutions(clips)
+  const sampleResolutionText =
+    sampleResolutions.length > 0 ? sampleResolutions.slice(0, 4).join(', ') : 'unknown'
 
-  if (hasMixedResolutions || hasUnsafeDimensions) {
+  if (twoPassReasons.length > 0) {
     console.warn(
       `[FinalExport] Auto-enabled 2-pass normalize for job ${jobLabel}: ` +
-        `re-encode input contains ${hasMixedResolutions ? 'mixed' : 'unsafe'} frame sizes (${sampleResolutions}). ` +
+        `${twoPassReasons.join(', ')} (${sampleResolutionText}). ` +
         `Target=${targetResolution} @ ${targetFps}fps`
     )
-  } else {
-    console.log(
-      `[FinalExport] Re-encode mode for job ${jobLabel} will use 2-pass normalize ` +
-        `(${sampleResolutions}) -> ${targetResolution} @ ${targetFps}fps`
-    )
+    return buildNormalizeVfFilter(targetResolution, targetFps)
   }
 
-  return buildNormalizeVfFilter(targetResolution, targetFps)
+  // Khi forceReencode=true nhưng input đồng nhất, không loop clip ngắn và frame size an toàn,
+  // single-step vẫn đủ nhanh/ổn định, không cần ép 2-pass.
+  console.log(
+    `[FinalExport] Uniform safe input for job ${jobLabel} (${sampleResolutionText}), ` +
+      `no normalize vf filter needed — skipping 2-pass`
+  )
+  return null
 }
 
 function resolveEffectiveGpuHybridNormalizeVfFilter(opts: {
@@ -1272,6 +1406,11 @@ function resolveEffectiveGpuHybridNormalizeVfFilter(opts: {
     return explicitGpuHybridVfFilter
   }
   if (!forceReencode || clips.length === 0) {
+    return null
+  }
+
+  // Mirror resolveEffectiveNormalizeVfFilter: looped/very-short playlists also need 2-pass.
+  if (collectForceReencodeTwoPassReasons(clips).length === 0) {
     return null
   }
 
@@ -1364,6 +1503,8 @@ interface PreTranscodeClipsOptions {
   failedSourcePaths?: Set<string>
   /** Cache clip ?? pre-transcode th?nh c?ng ?? reuse gi?a c?c l?n l?p/job */
   transcodedCache?: Map<string, string>
+  /** FIX BUG 3: Out-parameter — nếu truyền, preTranscodeClips sẽ push durationSec song song với transcodedPaths */
+  outDurations?: number[]
 }
 function sanitizePreTranscodeEncoderArgs(rawEncoderArgs: string[]): string[] {
   const sanitizedArgs: string[] = []
@@ -1471,6 +1612,7 @@ async function preTranscodeClips(opts: PreTranscodeClipsOptions): Promise<string
     minimumDurationSec,
     failedSourcePaths,
     transcodedCache,
+    outDurations,
   } = opts
   const defaultFfmpegPath = getFfmpegExecutable()
   const transcodedPaths: string[] = []
@@ -1529,6 +1671,19 @@ async function preTranscodeClips(opts: PreTranscodeClipsOptions): Promise<string
     console.log(`[PreTranscode] hybrid CUDA filter: ${gpuHybridVfFilter}`)
   }
 
+  // ── Concat-safe args: force uniform timebase, closed GOP & keyframe cadence ──
+  // These ensure all pre-transcoded clips have identical stream parameters
+  // so that Pass 2 concat-copy never hits PTS/DTS discontinuities.
+  const targetFpsStr = extractFpsFromVfFilter(vfFilter)
+  const primaryEncoderName = detectEncoderFromArgs(primaryArgs)
+  const cpuEncoderName = detectEncoderFromArgs(cpuFallbackArgs)
+  const concatSafeArgsPrimary = buildConcatSafeOutputArgs(primaryEncoderName, targetFpsStr)
+  const concatSafeArgsCpu = buildConcatSafeOutputArgs(cpuEncoderName, targetFpsStr)
+  console.log(`[PreTranscode] Concat-safe args (primary ${primaryEncoderName}):`, concatSafeArgsPrimary)
+  if (primaryEncoderName !== cpuEncoderName) {
+    console.log(`[PreTranscode] Concat-safe args (cpu fallback ${cpuEncoderName}):`, concatSafeArgsCpu)
+  }
+
   const isCancelRequested = (childRequestId?: string): boolean => {
     return videoJobManager.isCancelled(requestId) || (!!childRequestId && videoJobManager.isCancelled(childRequestId))
   }
@@ -1550,6 +1705,8 @@ async function preTranscodeClips(opts: PreTranscodeClipsOptions): Promise<string
 
       const selectedVfFilter =
         mode === 'gpu' && gpuHeavyRequested && gpuHybridVfFilter ? gpuHybridVfFilter : vfFilter
+      // Pick concat-safe args matching the encoder being used in this attempt
+      const concatSafeArgs = mode === 'gpu' ? concatSafeArgsPrimary : concatSafeArgsCpu
       const args =
         source.kind === 'file'
           ? [
@@ -1559,6 +1716,7 @@ async function preTranscodeClips(opts: PreTranscodeClipsOptions): Promise<string
               '-i', source.path,
               '-vf', selectedVfFilter,
               ...encoderArgs,
+              ...concatSafeArgs,
               '-map', '0:v:0',
               '-an',
               '-avoid_negative_ts', 'make_zero',
@@ -1573,6 +1731,7 @@ async function preTranscodeClips(opts: PreTranscodeClipsOptions): Promise<string
               '-t', source.durationSec.toFixed(3),
               '-vf', selectedVfFilter,
               ...encoderArgs,
+              ...concatSafeArgs,
               '-map', '0:v:0',
               '-an',
               '-avoid_negative_ts', 'make_zero',
@@ -1601,6 +1760,8 @@ async function preTranscodeClips(opts: PreTranscodeClipsOptions): Promise<string
         }
       }, clipTimeoutMs)
 
+      // FIX PERF-7: Throttle progress emit — 500ms thay vì mỗi stderr chunk
+      let lastPreTranscodeProgressMs = 0
       proc.stderr?.on('data', (data: Buffer) => {
         if (isCancelRequested(childRequestId)) {
           if (!videoJobManager.isCancelled(requestId)) {
@@ -1628,7 +1789,10 @@ async function preTranscodeClips(opts: PreTranscodeClipsOptions): Promise<string
           }
         }
 
-        if (onProgress && minimumDurationSec > 0) {
+        // FIX PERF-7: Throttle 500ms — giảm IPC overhead từ ~30/s xuống ~2/s
+        const nowMs = Date.now()
+        if (onProgress && minimumDurationSec > 0 && nowMs - lastPreTranscodeProgressMs > 500) {
+          lastPreTranscodeProgressMs = nowMs
           const percent = Math.min(70, (usableDurationSec / minimumDurationSec) * 70)
           onProgress(percent, lastSpeedX)
         }
@@ -1694,6 +1858,7 @@ async function preTranscodeClips(opts: PreTranscodeClipsOptions): Promise<string
     const cachedOutput = reusableTranscodedClipCache.get(clip.path)
     if (hasUsablePreTranscodedOutput(cachedOutput)) {
       transcodedPaths.push(cachedOutput)
+      outDurations?.push(clip.durationSec)
       usableDurationSec += Math.max(clip.durationSec, 0)
       reusedClipCount++
       if (onProgress && minimumDurationSec > 0) {
@@ -1723,6 +1888,7 @@ async function preTranscodeClips(opts: PreTranscodeClipsOptions): Promise<string
         { kind: 'file', path: clip.path },
       )
       transcodedPaths.push(outputFile)
+      outDurations?.push(clip.durationSec)
       reusableTranscodedClipCache.set(clip.path, outputFile)
       usableDurationSec += Math.max(clip.durationSec, 0)
     } catch (primaryErr: any) {
@@ -1741,6 +1907,7 @@ async function preTranscodeClips(opts: PreTranscodeClipsOptions): Promise<string
         try {
           await runAttempt(clip, i, 'cpu', defaultFfmpegPath, cpuFallbackArgs, outputFile, { kind: 'file', path: clip.path })
           transcodedPaths.push(outputFile)
+          outDurations?.push(clip.durationSec)
           reusableTranscodedClipCache.set(clip.path, outputFile)
           usableDurationSec += Math.max(clip.durationSec, 0)
           gpuDisabledForRemainingClips = true
@@ -1804,6 +1971,7 @@ async function preTranscodeClips(opts: PreTranscodeClipsOptions): Promise<string
       }
     )
     transcodedPaths.push(fillerOutput)
+    outDurations?.push(missingDurationSec)
     usableDurationSec += missingDurationSec
     placeholderClipCount++
     console.warn(
@@ -1927,7 +2095,13 @@ async function runFinalCommand(opts: RunFinalCommandOptions): Promise<void> {
 
   const codec = audioCodec?.toLowerCase() ?? null
   const needAudioEncode = !codec || (codec !== 'aac' && codec !== 'mp3')
-  const needsReencode = forceReencode || needAudioEncode || normalizeAudio || !!normalizeVfFilter
+  // FIX COPY-STREAM BUG 1+2: Decouple video re-encode decision from audio encode decision.
+  // Before: needsReencode = forceReencode || needAudioEncode || normalizeAudio || !!normalizeVfFilter
+  //   → This forced VIDEO re-encode whenever AUDIO needed encoding (e.g., FLAC audio → AAC).
+  //   → Massive performance waste: full libx264/NVENC re-encode of video just for audio conversion.
+  // After: needVideoReencode only considers video-specific conditions (forceReencode, vf filter).
+  //   Audio encoding is handled independently via shouldEncodeAudio.
+  const needVideoReencode = forceReencode || !!normalizeVfFilter
 
   // ═══════════════════════════════════════════════════════════════
   // STRATEGY:
@@ -1951,19 +2125,24 @@ async function runFinalCommand(opts: RunFinalCommandOptions): Promise<void> {
 
   // ─── SINGLE-STEP APPROACH (copy-stream hoặc re-encode đơn giản không có vf filter) ───
   const encoderChoice = useGpuEncoding || 'auto'
-  const { args: rawVideoCodecArgs, usedEncoder, gpuInfo } = needsReencode
+  const { args: rawVideoCodecArgs, usedEncoder, gpuInfo } = needVideoReencode
     ? await buildVideoEncoderArgsWithChoice(true, encoderChoice, 'fast')
     : { args: ['-c:v', 'copy'], usedEncoder: 'cpu' as const, gpuInfo: null }
   const ffmpegPath =
-    needsReencode && usedEncoder === 'gpu' && gpuInfo?.ffmpegPath
+    needVideoReencode && usedEncoder === 'gpu' && gpuInfo?.ffmpegPath
       ? getFfmpegExecutable(gpuInfo.ffmpegPath)
       : defaultFfmpegPath
 
   let videoCodecArgs = rawVideoCodecArgs
-  if (needsReencode) {
-    // Replace -vsync 2 → cfr
+  if (needVideoReencode) {
+    // FIX PERF-4: Strip -hwaccel (concat demuxer không hỗ trợ nvdec/d3d11va decode)
+    // + Replace -vsync 2 → cfr
     const sanitized: string[] = []
     for (let i = 0; i < rawVideoCodecArgs.length; i++) {
+      if (rawVideoCodecArgs[i] === '-hwaccel') {
+        i++ // skip value (nvdec, d3d11va, etc.)
+        continue
+      }
       if (rawVideoCodecArgs[i] === '-vsync' && rawVideoCodecArgs[i + 1] === '2') {
         sanitized.push('-vsync', 'cfr')
         i++
@@ -1972,13 +2151,13 @@ async function runFinalCommand(opts: RunFinalCommandOptions): Promise<void> {
       sanitized.push(rawVideoCodecArgs[i])
     }
     videoCodecArgs = sanitized
-    console.log('[FinalExport] re-encode mode (no vf filter) → using -vsync cfr')
+    console.log('[FinalExport] re-encode mode (no vf filter) → using -vsync cfr, stripped hwaccel for concat')
   } else {
     videoCodecArgs = ['-c:v', 'copy', '-fps_mode', 'passthrough']
     console.log('[FinalExport] copy-stream mode → -fps_mode passthrough + concat duration metadata')
   }
 
-  if (needsReencode) {
+  if (needVideoReencode) {
     if (usedEncoder === 'gpu' && gpuInfo) {
       console.log(`[FinalExport] Using ${(gpuInfo as any).encoder?.toUpperCase()} encoder`)
     } else {
@@ -1996,7 +2175,7 @@ async function runFinalCommand(opts: RunFinalCommandOptions): Promise<void> {
     audioPath,
     outputPath,
     videoCodecArgs,
-    needsReencode,
+    needVideoReencode,
     forceReencode,
     needAudioEncode,
     normalizeAudio,
@@ -2059,7 +2238,10 @@ async function runFinalCommand_TwoPass(opts: RunFinalCommandOptions): Promise<vo
       status: `Pass 1/2: Đang chuẩn hóa ${clips.length} video clips...`,
     })
 
-    const runPass1 = async (transcodedCache: Map<string, string>) =>
+    // FIX BUG 3: Collect durations alongside transcodedPaths for Pass 2 concat metadata
+    let transcodedDurations: number[] = []
+
+    const runPass1 = async (transcodedCache: Map<string, string>, durations: number[]) =>
       preTranscodeClips({
         clips,
         tempDir,
@@ -2071,6 +2253,7 @@ async function runFinalCommand_TwoPass(opts: RunFinalCommandOptions): Promise<vo
         minimumDurationSec: totalDurationSec,
         failedSourcePaths: failedVideoSourcePaths,
         transcodedCache,
+        outDurations: durations,
         onProgress: (percent, speedX) => {
           emitProgress({
             requestId,
@@ -2084,7 +2267,7 @@ async function runFinalCommand_TwoPass(opts: RunFinalCommandOptions): Promise<vo
         },
       })
 
-    let transcodedPaths = await runPass1(reusableTranscodedClipCache ?? new Map<string, string>())
+    let transcodedPaths = await runPass1(reusableTranscodedClipCache ?? new Map<string, string>(), transcodedDurations)
     let missingPass2Inputs = findMissingPreTranscodedOutputs(transcodedPaths)
 
     if (missingPass2Inputs.length > 0) {
@@ -2095,7 +2278,8 @@ async function runFinalCommand_TwoPass(opts: RunFinalCommandOptions): Promise<vo
       for (const outputFile of Array.from(new Set(transcodedPaths))) {
         cleanupPreTranscodeOutput(outputFile)
       }
-      transcodedPaths = await runPass1(new Map<string, string>())
+      transcodedDurations = []
+      transcodedPaths = await runPass1(new Map<string, string>(), transcodedDurations)
       missingPass2Inputs = findMissingPreTranscodedOutputs(transcodedPaths)
       if (missingPass2Inputs.length > 0) {
         const retrySample = missingPass2Inputs.slice(0, 5).join(', ')
@@ -2121,10 +2305,14 @@ async function runFinalCommand_TwoPass(opts: RunFinalCommandOptions): Promise<vo
       status: `Pass 2/2: Đang ghép video + audio...`,
     })
 
-    // Build concat list cho các clip đã transcode (KHÔNG cần inpoint/duration vì uniform format)
+    // FIX BUG 3: Build concat list với inpoint 0 + duration metadata cho PTS accuracy
     const pass2ListPath = path.join(tempDir, 'concat_pass2.txt')
     const pass2ListContent = transcodedPaths
-      .map(p => `file '${escapePathForFfmpegList(p)}'`)
+      .map((p, idx) => {
+        const dur = transcodedDurations[idx]
+        const durLine = dur != null && dur > 0 ? `\ninpoint 0\nduration ${dur.toFixed(6)}` : ''
+        return `file '${escapePathForFfmpegList(p)}'${durLine}`
+      })
       .join('\n')
     await fsp.writeFile(pass2ListPath, pass2ListContent, 'utf-8')
 
@@ -2133,7 +2321,7 @@ async function runFinalCommand_TwoPass(opts: RunFinalCommandOptions): Promise<vo
     const needAudioEncode = !codec || (codec !== 'aac' && codec !== 'mp3')
     const shouldEncodeAudio = forceReencode || needAudioEncode || normalizeAudio
     const audioCodecArgs = shouldEncodeAudio
-      ? ['-c:a', 'aac', '-b:a', '384k', '-ar', '48000', '-ac', '2']
+      ? ['-c:a', 'aac', '-b:a', '192k', '-ar', '48000', '-ac', '2']
       : ['-c:a', 'copy']
     const audioFilterArgs = normalizeAudio
       ? ['-af', 'loudnorm=I=-16:TP=-1.5:LRA=11']
@@ -2143,8 +2331,13 @@ async function runFinalCommand_TwoPass(opts: RunFinalCommandOptions): Promise<vo
       currentTranscodedPaths: string[],
       mode: 'default' | 'memory_safe' = 'default',
     ): Promise<void> => {
+      // FIX BUG 3: Include inpoint/duration metadata in Pass 2 concat list
       const currentPass2ListContent = currentTranscodedPaths
-        .map((filePath) => `file '${escapePathForFfmpegList(filePath)}'`)
+        .map((filePath, idx) => {
+          const dur = transcodedDurations[idx]
+          const durLine = dur != null && dur > 0 ? `\ninpoint 0\nduration ${dur.toFixed(6)}` : ''
+          return `file '${escapePathForFfmpegList(filePath)}'${durLine}`
+        })
         .join('\n')
       await fsp.writeFile(pass2ListPath, currentPass2ListContent, 'utf-8')
 
@@ -2178,7 +2371,7 @@ async function runFinalCommand_TwoPass(opts: RunFinalCommandOptions): Promise<vo
         child.stdout?.resume()
 
         let lastEmit = 0
-        const stderrLines: string[] = []
+        let stderrLines: string[] = []
 
         child.stderr?.on('data', (chunk: Buffer) => {
           if (videoJobManager.isCancelled(requestId)) {
@@ -2190,8 +2383,12 @@ async function runFinalCommand_TwoPass(opts: RunFinalCommandOptions): Promise<vo
           }
 
           const text = chunk.toString('utf-8')
-          stderrLines.push(...text.split(/\r?\n/).filter(Boolean))
-          if (stderrLines.length > 80) stderrLines.splice(0, stderrLines.length - 80)
+          // FIX PERF-6: Tránh Array.splice O(n) — dùng reassign slice thay vì shift in-place
+          const newLines = text.split(/\r?\n/).filter(Boolean)
+          if (newLines.length > 0) {
+            stderrLines.push(...newLines)
+            if (stderrLines.length > 80) stderrLines = stderrLines.slice(-80)
+          }
 
           const timeSec = parseTimeFromChunk(text)
           const speedX = parseSpeedFromChunk(text)
@@ -2199,7 +2396,7 @@ async function runFinalCommand_TwoPass(opts: RunFinalCommandOptions): Promise<vo
             const pass2Percent = Math.min(100, (timeSec / totalDurationSec) * 100)
             const totalPercent = Math.min(99.4, 70 + (pass2Percent / 100) * 30)
             const now = Date.now()
-            if (now - lastEmit > 100) {
+            if (now - lastEmit > 500) {
               lastEmit = now
               const etaSec = speedX && speedX > 0 ? Math.max(0, (totalDurationSec - timeSec) / Math.max(speedX, 0.1)) : undefined
               emitProgress({
@@ -2288,7 +2485,8 @@ async function runFinalCommand_TwoPass(opts: RunFinalCommandOptions): Promise<vo
           for (const outputFile of Array.from(new Set(transcodedPaths))) {
             cleanupPreTranscodeOutput(outputFile)
           }
-          transcodedPaths = await runPass1(new Map<string, string>())
+          transcodedDurations = []
+          transcodedPaths = await runPass1(new Map<string, string>(), transcodedDurations)
           const retryMissingInputs = findMissingPreTranscodedOutputs(transcodedPaths)
           if (retryMissingInputs.length > 0) {
             throw new Error(
@@ -2343,7 +2541,7 @@ interface RunFinalCommandSingleStepOptions {
   audioPath: string
   outputPath: string
   videoCodecArgs: string[]
-  needsReencode: boolean
+  needVideoReencode: boolean
   forceReencode: boolean
   needAudioEncode: boolean
   normalizeAudio: boolean
@@ -2361,7 +2559,7 @@ async function runFinalCommand_SingleStep(opts: RunFinalCommandSingleStepOptions
     audioPath,
     outputPath,
     videoCodecArgs,
-    needsReencode,
+    needVideoReencode,
     forceReencode,
     needAudioEncode,
     normalizeAudio,
@@ -2376,7 +2574,7 @@ async function runFinalCommand_SingleStep(opts: RunFinalCommandSingleStepOptions
 
     const shouldEncodeAudio = forceReencode || needAudioEncode || normalizeAudio
     const audioCodecArgs = shouldEncodeAudio
-      ? ['-c:a', 'aac', '-b:a', '384k', '-ar', '48000', '-ac', '2']
+      ? ['-c:a', 'aac', '-b:a', '192k', '-ar', '48000', '-ac', '2']
       : ['-c:a', 'copy']
     const audioFilterArgs = normalizeAudio
       ? ['-af', 'loudnorm=I=-16:TP=-1.5:LRA=11']
@@ -2388,7 +2586,7 @@ async function runFinalCommand_SingleStep(opts: RunFinalCommandSingleStepOptions
       'error',
       '-stats',
       '-fflags', '+genpts+igndts+discardcorrupt',
-      ...(needsReencode ? ['-reinit_filter', '0'] : []),
+      ...(needVideoReencode ? ['-reinit_filter', '0'] : []),
       '-f',
       'concat',
       '-safe',
@@ -2433,7 +2631,7 @@ async function runFinalCommand_SingleStep(opts: RunFinalCommandSingleStepOptions
 
     let lastEmit = 0
     let lastTimeSec: number | null = null
-    const stderrLines: string[] = []
+    let stderrLines: string[] = []
 
     let dropWarned = false
 
@@ -2451,9 +2649,11 @@ async function runFinalCommand_SingleStep(opts: RunFinalCommandSingleStepOptions
       }
 
       const text = chunk.toString('utf-8')
-      stderrLines.push(...text.split(/\r?\n/).filter(Boolean))
-      if (stderrLines.length > 80) {
-        stderrLines.splice(0, stderrLines.length - 80)
+      // FIX PERF-6: Tránh Array.splice O(n) — dùng reassign slice
+      const newLines = text.split(/\r?\n/).filter(Boolean)
+      if (newLines.length > 0) {
+        stderrLines.push(...newLines)
+        if (stderrLines.length > 80) stderrLines = stderrLines.slice(-80)
       }
       const timeSec = parseTimeFromChunk(text)
       const speedX = parseSpeedFromChunk(text)

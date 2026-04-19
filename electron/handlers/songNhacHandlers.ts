@@ -9,6 +9,7 @@ import path from 'node:path'
 import { promises as fsp } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { isValidAbsolutePath } from '../authState'
+import { AutopilotConfigSchema } from '../../shared/ipcSchemas'
 import {
   startAutopilot,
   getAutopilotProgress,
@@ -130,15 +131,24 @@ export function registerSongNhacHandlers(getMainWindow: () => BrowserWindow | nu
   })
 
   ipcMain.handle('autopilot:start', async (_event, config: AutopilotBackendConfig) => {
+    // Validate config trước khi xử lý
+    const parsed = AutopilotConfigSchema.safeParse(config)
+    if (!parsed.success) {
+      const errorMessages = parsed.error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join('; ')
+      console.error('[Autopilot] Config validation failed:', errorMessages)
+      return { ok: false, error: `Config không hợp lệ: ${errorMessages}` }
+    }
+    // FIX BUG-2: Synchronous double-guard — check cả in-flight flag VÀ status
+    // TRƯỚC bất kỳ await nào, tránh race condition từ event loop interleaving.
     if (autopilotStartInFlight) {
       return { ok: false, error: 'Autopilot đang khởi động. Hãy chờ health-check hiện tại hoàn tất.' }
     }
+    const statusBeforeStart = getAutopilotProgress().status
+    if (statusBeforeStart === 'running' || statusBeforeStart === 'paused' || statusBeforeStart === 'cancelling') {
+      return { ok: false, error: 'Autopilot đang chạy hoặc đang dừng. Hãy chờ job hiện tại kết thúc trước khi chạy job mới.' }
+    }
     autopilotStartInFlight = true
     try {
-      const status = getAutopilotProgress().status
-      if (status === 'running' || status === 'paused' || status === 'cancelling') {
-        return { ok: false, error: 'Autopilot đang chạy hoặc đang dừng. Hãy chờ job hiện tại kết thúc trước khi chạy job mới.' }
-      }
       const { runAutopilotHealthCheck } = await import('../../backend/autopilot/healthCheck')
       const healthCheck = await runAutopilotHealthCheck(config)
       if (!healthCheck.ok) {
@@ -165,6 +175,10 @@ export function registerSongNhacHandlers(getMainWindow: () => BrowserWindow | nu
       startAutopilot(effectiveConfig).catch((error: any) => {
         console.error('[Autopilot] Pipeline error (background):', error)
       })
+      // FIX BUG-2: Giữ autopilotStartInFlight = true cho đến khi startAutopilot
+      // đã set status = 'running' (hoặc lỗi). Dùng setTimeout nhỏ để đảm bảo
+      // startAutopilot kịp emit status trước khi flag reset.
+      await new Promise<void>(resolve => setTimeout(resolve, 200))
       return { ok: true }
     } catch (error: any) {
       console.error('[Autopilot] Failed to start:', error)

@@ -293,8 +293,8 @@ function DayPlansSection({
                       fontSize: '12px',
                     }}
                   >
-                    <option value="tomorrowland">Tomorrowland 2025</option>
-                    <option value="partymix">Party Mix 2025</option>
+                    <option value="tomorrowland">Tomorrowland {new Date().getFullYear()}</option>
+                    <option value="partymix">Party Mix {new Date().getFullYear()}</option>
                     <option value="custom">Custom</option>
                   </select>
 
@@ -414,7 +414,7 @@ export function DayPlanDetailDialog({
 
   // Reset local state when plan / overrides change
   const effectivePlanId = plan?.id
-  useMemo(() => {
+  useEffect(() => {
     const newCustomTitles = overrides.customTitles ?? []
     setLocal({
       ...overrides,
@@ -1904,6 +1904,7 @@ function AutopilotPageLegacy() {
   const [detailOpenFor, setDetailOpenFor] = useState<string | null>(null)
   const [panelRatio, setPanelRatio] = useState(0.55) // left panel width ratio (0-1)
   const [isResizingPanels, setIsResizingPanels] = useState(false)
+  const isStartingRef = useRef(false) // Chặn double-click race condition
   const layoutRef = useRef<HTMLDivElement | null>(null)
 
   const [foldersConfig, setFoldersConfig] = useState<AutopilotFoldersConfig>(() => {
@@ -1979,7 +1980,12 @@ function AutopilotPageLegacy() {
   const currentOverrides: DayPlanDetailOverrides = currentDetailPlan?.overrides ?? createDefaultOverrides()
 
   const config: AutopilotConfig = {
-    dayPlans,
+    // FIX: Coerce number|'' sang number trước khi gửi IPC
+    dayPlans: dayPlans.map(plan => ({
+      ...plan,
+      playlistCount: typeof plan.playlistCount === 'number' ? plan.playlistCount : (Number(plan.playlistCount) || 1),
+      minutesPerPlaylist: typeof plan.minutesPerPlaylist === 'number' ? plan.minutesPerPlaylist : (Number(plan.minutesPerPlaylist) || 60),
+    })),
     folders: foldersConfig,
   }
 
@@ -2161,6 +2167,11 @@ function AutopilotPageLegacy() {
   }, [dayPlans, foldersConfig])
 
   const simulateStartAutopilot = () => {
+    // Chặn double-click race condition
+    if (isStartingRef.current) {
+      console.warn('[Autopilot] Start đang được xử lý, bỏ qua request trùng lặp')
+      return
+    }
     const w = window
     if (!w.api?.autopilot?.start) {
       // eslint-disable-next-line no-alert
@@ -2188,9 +2199,11 @@ function AutopilotPageLegacy() {
       error: undefined,
     })
 
+    isStartingRef.current = true
     w.api.autopilot
       .start(config)
       .then((res: any) => {
+        isStartingRef.current = false
         console.log('[Autopilot] Response from backend:', res)
         if (!res?.ok) {
           // eslint-disable-next-line no-alert
@@ -2205,6 +2218,7 @@ function AutopilotPageLegacy() {
         }
       })
       .catch((err: any) => {
+        isStartingRef.current = false
         console.error('[Autopilot] start error:', err)
         // eslint-disable-next-line no-alert
         alert(err?.message || 'Lỗi không xác định khi chạy Autopilot.')
@@ -2248,6 +2262,12 @@ function AutopilotPageLegacy() {
         .cancel()
         .catch((err: any) => {
           console.warn('[Autopilot] cancel error:', err)
+          // Nếu cancel IPC lỗi → fallback về error state để user có thể thử lại
+          setRunProgress((prev) => ({
+            ...prev,
+            status: 'error',
+            error: 'Không thể gửi lệnh hủy đến backend. Vui lòng thử lại hoặc khởi động lại ứng dụng.',
+          }))
         })
     }
 
@@ -2257,6 +2277,20 @@ function AutopilotPageLegacy() {
       message: 'Đang gửi yêu cầu hủy Autopilot. Vui lòng chờ job hiện tại đóng lại.',
       error: undefined,
     }))
+
+    // Safety net: Nếu backend không phản hồi sau 60s, tự reset về error state
+    setTimeout(() => {
+      setRunProgress((prev) => {
+        if (prev.status === 'cancelling') {
+          return {
+            ...prev,
+            status: 'error',
+            error: 'Hủy autopilot timeout — backend không phản hồi. Vui lòng khởi động lại ứng dụng nếu vấn đề vẫn tiếp tục.',
+          }
+        }
+        return prev
+      })
+    }, 60_000)
   }
 
   return (
@@ -2425,9 +2459,11 @@ export default function AutopilotPage() {
   const [poolMounted, setPoolMounted] = useState(false)
 
   // Lazy-mount: mount tab khi lần đầu chọn, giữ nguyên khi chuyển tab
-  if (mode === 'batch' && !batchMounted) setBatchMounted(true)
-  if (mode === 'plan' && !planMounted) setPlanMounted(true)
-  if (mode === 'pool' && !poolMounted) setPoolMounted(true)
+  useEffect(() => {
+    if (mode === 'batch' && !batchMounted) setBatchMounted(true)
+    if (mode === 'plan' && !planMounted) setPlanMounted(true)
+    if (mode === 'pool' && !poolMounted) setPoolMounted(true)
+  }, [mode, batchMounted, planMounted, poolMounted])
 
   const tabStyle = (tab: AutopilotTabMode): React.CSSProperties => ({
     padding: '10px 24px',

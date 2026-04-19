@@ -8,6 +8,7 @@ import AuthPage from './pages/Auth/AuthPage'
 import { initAntiDebug, checkAntiDebug } from './security/antiDebug'
 import VersionBlockingScreen from './components/VersionBlockingScreen'
 import { useExportActivityStore } from './stores/exportActivityStore'
+import { useUpdaterStore } from './stores/updaterStore'
 
 // Anti-debugging (chỉ trong production)
 // FIX: Moved to useEffect with cleanup to prevent memory leak
@@ -114,6 +115,28 @@ function App() {
     return () => { unsub?.() }
   }, [])
 
+  // FIX 4.2: Global updater:status subscription — writes to Zustand store
+  // so SettingsPage (and any other component) can read updater state
+  // without losing it on page navigation.
+  useEffect(() => {
+    if (!window.api?.updater?.onStatus) return
+    const unsubscribe = window.api.updater.onStatus((status) => {
+      useUpdaterStore.getState().setStatus(status)
+    })
+    return unsubscribe
+  }, [])
+
+  // FIX 1.1: Sync export activity state from renderer → main process
+  // so that app:installUpdate and before-quit can guard against data loss.
+  const activeExports = useExportActivityStore((s) => s.activeExports)
+  const pendingDenial = useExportActivityStore((s) => s.pendingDenial)
+  useEffect(() => {
+    const isActive = activeExports.length > 0
+    window.api?.setExportActive?.(isActive).catch(() => {
+      // Non-critical — main process may not support this IPC yet (dev mode)
+    })
+  }, [activeExports])
+
   useEffect(() => {
     let cancelled = false
     const checkAuth = async () => {
@@ -199,9 +222,6 @@ function App() {
   }, [])
 
   // FIX C-01/H-05: Watch for exports finishing while a denial is pending
-  const activeExports = useExportActivityStore((s) => s.activeExports)
-  const pendingDenial = useExportActivityStore((s) => s.pendingDenial)
-
   useEffect(() => {
     if (!pendingDenial) return
     if (activeExports.length > 0) return // Still exporting — keep waiting

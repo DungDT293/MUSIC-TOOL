@@ -358,9 +358,10 @@ export async function handleCheckStatus(request: Request, env: Env): Promise<Res
       trang_thai: string
       key_status: string | null
       key_kich_hoat: string | null
+      license_expires_at: number | null
     }>(
       env.DB,
-      'trang_thai, key_status, key_kich_hoat',
+      'trang_thai, key_status, key_kich_hoat, license_expires_at',
       tai_khoan,
       ma_may,
     )
@@ -376,6 +377,11 @@ export async function handleCheckStatus(request: Request, env: Env): Promise<Res
 
     if (row.trang_thai === 'CHO_DUYET') {
       return json({ status: 'pending', message: 'Đang chờ admin duyệt. Xin hãy kiên nhẫn.' })
+    }
+
+    // LICENSE EXPIRY CHECK — NULL = vĩnh viễn
+    if (row.license_expires_at && row.license_expires_at < Date.now()) {
+      return json({ status: 'expired', message: 'Tài khoản đã hết hạn sử dụng. Vui lòng liên hệ admin để gia hạn.' })
     }
 
     if (row.trang_thai === 'CHO_PHEP' && row.key_status === 'ACTIVE') {
@@ -437,9 +443,10 @@ export async function handleValidateKey(request: Request, env: Env): Promise<Res
       key_attempts: number | null
       ma_may: string
       trang_thai: string
+      license_expires_at: number | null
     }>(
       env.DB,
-      'id, key_kich_hoat, key_status, key_attempts, ma_may, trang_thai',
+      'id, key_kich_hoat, key_status, key_attempts, ma_may, trang_thai, license_expires_at',
       tai_khoan,
       key_kich_hoat,
       ma_may,
@@ -468,6 +475,11 @@ export async function handleValidateKey(request: Request, env: Env): Promise<Res
         reason: 'Key is revoked',
       })
       return json({ valid: false, message: 'Key đã bị thu hồi. Vui lòng liên hệ admin.' })
+    }
+
+    // LICENSE EXPIRY CHECK — NULL = vĩnh viễn (user cũ không bị ảnh hưởng)
+    if (row.license_expires_at && row.license_expires_at < now) {
+      return json({ valid: false, message: 'Tài khoản đã hết hạn sử dụng. Vui lòng liên hệ admin để gia hạn.' })
     }
 
     // Check machineId
@@ -713,10 +725,10 @@ export async function handleValidateToken(request: Request, env: Env): Promise<R
 
     // Check account status and key_status in database
     const row = await env.DB.prepare(
-      'SELECT trang_thai, key_status, device_token_expires_at FROM registrations WHERE tai_khoan = ?'
+      'SELECT id, trang_thai, key_status, device_token_expires_at, license_expires_at FROM registrations WHERE tai_khoan = ? ORDER BY thoi_gian_tao DESC LIMIT 1'
     )
       .bind(payload.sub)
-      .first<{ trang_thai: string; key_status: string | null; device_token_expires_at: number | null }>()
+      .first<{ id: string; trang_thai: string; key_status: string | null; device_token_expires_at: number | null; license_expires_at: number | null }>()
 
     if (!row) {
       return json({ valid: false, error: 'Tài khoản không tồn tại.' })
@@ -736,6 +748,11 @@ export async function handleValidateToken(request: Request, env: Env): Promise<R
       return json({ valid: false, error: 'Key đã bị thu hồi hoặc khóa.' })
     }
 
+    // LICENSE EXPIRY CHECK — NULL = vĩnh viễn (user cũ không bị ảnh hưởng)
+    if (row.license_expires_at && row.license_expires_at < now) {
+      return json({ valid: false, error: 'Tài khoản đã hết hạn sử dụng. Vui lòng liên hệ admin để gia hạn.' })
+    }
+
     // Check token expiry in database (double check)
     if (row.device_token_expires_at && row.device_token_expires_at < now) {
       return json({ valid: false, error: 'Token đã hết hạn.' })
@@ -743,11 +760,11 @@ export async function handleValidateToken(request: Request, env: Env): Promise<R
 
     // Update last_login
     await env.DB.prepare(
-      `UPDATE registrations 
-       SET last_login_at = ?1, last_login_ip = ?2 
-       WHERE tai_khoan = ?3`
+      `UPDATE registrations
+       SET last_login_at = ?1, last_login_ip = ?2
+       WHERE id = ?3`
     )
-      .bind(now, ipAddress, payload.sub)
+      .bind(now, ipAddress, row.id)
       .run()
 
     // Write audit log
@@ -799,18 +816,20 @@ export async function handleRefreshToken(request: Request, env: Env): Promise<Re
 
   try {
     const row = await env.DB.prepare(
-      `SELECT tai_khoan, key_kich_hoat, key_status, refresh_token_expires_at, ma_may, trang_thai 
-       FROM registrations 
+      `SELECT id, tai_khoan, key_kich_hoat, key_status, refresh_token_expires_at, ma_may, trang_thai, license_expires_at
+       FROM registrations
        WHERE refresh_token = ?`
     )
       .bind(refresh_token)
       .first<{
+        id: string
         tai_khoan: string
         key_kich_hoat: string | null
         key_status: string | null
         refresh_token_expires_at: number | null
         ma_may: string
         trang_thai: string
+        license_expires_at: number | null
       }>()
 
     if (!row) {
@@ -826,7 +845,22 @@ export async function handleRefreshToken(request: Request, env: Env): Promise<Re
       return json({ ok: false, error: 'Tài khoản chưa được duyệt.' })
     }
 
-    // Check machineId
+    // LICENSE EXPIRY CHECK — NULL = vĩnh viễn
+    if (row.license_expires_at && row.license_expires_at < now) {
+      return json({ ok: false, error: 'Tài khoản đã hết hạn sử dụng. Vui lòng liên hệ admin để gia hạn.' })
+    }
+
+    // Check key_status
+    if (row.key_status === 'REVOKED' || row.key_status === 'LOCKED') {
+      return json({ ok: false, error: 'Key đã bị thu hồi hoặc khóa.' })
+    }
+
+    // Check refresh token expiry
+    if (row.refresh_token_expires_at && row.refresh_token_expires_at < now) {
+      return json({ ok: false, error: 'Refresh token đã hết hạn.' })
+    }
+
+    // Check machineId — SAU tất cả validation checks để tránh mutate data khi token hết hạn
     if (row.ma_may !== machine_id) {
       await autoRebindMachineId(env.DB, row.tai_khoan, row.ma_may, machine_id, ipAddress, 'refresh-token')
     }
@@ -866,16 +900,6 @@ export async function handleRefreshToken(request: Request, env: Env): Promise<Re
       return json({ ok: false, error: 'Refresh token không khớp với máy hiện tại.' })
     }
 
-    // Check key_status
-    if (row.key_status === 'REVOKED' || row.key_status === 'LOCKED') {
-      return json({ ok: false, error: 'Key đã bị thu hồi hoặc khóa.' })
-    }
-
-    // Check refresh token expiry
-    if (row.refresh_token_expires_at && row.refresh_token_expires_at < now) {
-      return json({ ok: false, error: 'Refresh token đã hết hạn.' })
-    }
-
     // Generate new tokens
     const deviceToken = await generateToken(
       {
@@ -892,18 +916,18 @@ export async function handleRefreshToken(request: Request, env: Env): Promise<Re
     const refreshExpiresAt = now + 90 * 24 * 60 * 60 * 1000 // 90 days
     const deviceExpiresAt = now + 30 * 24 * 60 * 60 * 1000 // 30 days
 
-    // Save new tokens
+    // Save new tokens — use id (not tai_khoan) to avoid updating multiple rows
     await env.DB.prepare(
-      `UPDATE registrations 
+      `UPDATE registrations
        SET device_token = ?1,
            device_token_expires_at = ?2,
            refresh_token = ?3,
            refresh_token_expires_at = ?4,
            last_login_at = ?5,
            last_login_ip = ?6
-       WHERE tai_khoan = ?7`
+       WHERE id = ?7`
     )
-      .bind(deviceToken, deviceExpiresAt, newRefreshToken, refreshExpiresAt, now, ipAddress, row.tai_khoan)
+      .bind(deviceToken, deviceExpiresAt, newRefreshToken, refreshExpiresAt, now, ipAddress, row.id)
       .run()
 
     // Write audit log
@@ -962,9 +986,10 @@ export async function handleLogin(request: Request, env: Env): Promise<Response>
       key_status: string | null
       ma_may: string
       key_kich_hoat: string | null
+      license_expires_at: number | null
     }>(
       env.DB,
-      'id, mat_khau, trang_thai, key_status, ma_may, key_kich_hoat',
+      'id, mat_khau, trang_thai, key_status, ma_may, key_kich_hoat, license_expires_at',
       tai_khoan,
       ma_may,
     )
@@ -973,18 +998,15 @@ export async function handleLogin(request: Request, env: Env): Promise<Response>
       return json({ ok: false, error: 'Tài khoản hoặc mật khẩu không đúng.' })
     }
 
-    // Check account status
+    // Check account status — phân biệt CHAN vs CHO_DUYET
+    if (row.trang_thai === 'CHAN') {
+      return json({ ok: false, error: 'Tài khoản đã bị chặn. Vui lòng liên hệ admin.' })
+    }
     if (row.trang_thai !== 'CHO_PHEP') {
-      return json({ ok: false, error: 'Tài khoản chưa được duyệt.' })
+      return json({ ok: false, error: 'Tài khoản đang chờ admin cấp quyền.' })
     }
 
-    // Check key_status
-    if (row.key_status === 'REVOKED' || row.key_status === 'LOCKED') {
-      return json({ ok: false, error: 'Key đã bị thu hồi hoặc khóa.' })
-    }
-
-    // Verify password FIRST — trước khi check machineId để tránh DoS attack
-    // (attacker chỉ cần biết username → spam sai machineId → auto-block nạn nhân)
+    // Verify password FIRST — trước khi check key_status/machineId để tránh information leak
     const isHashed = isPasswordHashed(row.mat_khau)
     let passwordValid = false
 
@@ -1002,6 +1024,16 @@ export async function handleLogin(request: Request, env: Env): Promise<Response>
         reason: 'Invalid password',
       })
       return json({ ok: false, error: 'Tài khoản hoặc mật khẩu không đúng.' })
+    }
+
+    // Check key_status — SAU password verify để không leak thông tin
+    if (row.key_status === 'REVOKED' || row.key_status === 'LOCKED') {
+      return json({ ok: false, error: 'Key đã bị thu hồi hoặc khóa.' })
+    }
+
+    // LICENSE EXPIRY CHECK — NULL = vĩnh viễn
+    if (row.license_expires_at && row.license_expires_at < now) {
+      return json({ ok: false, error: 'Tài khoản đã hết hạn sử dụng. Vui lòng liên hệ admin để gia hạn.' })
     }
 
     // Check machineId — chỉ sau khi password đã xác thực đúng
@@ -1277,25 +1309,24 @@ export async function handleAllowRebind(request: Request, env: Env): Promise<Res
 
     const oldMachineId = row.ma_may
 
-    // Update machineId
+    // Update machineId + invalidate old tokens in single atomic UPDATE
     await env.DB.prepare(
-      `UPDATE registrations 
-       SET ma_may = ?1
+      `UPDATE registrations
+       SET ma_may = ?1,
+           device_token = NULL,
+           device_token_expires_at = NULL,
+           refresh_token = NULL,
+           refresh_token_expires_at = NULL
        WHERE id = ?2`
     )
       .bind(new_machine_id, row.id)
       .run()
 
-    // Invalidate old tokens (they're bound to old machineId)
+    // FIX: Clear machine_id_tracking to prevent false-positive MULTIPLE_MACHINE_IDS alerts
     await env.DB.prepare(
-      `UPDATE registrations 
-       SET device_token = NULL,
-           device_token_expires_at = NULL,
-           refresh_token = NULL,
-           refresh_token_expires_at = NULL
-       WHERE id = ?`
+      'DELETE FROM machine_id_tracking WHERE username = ?'
     )
-      .bind(row.id)
+      .bind(tai_khoan)
       .run()
 
     // Write audit log

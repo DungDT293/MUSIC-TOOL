@@ -81,6 +81,136 @@ process.on('unhandledRejection', (reason, promise) => {
   console.error('[App] Promise:', promise)
 })
 
+// ─── Export Activity Tracking (synced from renderer) ─────────────────────────
+// FIX 1.1 + 1.2: The renderer's exportActivityStore syncs its state here
+// via IPC so that main-process code (updater, before-quit) can guard against
+// killing the app while an export is in progress.
+let _hasActiveExport = false
+export function hasActiveExport(): boolean { return _hasActiveExport }
+export function setHasActiveExport(value: boolean): void { _hasActiveExport = value }
+
+// ─── Version Gate (real policy check) ────────────────────────────────────────
+// FIX 2.1 + 2.3 + 2.4: Actually fetch the version policy from the Cloudflare
+// Worker and evaluate blocked_versions, min_supported_version, force_update.
+
+import type { VersionGateResult } from '../src/types/ipc'
+
+const VERSION_GATE_TIMEOUT_MS = 12_000
+
+/**
+ * Compare two semver strings. Returns:
+ *  -1 if a < b, 0 if a == b, 1 if a > b.
+ * Handles standard x.y.z format. Non-parseable versions are treated as 0.0.0.
+ */
+function compareSemver(a: string, b: string): -1 | 0 | 1 {
+  const parse = (v: string) => {
+    const parts = v.replace(/^v/, '').split('.').map(Number)
+    return [parts[0] || 0, parts[1] || 0, parts[2] || 0] as const
+  }
+  const [aMaj, aMin, aPat] = parse(a)
+  const [bMaj, bMin, bPat] = parse(b)
+  if (aMaj !== bMaj) return aMaj < bMaj ? -1 : 1
+  if (aMin !== bMin) return aMin < bMin ? -1 : 1
+  if (aPat !== bPat) return aPat < bPat ? -1 : 1
+  return 0
+}
+
+async function checkVersionGate(): Promise<VersionGateResult> {
+  try {
+    const appVersion = app.getVersion()
+    const serverUrl = process.env.AUTH_BASE || 'https://license-server.dungdong333.workers.dev'
+    const url = `${serverUrl}/api/version-policy`
+
+    console.log(`[VersionGate] Checking policy at ${url} for v${appVersion}`)
+
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), VERSION_GATE_TIMEOUT_MS)
+
+    let response: Response
+    try {
+      response = await net.fetch(url, { signal: controller.signal })
+    } finally {
+      clearTimeout(timeout)
+    }
+
+    if (!response.ok) {
+      console.warn(`[VersionGate] Server returned ${response.status}, fail-open → allow`)
+      return { status: 'allow' }
+    }
+
+    const policy = await response.json() as {
+      latest_version?: string
+      min_supported_version?: string
+      blocked_versions?: string[]
+      recommended_version?: string
+      recommended_installer_url?: string
+      force_update?: boolean
+      message?: string
+    }
+
+    console.log('[VersionGate] Policy received:', JSON.stringify({
+      latest: policy.latest_version,
+      min: policy.min_supported_version,
+      blocked: policy.blocked_versions?.length ?? 0,
+      force: policy.force_update,
+    }))
+
+    // ── Rule 1: blocked_versions — specific version blacklist ──
+    if (Array.isArray(policy.blocked_versions) && policy.blocked_versions.includes(appVersion)) {
+      console.warn(`[VersionGate] Version ${appVersion} is BLOCKED by policy`)
+      return {
+        status: 'block-version',
+        policy: {
+          min_supported_version: policy.min_supported_version || '0.0.0',
+          recommended_version: policy.recommended_version || policy.latest_version || appVersion,
+          recommended_installer_url: policy.recommended_installer_url,
+          message: policy.message || `Phiên bản ${appVersion} đã bị chặn. Vui lòng cập nhật.`,
+        },
+      }
+    }
+
+    // ── Rule 2: min_supported_version — version too old ──
+    if (policy.min_supported_version && compareSemver(appVersion, policy.min_supported_version) < 0) {
+      console.warn(`[VersionGate] Version ${appVersion} < min ${policy.min_supported_version} → block-old`)
+      return {
+        status: 'block-old',
+        policy: {
+          min_supported_version: policy.min_supported_version,
+          recommended_version: policy.recommended_version || policy.latest_version || policy.min_supported_version,
+          recommended_installer_url: policy.recommended_installer_url,
+          message: policy.message || `Phiên bản ${appVersion} quá cũ. Vui lòng cập nhật lên ${policy.min_supported_version} trở lên.`,
+        },
+      }
+    }
+
+    // ── Rule 3: force_update — force update to latest ──
+    if (
+      policy.force_update === true &&
+      policy.latest_version &&
+      compareSemver(appVersion, policy.latest_version) < 0
+    ) {
+      console.warn(`[VersionGate] force_update=true, ${appVersion} < ${policy.latest_version} → block-old`)
+      return {
+        status: 'block-old',
+        policy: {
+          min_supported_version: policy.min_supported_version || '0.0.0',
+          recommended_version: policy.latest_version,
+          recommended_installer_url: policy.recommended_installer_url,
+          message: policy.message || `Có bản cập nhật bắt buộc lên ${policy.latest_version}.`,
+        },
+      }
+    }
+
+    // ── All checks passed ──
+    console.log(`[VersionGate] Version ${appVersion} is allowed`)
+    return { status: 'allow' }
+  } catch (err: any) {
+    // Network error, timeout, parse error → fail-open for offline users
+    console.warn('[VersionGate] Check failed (fail-open → allow):', err?.message || err)
+    return { status: 'allow' }
+  }
+}
+
 // ─── App lifecycle ───────────────────────────────────────────────────────────
 app.whenReady()
   .then(async () => {
@@ -151,11 +281,12 @@ app.whenReady()
       createWindow()
       console.log('[App] Window created')
 
-      // Version gate: emit kết quả sau khi window load xong
+      // Version gate: fetch real policy from Cloudflare Worker, then emit result
       const mw = getMainWindow()
       if (mw && !mw.isDestroyed()) {
-        mw.webContents.once('did-finish-load', () => {
-          getMainWindow()?.webContents.send('version-gate-result', { status: 'allow' })
+        mw.webContents.once('did-finish-load', async () => {
+          const gateResult = await checkVersionGate()
+          getMainWindow()?.webContents.send('version-gate-result', gateResult)
         })
       }
     } catch (err: any) {
@@ -327,7 +458,17 @@ app.on('window-all-closed', () => {
 })
 
 // ─── Graceful shutdown ────────────────────────────────────────────────────────
-app.on('before-quit', async () => {
+app.on('before-quit', async (e) => {
+  // FIX 1.2: Warn if an export is active — prevent accidental data loss
+  if (_hasActiveExport) {
+    console.warn('[App] before-quit: export is active — proceeding with quit but logging warning')
+    // NOTE: We log but don't block quit here. The renderer-side export guard
+    // should have already warned the user via onbeforeunload or a dialog.
+    // Blocking quit in before-quit with e.preventDefault() can cause the app
+    // to become unkillable if the export hangs. The critical guard is in
+    // app:installUpdate where we CAN reject the action.
+  }
+
   // Kill active Song Nhạc FFmpeg exports
   for (const [, proc] of activeSongNhacExports) {
     try { if (!proc.killed) proc.kill('SIGTERM') } catch (_) {}
@@ -354,8 +495,12 @@ app.on('before-quit', async () => {
       return
     }
     autoUpdater.logger = null
-    autoUpdater.autoDownload = true
-    autoUpdater.autoInstallOnAppQuit = true
+
+    // FIX 1.2 + 1.3: Disable silent auto-download and auto-install-on-quit.
+    // Downloads are initiated only when the user explicitly confirms (via Settings UI).
+    // Install-on-quit is disabled to prevent data loss when exports are active.
+    autoUpdater.autoDownload = false
+    autoUpdater.autoInstallOnAppQuit = false
 
     const sendStatus = (payload: Record<string, unknown>) => {
       const mw = getMainWindow()
@@ -379,9 +524,9 @@ app.on('before-quit', async () => {
     autoUpdater.on('update-downloaded', (info) => sendStatus({ state: 'downloaded', version: info.version }))
     autoUpdater.on('error', (err) => sendStatus({ state: 'error', message: err?.message || String(err) }))
 
-    // Auto-check sau 10 giây
+    // Auto-check sau 10 giây (chỉ check, KHÔNG auto-download)
     setTimeout(() => {
-      autoUpdater.checkForUpdatesAndNotify().catch((err) => {
+      autoUpdater.checkForUpdates().catch((err) => {
         console.warn('[Updater] Startup check failed (non-critical):', err?.message)
       })
     }, 10_000)

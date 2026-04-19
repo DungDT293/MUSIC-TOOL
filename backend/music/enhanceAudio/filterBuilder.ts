@@ -299,8 +299,8 @@ export function getCodecArgs(format: OutputFormat, bitrateKbps?: number, inputEx
     case 'mp3':  return ['-acodec', 'libmp3lame', '-b:a', `${bitrateKbps ?? 320}k`]
     case 'aac':
     case 'm4a':  return ['-acodec', 'aac', '-b:a', `${bitrateKbps ?? 256}k`]
-    case 'wav':
-    case 'flac': return ['-acodec', 'pcm_s16le']
+    case 'wav':  return ['-acodec', 'pcm_s16le']
+    case 'flac': return ['-acodec', 'flac']
     default:     return ['-acodec', 'libmp3lame', '-b:a', `${bitrateKbps ?? 320}k`]
   }
 }

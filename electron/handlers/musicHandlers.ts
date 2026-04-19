@@ -29,7 +29,6 @@ import { enhanceAudio, cancelEnhanceAudio, renderPreviewClip, type EnhanceAudioR
 import { getSpotifyMeta } from '../../backend/music/spotifyMeta'
 import { getRecentHistory, deleteHistoryEntries, downloadPlaylistHistory as downloadHistoryByDates } from '../../backend/music/exportHistory'
 import { listPresets, savePreset, updatePreset, deletePreset } from '../../backend/exportPresets'
-import { applySeoMetadata, type SeoMetadataRequest } from '../../backend/video/seoMetadata'
 import { jobQueue } from '../../backend/jobQueue/jobQueue'
 import { videoJobManager } from '../../backend/video/videoJobManager'
 import { confirmResourcesForVideoJob } from './systemHandlers'
@@ -87,23 +86,31 @@ export function registerMusicHandlers(getMainWindow: () => Electron.BrowserWindo
     }
   })
 
-  ipcMain.handle('music:downloadPlaylistHistory', async (_event, dates: string[], outputDir?: string) => {
-    if (outputDir && !isValidAbsolutePath(outputDir)) {
-      return { success: false, downloadedCount: 0, outputDir: '', error: 'Invalid output directory path' }
-    }
-    try {
-      const result = downloadHistoryByDates(dates ?? [], outputDir)
-      return {
-        success: result.success,
-        downloadedCount: result.savedFiles.length,
-        outputDir: outputDir || '',
-        savedFiles: result.savedFiles,
+  ipcMain.handle(
+    'music:downloadPlaylistHistory',
+    async (_event, payload: { dates?: string[]; entryIds?: string[]; outputDir?: string }) => {
+      const outputDir = payload?.outputDir
+      if (outputDir && !isValidAbsolutePath(outputDir)) {
+        return { success: false, downloadedCount: 0, outputDir: '', error: 'Invalid output directory path' }
       }
-    } catch (err) {
-      console.error('[IPC] music:downloadPlaylistHistory error', err)
-      return { success: false, downloadedCount: 0, outputDir: '', error: String(err) }
+      try {
+        const result = downloadHistoryByDates({
+          dates: payload?.dates ?? [],
+          entryIds: payload?.entryIds ?? [],
+          outputDir,
+        })
+        return {
+          success: result.success,
+          downloadedCount: result.savedFiles.length,
+          outputDir: result.outputDir,
+          savedFiles: result.savedFiles,
+        }
+      } catch (err) {
+        console.error('[IPC] music:downloadPlaylistHistory error', err)
+        return { success: false, downloadedCount: 0, outputDir: '', error: String(err) }
+      }
     }
-  })
+  )
 
   // Audio Enhancement
   const ENHANCE_PROGRESS_CH = 'music:enhance:progress'
@@ -148,24 +155,6 @@ export function registerMusicHandlers(getMainWindow: () => Electron.BrowserWindo
     } catch (err) {
       console.error('[IPC] music:enhance:renderPreview error', err)
       return { success: false, error: String(err) }
-    }
-  })
-
-  // SEO metadata
-  ipcMain.handle('video:seo:apply', async (_event, payload: SeoMetadataRequest) => {
-    // Validate file paths in SEO payload
-    if (payload?.files) {
-      for (const f of payload.files) {
-        if (f?.path && !isValidAbsolutePath(f.path)) {
-          return { error: `Invalid file path: ${f.path}` }
-        }
-      }
-    }
-    try {
-      return await applySeoMetadata(payload)
-    } catch (err: any) {
-      console.error('[IPC] video:seo:apply error', err)
-      return { error: err?.message || String(err) }
     }
   })
 

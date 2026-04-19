@@ -85,6 +85,9 @@ export interface FinalExportSource {
   type: 'file' | 'folder' | 'files'
   path: string
   paths?: string[]
+  /** Khi true (mặc định cho Tab 6 manual), yêu cầu audio.length === video.length (ghép 1-1).
+   *  Khi false (autopilot pool mode), cho phép video pool lớn hơn audio — random/LRU pick. */
+  strictPairing?: boolean
 }
 
 export interface SubtitleOptions {
@@ -203,6 +206,7 @@ export interface FinalExportDonePayload {
     fileName: string
     error: string
   }[]
+  warnings?: string[]
 }
 
 export interface FinalExportErrorPayload {

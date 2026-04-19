@@ -249,11 +249,16 @@ export async function startFfmpegPipe(options: SongNhacExportOptions): Promise<{
     stdio: ['pipe', 'pipe', 'pipe'],
   })
 
-  // Log stderr (FFmpeg progress)
-  let stderrData = ''
+  // Log stderr (FFmpeg progress) — cap buffer to prevent OOM on long exports
+  const MAX_STDERR_LINES = 80
+  let stderrLines: string[] = []
   ffmpegProc.stderr?.on('data', (chunk: Buffer) => {
     const text = chunk.toString()
-    stderrData += text
+    const lines = text.split('\n')
+    stderrLines.push(...lines)
+    if (stderrLines.length > MAX_STDERR_LINES) {
+      stderrLines = stderrLines.slice(-MAX_STDERR_LINES)
+    }
     // Only log progress lines (frame=...)
     if (text.includes('frame=') || text.includes('speed=')) {
       const frameMatch = text.match(/frame=\s*(\d+)/)
@@ -278,7 +283,7 @@ export async function startFfmpegPipe(options: SongNhacExportOptions): Promise<{
   ffmpegProc.once('close', (code, _signal) => {
     if (code !== 0 && code !== null) {
       console.warn(`[SongNhacFFmpeg] Exited with code ${code}`)
-      const lastLines = stderrData.split('\n').slice(-5).join('\n')
+      const lastLines = stderrLines.slice(-5).join('\n')
       if (lastLines) console.warn('[SongNhacFFmpeg] Last stderr:', lastLines)
     }
     exitResult = { outputPath, code, usedEncoder }

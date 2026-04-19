@@ -786,10 +786,11 @@ export interface IPCAPI {
     cancelNormalizeAudio?: () => Promise<{ ok: boolean }>
     spotifyMeta?: (url: string) => Promise<{ success: boolean; title?: string; artist?: string; thumbnailUrl?: string; error?: string }>
     getExportHistory: () => Promise<ExportHistoryEntry[]>
-    downloadPlaylistHistory: (dates: string[], outputDir?: string) => Promise<{
+    downloadPlaylistHistory: (payload: { dates?: string[]; entryIds?: string[]; outputDir?: string }) => Promise<{
       success: boolean
       downloadedCount: number
       outputDir?: string
+      savedFiles?: string[]
       error?: string
     }>
     deleteExportHistory: (entryIds: string[]) => Promise<{
@@ -947,11 +948,14 @@ export interface IPCAPI {
   }
   updater: {
     check: () => Promise<{ ok: boolean; error?: string }>
-    install: () => Promise<{ ok: boolean; error?: string }>
+    install: () => Promise<{ ok: boolean; error?: string; blocked?: boolean }>
+    download: () => Promise<{ ok: boolean; error?: string }>
     getChannel: () => Promise<{ ok: boolean; channel: 'stable' | 'beta'; error?: string }>
     setChannel: (channel: 'stable' | 'beta') => Promise<{ ok: boolean; error?: string }>
     onStatus: (callback: (status: UpdaterStatusPayload) => void) => () => void
   }
+  /** FIX 1.1: Sync export activity state to main process for updater guard */
+  setExportActive?: (isActive: boolean) => Promise<{ ok: boolean }>
   youtube: {
     verify: () => Promise<{ success: boolean; available?: boolean; error?: string }>
     validateUrl: (url: string) => Promise<{
@@ -1048,7 +1052,6 @@ export interface IPCAPI {
     getPcmSamples?: (jobId: string, timeSec: number) => Promise<Float32Array>
     getAudioDuration?: (filePath: string) => Promise<{ ok: boolean; duration?: number; error?: string }>
   }
-  videoSeoApply: (payload: any) => Promise<any>
   readFileAsBase64?: (filePath: string) => Promise<{ ok: boolean; base64?: string; mime?: string; error?: string }>
   // General IPC helpers (preload exposes api.on() only)
   on?: (channel: string, callback: (...args: any[]) => void) => () => void

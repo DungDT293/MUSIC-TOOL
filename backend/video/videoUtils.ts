@@ -25,69 +25,63 @@ export async function validateInputFiles(
   const valid: ValidatedInputFile[] = []
   const invalid: string[] = []
 
-  // CRITICAL FIX: Process TẤT CẢ files với concurrency control
-  // Dùng approach đơn giản: process từng batch, đợi batch hoàn thành, rồi process batch tiếp theo
-  let currentIndex = 0
+  // FIX PERF-5: Sliding window concurrency — slot trống được lấp ngay lập tức
+  // thay vì đợi cả batch hoàn tất rồi mới bắt đầu batch mới
+  const processOne = async (filePath: string) => {
+    let retryCount = 0
+    const maxRetries = 1
 
-  while (currentIndex < paths.length) {
-    // Tạo batch tiếp theo (tối đa concurrency files)
-    const batch: Promise<void>[] = []
-    const batchSize = Math.min(concurrency, paths.length - currentIndex)
-    
-    for (let i = 0; i < batchSize; i++) {
-      const index = currentIndex + i
-      const filePath = paths[index]
-      
-      const promise = (async () => {
-        let retryCount = 0
-        const maxRetries = 1
-        
-        while (retryCount <= maxRetries) {
-          try {
-            const info = await getVideoFileInfo(filePath)
-            const hasUsableDuration = !!(info.durationSec && info.durationSec > 0)
-            const hasUsableVideoStream = !!(info.width && info.height && info.codecName)
+    while (retryCount <= maxRetries) {
+      try {
+        const info = await getVideoFileInfo(filePath)
+        const hasUsableDuration = !!(info.durationSec && info.durationSec > 0)
+        const hasUsableVideoStream = !!(info.width && info.height && info.codecName)
 
-            if (hasUsableDuration && hasUsableVideoStream) {
-              valid.push({
-                path: filePath,
-                durationSec: info.durationSec,
-                width: info.width ?? undefined,
-                height: info.height ?? undefined,
-                codecName: info.codecName ?? undefined,
-                fps: typeof info.fps === 'number' ? info.fps : undefined,
-                sizeBytes: typeof info.sizeBytes === 'number' ? info.sizeBytes : undefined,
-              })
-              return // Success, exit retry loop
-            } else {
-              invalid.push(filePath)
-              console.warn(
-                `[validateInputFiles] Invalid file (missing usable duration/video stream): ${filePath}`
-              )
-              return // Invalid video metadata, no need to retry
-            }
-          } catch (error) {
-            retryCount++
-            if (retryCount > maxRetries) {
-              // Final attempt failed, skip file
-              invalid.push(filePath)
-              console.warn(`[validateInputFiles] Failed to probe ${filePath} after ${maxRetries + 1} attempt(s):`, error)
-              return
-            }
-            // Retry once
-            console.log(`[validateInputFiles] Retry ${retryCount}/${maxRetries} for ${filePath}`)
-          }
+        if (hasUsableDuration && hasUsableVideoStream) {
+          valid.push({
+            path: filePath,
+            durationSec: info.durationSec,
+            width: info.width ?? undefined,
+            height: info.height ?? undefined,
+            codecName: info.codecName ?? undefined,
+            fps: typeof info.fps === 'number' ? info.fps : undefined,
+            sizeBytes: typeof info.sizeBytes === 'number' ? info.sizeBytes : undefined,
+          })
+          return
+        } else {
+          invalid.push(filePath)
+          console.warn(
+            `[validateInputFiles] Invalid file (missing usable duration/video stream): ${filePath}`
+          )
+          return
         }
-      })()
-      
-      batch.push(promise)
+      } catch (error) {
+        retryCount++
+        if (retryCount > maxRetries) {
+          invalid.push(filePath)
+          console.warn(`[validateInputFiles] Failed to probe ${filePath} after ${maxRetries + 1} attempt(s):`, error)
+          return
+        }
+        console.log(`[validateInputFiles] Retry ${retryCount}/${maxRetries} for ${filePath}`)
+      }
     }
-    
-    // Đợi batch này hoàn thành — dùng allSettled để 1 file lỗi không cancel cả batch
-    await Promise.allSettled(batch)
-    
-    // Move to next batch
-    currentIndex += batchSize
+  }
+
+  // Sliding window: luôn duy trì tối đa `concurrency` tasks chạy song song
+  const queue = [...paths]
+  const running = new Set<Promise<void>>()
+
+  while (queue.length > 0 || running.size > 0) {
+    // Lấp đầy slots trống
+    while (running.size < concurrency && queue.length > 0) {
+      const filePath = queue.shift()!
+      const p = processOne(filePath).finally(() => running.delete(p))
+      running.add(p)
+    }
+    // Đợi BẤT KỲ task nào hoàn tất → lập tức quay lại fill slot
+    if (running.size > 0) {
+      await Promise.race(running)
+    }
   }
 
   // Log summary

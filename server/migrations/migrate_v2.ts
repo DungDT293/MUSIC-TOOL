@@ -99,6 +99,8 @@ export async function migrateToV2(env: Env): Promise<{ success: boolean; message
     await addColumnIfNotExists(env.DB, 'registrations', 'refresh_token_expires_at', 'INTEGER')
     await addColumnIfNotExists(env.DB, 'registrations', 'last_login_at', 'INTEGER')
     await addColumnIfNotExists(env.DB, 'registrations', 'last_login_ip', 'TEXT')
+    // V3: License expiry — NULL = vĩnh viễn (user cũ không bị ảnh hưởng)
+    await addColumnIfNotExists(env.DB, 'registrations', 'license_expires_at', 'INTEGER')
 
     // ============================================
     // 2. Create auth_audit_logs table

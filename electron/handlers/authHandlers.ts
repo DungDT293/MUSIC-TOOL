@@ -32,6 +32,7 @@ import {
   setLegacyGpuFfmpegPathSetting,
   type AppGpuFfmpegProfile,
 } from '../../backend/app/appSettings'
+import { hasActiveExport, setHasActiveExport } from '../main'
 
 // Chia sẻ licenseState với main.ts
 let licenseState: LicenseState = { status: 'checking', machineHash: '' }
@@ -596,7 +597,25 @@ export function registerAuthHandlers() {
   // ===== App / updater handlers =====
   ipcMain.handle('app:getVersion', async () => app.getVersion())
 
+  // FIX 1.1: IPC channel for renderer to sync export activity state to main process.
+  // The renderer's exportActivityStore calls this whenever activeExports changes.
+  ipcMain.handle('app:setExportActive', async (_event, isActive: boolean) => {
+    setHasActiveExport(!!isActive)
+    return { ok: true }
+  })
+
+  // FIX 4.1: 10-second debounce on check-for-updates to prevent IPC spam
+  let lastCheckTimestamp = 0
+  const CHECK_DEBOUNCE_MS = 10_000
+
   ipcMain.handle('app:checkUpdate', async () => {
+    const now = Date.now()
+    if (now - lastCheckTimestamp < CHECK_DEBOUNCE_MS) {
+      console.log('[app:checkUpdate] Debounced — last check was', now - lastCheckTimestamp, 'ms ago')
+      return { updateAvailable: false, debounced: true }
+    }
+    lastCheckTimestamp = now
+
     try {
       const { autoUpdater } = await import('electron-updater')
       const result = await autoUpdater.checkForUpdates()
@@ -607,10 +626,34 @@ export function registerAuthHandlers() {
     }
   })
 
-  ipcMain.handle('app:installUpdate', async () => {
+  // FIX 1.3: New handler — user explicitly requests download (autoDownload is now false)
+  ipcMain.handle('app:downloadUpdate', async () => {
     try {
       const { autoUpdater } = await import('electron-updater')
-      autoUpdater.quitAndInstall()
+      await autoUpdater.downloadUpdate()
+      return { ok: true }
+    } catch (err) {
+      console.warn('[app:downloadUpdate] Failed:', (err as any)?.message)
+      return { ok: false, error: (err as any)?.message }
+    }
+  })
+
+  // FIX 1.1: Guard quitAndInstall behind active export check
+  ipcMain.handle('app:installUpdate', async () => {
+    // Check if any export is currently running (synced from renderer)
+    if (hasActiveExport()) {
+      console.warn('[app:installUpdate] BLOCKED — an export is currently active')
+      return {
+        ok: false,
+        error: 'Đang có export đang chạy. Vui lòng đợi export hoàn tất trước khi cài đặt bản cập nhật.',
+        blocked: true,
+      }
+    }
+
+    try {
+      const { autoUpdater } = await import('electron-updater')
+      // isSilent=false so user sees the installer; isForceRunAfter=true to restart after install
+      autoUpdater.quitAndInstall(false, true)
       return { ok: true }
     } catch (err) {
       console.warn('[app:installUpdate] Failed:', (err as any)?.message)

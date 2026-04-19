@@ -903,17 +903,25 @@ function shuffleArrayInPlace<T>(items: T[]): void {
  */
 async function collectVideoFilesRecursive(
   dir: string,
-  onProgress?: (currentCount: number, currentDir: string) => void
+  onProgress?: (currentCount: number, currentDir: string) => void,
+  maxDepth: number = 10,
+  currentDepth: number = 0
 ): Promise<string[]> {
   const results: string[] = []
+  if (currentDepth >= maxDepth) {
+    console.warn(`[Autopilot] Đã đạt giới hạn độ sâu quét (${maxDepth}), bỏ qua: ${dir}`)
+    return results
+  }
   try {
     const entries = await fsp.readdir(dir, { withFileTypes: true })
     // Quét song song các subfolder để tăng tốc độ
     const subdirPromises: Promise<string[]>[] = []
     for (const entry of entries) {
       const full = path.join(dir, entry.name)
+      // Bỏ qua symlinks để tránh vòng lặp vô hạn
+      if (entry.isSymbolicLink()) continue
       if (entry.isDirectory()) {
-        subdirPromises.push(collectVideoFilesRecursive(full, onProgress))
+        subdirPromises.push(collectVideoFilesRecursive(full, onProgress, maxDepth, currentDepth + 1))
       } else if (entry.isFile()) {
         const ext = path.extname(entry.name).toLowerCase()
         if (VIDEO_EXTS.has(ext)) {
@@ -1012,8 +1020,10 @@ async function pickVideosFromFolders(
   
   // BƯỚC 1: Quét TẤT CẢ folder, thu thập TẤT CẢ video (không dừng sớm)
   const allFilesByFolder: Array<{ folder: string; files: string[] }> = []
+  // FIX BUG-4: totalScanned chỉ dùng trong callback để tính real-time progress,
+  // KHÔNG cộng thêm sau vòng lặp (tránh double-count)
   let totalScanned = 0
-  
+
   for (let i = 0; i < buckets.length; i++) {
     if (isCancelling) break
 
@@ -1026,28 +1036,30 @@ async function pickVideosFromFolders(
       stepPercent: 60 + Math.round(((i + 1) / buckets.length) * 10),
       message: `Đang quét video... (${i + 1}/${buckets.length} thư mục)`,
     })
-    
+
     // Quét với progress callback
     let folderFileCount = 0
+    const previouslyScanned = allFilesByFolder.reduce((sum, item) => sum + item.files.length, 0)
     const allFiles = await collectVideoFilesRecursive(folder, (currentCount, currentDir) => {
       folderFileCount = currentCount
-      totalScanned = allFilesByFolder.reduce((sum, item) => sum + item.files.length, 0) + currentCount
+      totalScanned = previouslyScanned + currentCount
       // Emit progress theo nhịp thưa hơn để tránh spam IPC/log khi scan thư mục lớn
       if (currentCount % VIDEO_SCAN_PROGRESS_LOG_EVERY === 0 || currentCount === 1) {
         emitVerboseLog('info', `[Bước 3]   → Đã quét ${currentCount} video từ "${path.basename(currentDir)}"...`)
       }
     })
-    
+
     emitVerboseLog('info', `[Bước 3] ✓ Thư mục ${i + 1}/${buckets.length}: Tìm thấy ${allFiles.length} video`)
-    
+
     allFilesByFolder.push({ folder, files: allFiles })
     summaries.push({
       folder,
       totalFiles: allFiles.length,
       selectedFiles: 0, // Sẽ tính sau
     })
-    
-    totalScanned += allFiles.length
+
+    // FIX BUG-4: Cập nhật totalScanned chính xác sau khi folder scan xong
+    totalScanned = previouslyScanned + allFiles.length
   }
 
   // BƯỚC 2: Gộp tất cả video lại
@@ -1073,14 +1085,16 @@ async function pickVideosFromFolders(
 
   emitLog('info', `[Bước 3] Đã chọn ${selected.length}/${allFiles.length} video (${p}%, min ${minTotal}) từ ${buckets.length} thư mục`)
 
-  // Cập nhật selectedFiles cho mỗi folder (tính theo tỷ lệ)
+  // FIX BUG-5: Đếm thực tế số video được chọn từ mỗi folder thay vì ước lượng bằng ratio.
+  // Sau shuffle + slice, cần đếm xem selected[] chứa bao nhiêu file từ mỗi folder.
+  const selectedSet = new Set(selected)
   for (let i = 0; i < summaries.length; i++) {
     const item = allFilesByFolder[i]
-    if (item.files.length > 0) {
-      // Tính tỷ lệ video được chọn từ folder này
-      const ratio = item.files.length / allFiles.length
-      summaries[i].selectedFiles = Math.max(1, Math.round(selected.length * ratio))
+    let count = 0
+    for (const f of item.files) {
+      if (selectedSet.has(f)) count++
     }
+    summaries[i].selectedFiles = count
   }
 
   if (selected.length < minTotal) {
@@ -1093,13 +1107,14 @@ async function pickVideosFromFolders(
 }
 
 function buildBaseOutputNameFromPreset(presetId: DayPresetId): string {
+  const year = new Date().getFullYear()
   switch (presetId) {
     case 'tomorrowland':
-      return 'Tomorrowland_2025'
+      return `Tomorrowland_${year}`
     case 'partymix':
-      return 'Party_Mix_2025'
+      return `Party_Mix_${year}`
     default:
-      return 'AutoMix_2025'
+      return `AutoMix_${year}`
   }
 }
 
@@ -1326,7 +1341,7 @@ function generateSimpleTitles(
     const remaining = count - customTitles.length
     
     // Tạo tiêu đề tự động cho phần còn lại
-    const safeBase = baseKeyword.trim() || 'AutoMix 2025'
+    const safeBase = baseKeyword.trim() || `AutoMix ${new Date().getFullYear()}`
     const topDj = (overrides?.topDj || 'Tiësto').trim()
     const variant: 'pipe' | 'fire' = overrides?.titleVariant || 'pipe'
     const allowRepeatAcross = overrides?.allowDjRepeatAcrossVideos ?? true
@@ -1339,16 +1354,16 @@ function generateSimpleTitles(
       let picked: string[] = []
 
       if (allowRepeatAcross) {
-        const shuffled = [...DEFAULT_DJS].sort(() => Math.random() - 0.5)
+        const shuffled = [...DEFAULT_DJS]; shuffleInPlace(shuffled)
         picked = shuffled.slice(0, needed)
       } else {
         const unused = DEFAULT_DJS.filter((dj) => !usedDjsGlobal.has(dj))
-        const shuffledUnused = [...unused].sort(() => Math.random() - 0.5)
+        const shuffledUnused = [...unused]; shuffleInPlace(shuffledUnused)
         picked.push(...shuffledUnused.slice(0, Math.min(needed, shuffledUnused.length)))
 
         if (picked.length < needed) {
           const remainingPool = DEFAULT_DJS.filter((dj) => !picked.includes(dj))
-          const shuffledRemaining = [...remainingPool].sort(() => Math.random() - 0.5)
+          const shuffledRemaining = [...remainingPool]; shuffleInPlace(shuffledRemaining)
           picked.push(...shuffledRemaining.slice(0, needed - picked.length))
         }
       }
@@ -1374,7 +1389,7 @@ function generateSimpleTitles(
   }
 
   // Logic tạo tiêu đề tự động như cũ (khi không dùng custom titles)
-  const safeBase = baseKeyword.trim() || 'AutoMix 2025'
+  const safeBase = baseKeyword.trim() || `AutoMix ${new Date().getFullYear()}`
   const topDj = (overrides?.topDj || 'Tiësto').trim()
   const variant: 'pipe' | 'fire' = overrides?.titleVariant || 'pipe'
   const allowRepeatAcross = overrides?.allowDjRepeatAcrossVideos ?? true
@@ -1390,18 +1405,18 @@ function generateSimpleTitles(
 
     if (allowRepeatAcross) {
       // Cho phép trùng giữa các video → chỉ cần random 4 DJ bất kỳ, không trùng trong cùng title
-      const shuffled = [...DEFAULT_DJS].sort(() => Math.random() - 0.5)
+      const shuffled = [...DEFAULT_DJS]; shuffleInPlace(shuffled)
       picked = shuffled.slice(0, needed)
     } else {
       // Ưu tiên dùng các DJ CHƯA dùng ở video trước
       const unused = DEFAULT_DJS.filter((dj) => !usedDjsGlobal.has(dj))
-      const shuffledUnused = [...unused].sort(() => Math.random() - 0.5)
+      const shuffledUnused = [...unused]; shuffleInPlace(shuffledUnused)
       picked.push(...shuffledUnused.slice(0, Math.min(needed, shuffledUnused.length)))
 
       // Nếu không đủ 4 DJ (hết pool) → lấy thêm từ toàn bộ list, tránh trùng trong cùng title
       if (picked.length < needed) {
         const remainingPool = DEFAULT_DJS.filter((dj) => !picked.includes(dj))
-        const shuffledRemaining = [...remainingPool].sort(() => Math.random() - 0.5)
+        const shuffledRemaining = [...remainingPool]; shuffleInPlace(shuffledRemaining)
         picked.push(...shuffledRemaining.slice(0, needed - picked.length))
       }
     }
@@ -1557,14 +1572,17 @@ async function runExportVideoWithOptions(
       emitLogBlock('info', reportLines)
     },
     error: (err) => {
+      // FIX BUG-1: KHÔNG set status='error' ở đây — nếu pipeline multi-day,
+      // callback error của 1 ngày sẽ ghi đè status toàn cục, gây UI desync
+      // khi pipeline tiếp tục chạy ngày tiếp theo. Chỉ log lỗi + giữ status='running'.
+      // Terminal error sẽ do try/catch chính của startAutopilot xử lý.
+      const errMsg = err.message || err.error || 'Xuất video thất bại.'
       emit({
-        status: 'error',
         currentStep: 4,
         stepPercent: 0,
-        message: `Ngày ${dateCode}: Lỗi khi xuất video hoàn chỉnh.`,
-        error: err.message || err.error || 'Xuất video thất bại.',
+        message: `Ngày ${dateCode}: Lỗi khi xuất video — ${errMsg}`,
       })
-      emitLog('error', `[Bước 4] ✗ Lỗi khi xuất video: ${err.message || err.error || 'Xuất video thất bại.'}`)
+      emitLog('error', `[Bước 4] ✗ Lỗi khi xuất video: ${errMsg}`)
     },
   }
   
@@ -1925,7 +1943,9 @@ async function runAutopilotForDay(
   // - Mỗi thư mục chỉ lấy khoảng X% video (videoPickPercent) để tránh lấy hết
 
   const MIN_VIDEO_TOTAL = Math.max(100, folders.minVideoClipsTarget ?? 1000)
-  const { paths: selectedVideoPaths, summary: videoSelectionSummary } = await withTimeout(
+  // FIX BUG-3: Dùng let để reassign thay vì mutate in-place (tránh stack overflow
+  // với spread operator khi mảng lớn + rõ ràng hơn về intent)
+  let { paths: selectedVideoPaths, summary: videoSelectionSummary } = await withTimeout(
     pickVideosFromFolders(
       folders.rootVideo,
       dateCode,
@@ -1978,10 +1998,9 @@ async function runAutopilotForDay(
       `Fingerprint: ${poolResult.fingerprint}`
     )
 
-    // Ghi đè selectedVideoPaths bằng sequence unique từ pool
+    // FIX BUG-3: Reassign thay vì mutate in-place
     // (poolResult.filePaths là cùng clips nhưng thứ tự LRU-shuffled unique)
-    selectedVideoPaths.length = 0
-    selectedVideoPaths.push(...poolResult.filePaths)
+    selectedVideoPaths = poolResult.filePaths
 
     // Ghi lại pool info vào local vars để markClipsUsed sau khi export xong
     _poolClipIds = poolResult.clipIds
@@ -2017,15 +2036,19 @@ async function runAutopilotForDay(
 
   // Tạo danh sách audio paths theo đúng thứ tự playlists để đảm bảo mapping đúng
   // Thay vì dùng folder (sẽ sort theo tên), dùng files với paths đã được sắp xếp đúng
+  // FIX BUG-6: Check cả .m4a và .aac — verify step (line 1869) đã check cả 2
+  // nhưng collect step chỉ check .m4a, nên .aac outputs bị drop gây length mismatch.
   const audioPaths: string[] = []
   for (let i = 0; i < playlists.length; i++) {
     const fileNameBase = `${dateCode}_P${(i + 1).toString().padStart(2, '0')}`
-    const audioPath = path.join(audioDir, `${fileNameBase}.m4a`)
-    // Kiểm tra file tồn tại trước khi thêm vào danh sách
-    if (fs.existsSync(audioPath)) {
-      audioPaths.push(audioPath)
+    const m4aPath = path.join(audioDir, `${fileNameBase}.m4a`)
+    const aacPath = path.join(audioDir, `${fileNameBase}.aac`)
+    if (fs.existsSync(m4aPath)) {
+      audioPaths.push(m4aPath)
+    } else if (fs.existsSync(aacPath)) {
+      audioPaths.push(aacPath)
     } else {
-      console.warn(`[Autopilot] Audio file không tồn tại: ${audioPath}`)
+      console.warn(`[Autopilot] Audio file không tồn tại: ${m4aPath} (cả .aac cũng không có)`)
     }
   }
 
@@ -2077,6 +2100,7 @@ async function runAutopilotForDay(
       type: 'files',
       path: selectedVideoPaths[0],
       paths: selectedVideoPaths,
+      strictPairing: false, // Pool mode: video pool lớn hơn audio là bình thường
     },
     outputFolder: finalDir,
     outputFilename: `${baseOutputName}.mp4`,

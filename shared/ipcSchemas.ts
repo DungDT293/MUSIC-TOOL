@@ -167,7 +167,7 @@ export const FinalExportRequestPayloadSchema = z.object({
     position: z.enum(['top', 'bottom', 'center']).optional(),
   }).passthrough().optional(),
   useGpuEncoding: z.enum(['gpu', 'cpu', 'auto']).optional(),
-  qualityPreset: z.enum(['fast', 'medium', 'slow']).optional(),
+  qualityPreset: z.enum(['ultra-fast', 'fast', 'balanced', 'high-quality']).optional(),
   deleteSourceFiles: z.boolean().optional(),
   // DATA-01 fix: canvasScene is a structured scene object
   canvasScene: z.object({
@@ -185,14 +185,14 @@ export const FinalExportRequestPayloadSchema = z.object({
 // AutopilotConfig is complex, validate key fields only
 // Khi đóng gói, config từ UI/localStorage có thể thiếu autoCreateDailySubfolder hoặc path rỗng → dùng optional/default để tránh "invalid"
 export const AutopilotConfigSchema = z.object({
-  // DATA-01 fix: dayPlans is an array of plan objects with day/slots structure
+  // FIX: dayPlans khớp với DayPlanConfig thực tế (id, dateCode, playlistCount, minutesPerPlaylist, presetId, overrides)
   dayPlans: z.array(z.object({
-    day: z.number().optional(),
-    slots: z.array(z.object({
-      hour: z.number().optional(),
-      minute: z.number().optional(),
-      enabled: z.boolean().optional(),
-    }).passthrough()).optional(),
+    id: z.string().min(1),
+    dateCode: z.string().min(1),
+    playlistCount: z.coerce.number().int().positive(),
+    minutesPerPlaylist: z.coerce.number().positive(),
+    presetId: z.string().min(1),
+    overrides: z.object({}).passthrough().optional(),
   }).passthrough()).min(0), // Required but can be empty array
   folders: z.object({
     rootAudio: z.string().min(1, 'Thư mục Audio gốc chưa chọn'),

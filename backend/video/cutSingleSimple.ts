@@ -10,7 +10,7 @@ import { getFfmpegPaths } from '../ffmpeg/config'
 import { probeFile } from '../ffmpeg/probe'
 import { buildSingleCutProgress, type SingleCutProgress } from './videoProgress'
 import { videoJobManager } from './videoJobManager'
-import { buildNormalizeVfFilter } from './utils/normalizeVf'
+import { buildConcatSafeOutputArgs, buildNormalizeVfFilter, detectEncoderFromArgs } from './utils/normalizeVf'
 import { buildVideoEncoderArgsWithChoice } from '../utils/gpuDetection'
 
 export interface CutSingleSimpleRequest {
@@ -204,7 +204,7 @@ export async function cutVideoIntoSegmentsSimple(
   const expectedSegments = Math.ceil(duration / segmentLengthSec)
   console.log(`âœ“ Expected segments: ${expectedSegments} (${segmentLengthSec}s each)`)
 
-  const outputPattern = path.join(outputDir, `${basename}_part_%03d.${format}`)
+  const outputPattern = path.join(outputDir, `${basename}_part_%05d.${format}`)
   console.log(`âœ" Output pattern: ${outputPattern}`)
   console.log(`[cutSingleSimple] DEBUG START: normalizeOutput=${normalizeOutput}, useGpuEncoding=${useGpuEncoding}`)
 
@@ -255,6 +255,19 @@ export async function cutVideoIntoSegmentsSimple(
       ? Math.max(1, Math.round(segmentLengthSec * resolvedTargetFps))
       : Math.max(1, Math.round(segmentLengthSec * 30))
 
+    // Build concat-safe args for uniform timebase & GOP structure
+    const encoderName = detectEncoderFromArgs(encoderArgs)
+    const concatSafeExtras = buildConcatSafeOutputArgs(encoderName, targetFps || '30')
+    // Filter out -g and -keyint_min from concatSafeExtras because cutSingleSimple
+    // has its own GOP logic based on segmentLengthSec (not 1-second GOP).
+    // We keep the structural safety args: -video_track_timescale, -sc_threshold, -x264opts, etc.
+    const concatSafeStructural = concatSafeExtras.filter((arg, idx, arr) => {
+      if (arg === '-g' || arg === '-keyint_min') return false
+      // Skip the value following -g or -keyint_min
+      if (idx > 0 && (arr[idx - 1] === '-g' || arr[idx - 1] === '-keyint_min')) return false
+      return true
+    })
+
     codecArgs = [
       ...encoderArgs,
       // Additional video settings for segment cutting
@@ -266,13 +279,18 @@ export async function cutVideoIntoSegmentsSimple(
       // Force keyframes at segment boundaries based on the normalized output FPS.
       ...(isGpuEncoder
         ? ['-g', gopFrames.toString()]
-        : ['-force_key_frames', `expr:gte(t,n_forced*${segmentLengthSec})`]
+        : ['-g', gopFrames.toString(), '-keyint_min', gopFrames.toString(),
+           '-force_key_frames', `expr:gte(t,n_forced*${segmentLengthSec})`]
       ),
-      // Audio codec settings
+      // Concat-safe structural args (timebase, closed GOP, sc_threshold, etc.)
+      ...concatSafeStructural,
+      // Audio codec settings — uniform for concat safety
       '-c:a',
       'aac',
       '-b:a',
       '192k',
+      '-ar',
+      '48000',
       '-ac',
       '2',
     ]
@@ -725,6 +743,8 @@ export async function cutVideoIntoSegmentsSimple(
         fs.unwatchFile(progressFilePath!)
         progressFileWatcher = null
       }
+      // Cleanup file count interval to prevent resource leak
+      clearInterval(fileCountInterval)
       const elapsedMs = Date.now() - startTime
       const error = `FFmpeg process error: ${err.message}`
       console.error(`âœ— ${error}`)

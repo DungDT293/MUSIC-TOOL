@@ -5,12 +5,16 @@
  */
 
 import { useEffect, useState } from 'react'
-import type { GpuFfmpegProfile, VersionPolicy, UpdaterStatusPayload } from '../types/ipc'
+import type { GpuFfmpegProfile, VersionPolicy } from '../types/ipc'
+import { useUpdaterStore } from '../stores/updaterStore'
 
 export default function SettingsPage() {
   const [currentVersion, setCurrentVersion] = useState<string>('')
   const [policy, setPolicy] = useState<VersionPolicy | null>(null)
-  const [updaterStatus, setUpdaterStatus] = useState<UpdaterStatusPayload>({ state: 'idle' })
+  // FIX 4.2: Use global Zustand store so updater state survives page navigation
+  const updaterStatus = useUpdaterStore((s) => s.status)
+  const canCheck = useUpdaterStore((s) => s.canCheck)
+  const recordCheck = useUpdaterStore((s) => s.recordCheck)
   const [updateChannel, setUpdateChannel] = useState<'stable' | 'beta'>('stable')
   const [gpuFfmpegProfile, setGpuFfmpegProfile] = useState<GpuFfmpegProfile>('auto')
   const [legacyGpuFfmpegPath, setLegacyGpuFfmpegPath] = useState<string | null>(null)
@@ -59,37 +63,56 @@ export default function SettingsPage() {
     return () => { isMounted = false }
   }, [])
 
-  useEffect(() => {
-    // Subscribe to updater status
-    if (!window.api?.updater?.onStatus) return
-    const unsubscribe = window.api.updater.onStatus((status) => {
-      setUpdaterStatus(status)
-    })
-
-    return unsubscribe
-  }, [])
+  // FIX 4.2: updater:status subscription is now handled globally by App.tsx
+  // writing to useUpdaterStore. No local subscription needed here.
 
   const handleCheckForUpdates = async () => {
+    // FIX 4.1: Client-side debounce via global store
+    if (!canCheck()) return
+    recordCheck()
+
     try {
-      setUpdaterStatus({ state: 'checking' })
+      useUpdaterStore.getState().setStatus({ state: 'checking' })
       if (window.api?.updater?.check) {
         await window.api.updater.check()
       } else if (window.api?.app?.checkUpdate) {
         await window.api.app.checkUpdate()
       }
     } catch (err: any) {
-      setUpdaterStatus({
+      useUpdaterStore.getState().setStatus({
         state: 'error',
         message: err.message || 'Lỗi khi kiểm tra cập nhật',
       })
     }
   }
 
+  // FIX 1.3: Explicit download handler (autoDownload is now false)
+  const handleDownloadUpdate = async () => {
+    try {
+      if (window.api?.updater?.download) {
+        await window.api.updater.download()
+      }
+    } catch (err: any) {
+      useUpdaterStore.getState().setStatus({
+        state: 'error',
+        message: err.message || 'Lỗi khi tải bản cập nhật',
+      })
+    }
+  }
+
   const handleRestartToUpdate = async () => {
     try {
-      await window.api.updater.install()
+      const result = await window.api.updater.install()
+      // FIX 1.1: If blocked by active export, show error instead of crashing
+      if (!result.ok && result.blocked) {
+        useUpdaterStore.getState().setStatus({
+          state: 'error',
+          message: result.error || 'Đang có export đang chạy. Vui lòng đợi hoàn tất.',
+        })
+        return
+      }
     } catch (err: any) {
-      setUpdaterStatus({
+      useUpdaterStore.getState().setStatus({
         state: 'error',
         message: err.message || 'Lỗi khi cài đặt bản cập nhật',
       })
@@ -507,11 +530,11 @@ export default function SettingsPage() {
           <div style={{ display: 'flex', gap: '12px' }}>
             <button
               onClick={handleCheckForUpdates}
-              disabled={updaterStatus.state === 'checking' || updaterStatus.state === 'downloading'}
+              disabled={updaterStatus.state === 'checking' || updaterStatus.state === 'downloading' || !canCheck()}
               style={{
                 padding: '10px 20px',
                 background:
-                  updaterStatus.state === 'checking' || updaterStatus.state === 'downloading'
+                  updaterStatus.state === 'checking' || updaterStatus.state === 'downloading' || !canCheck()
                     ? '#475569'
                     : 'linear-gradient(135deg, #0ea5e9 0%, #0284c7 100%)',
                 border: 'none',
@@ -520,7 +543,7 @@ export default function SettingsPage() {
                 fontSize: '14px',
                 fontWeight: '600',
                 cursor:
-                  updaterStatus.state === 'checking' || updaterStatus.state === 'downloading'
+                  updaterStatus.state === 'checking' || updaterStatus.state === 'downloading' || !canCheck()
                     ? 'not-allowed'
                     : 'pointer',
                 transition: 'all 0.2s',
@@ -528,6 +551,26 @@ export default function SettingsPage() {
             >
               {updaterStatus.state === 'checking' ? 'Đang kiểm tra...' : 'Kiểm Tra Cập Nhật'}
             </button>
+
+            {/* FIX 1.3: Explicit download button (autoDownload is now false) */}
+            {updaterStatus.state === 'available' && (
+              <button
+                onClick={handleDownloadUpdate}
+                style={{
+                  padding: '10px 20px',
+                  background: 'linear-gradient(135deg, #0ea5e9 0%, #0284c7 100%)',
+                  border: 'none',
+                  borderRadius: '6px',
+                  color: 'white',
+                  fontSize: '14px',
+                  fontWeight: '600',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s',
+                }}
+              >
+                Tải Bản Cập Nhật
+              </button>
+            )}
 
             {updaterStatus.state === 'downloaded' && (
               <button

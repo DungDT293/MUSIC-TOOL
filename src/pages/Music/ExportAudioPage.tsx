@@ -479,22 +479,11 @@ const filteredHistory = useMemo(() => {
 
   // Download playlists for selected dates or individual playlists
   const handleDownloadPlaylists = async () => {
-    // Nếu có playlist được chọn riêng lẻ, lấy dates từ các playlist đó
-    let datesToDownload = Array.from(selectedDatesForDownload)
-    
-    if (datesToDownload.length === 0 && selectedHistoryIdsToDelete.size > 0) {
-      // Lấy dates từ các playlist đã chọn riêng lẻ
-      const selectedEntries = history.filter(h => selectedHistoryIdsToDelete.has(h.id))
-      const datesFromEntries = new Set<string>()
-      selectedEntries.forEach(entry => {
-        const dateStr = new Date(entry.exportedAt).toLocaleDateString()
-        datesFromEntries.add(dateStr)
-      })
-      datesToDownload = Array.from(datesFromEntries)
-    }
-    
-    if (datesToDownload.length === 0) {
-      setErrorMessage('Vui lòng chọn ít nhất một ngày hoặc một playlist để tải.')
+    const entryIdsToDownload = Array.from(selectedHistoryIdsToDelete)
+    const datesToDownload = entryIdsToDownload.length > 0 ? [] : Array.from(selectedDatesForDownload)
+
+    if (datesToDownload.length === 0 && entryIdsToDownload.length === 0) {
+      setErrorMessage('Vui long chon it nhat mot ngay hoac mot playlist de tai.')
       return
     }
 
@@ -505,23 +494,31 @@ const filteredHistory = useMemo(() => {
     try {
       const api = window.api
       if (!api?.music?.downloadPlaylistHistory) {
-        throw new Error('Backend chưa sẵn sàng.')
+        throw new Error('Backend chua san sang.')
       }
 
-      console.log('[ExportAudio] Downloading playlists for dates:', datesToDownload)
-      const result = await api.music.downloadPlaylistHistory(datesToDownload, historyOutputDir || undefined)
+      console.log('[ExportAudio] Downloading playlist history:', {
+        entryIds: entryIdsToDownload,
+        dates: datesToDownload,
+        outputDir: historyOutputDir || undefined,
+      })
+      const result = await api.music.downloadPlaylistHistory({
+        entryIds: entryIdsToDownload,
+        dates: datesToDownload,
+        outputDir: historyOutputDir || undefined,
+      })
       console.log('[ExportAudio] Download result:', result)
 
       if (result.success) {
-        setSuccessMessage(`Đã tải ${result.downloadedCount} playlist thành công vào thư mục: ${result.outputDir}`)
-        setSelectedDatesForDownload(new Set()) // Reset selection
-        setSelectedHistoryIdsToDelete(new Set()) // Reset playlist selection
+        setSuccessMessage(`Da xuat ${result.downloadedCount} file tracklist thanh cong vao thu muc: ${result.outputDir}`)
+        setSelectedDatesForDownload(new Set())
+        setSelectedHistoryIdsToDelete(new Set())
       } else {
-        setErrorMessage(result.error || 'Lỗi khi tải playlist.')
+        setErrorMessage(result.error || 'Loi khi tai playlist.')
       }
-    } catch (err: any) {
+    } catch (err) {
       console.error('[ExportAudio] Download playlists error:', err)
-      setErrorMessage(err?.message || 'Lỗi khi tải playlist.')
+      setErrorMessage(err instanceof Error ? err.message : 'Loi khi tai playlist.')
     } finally {
       setIsDownloadingPlaylists(false)
     }
@@ -1508,7 +1505,7 @@ const filteredHistory = useMemo(() => {
                         .find((h) => h.id === selectedHistoryId)
                         ?.tracks.map((t, idx) => (
                           <div key={idx} style={{ fontSize: '12px', marginBottom: '4px' }}>
-                            {new Date(t.startSec * 1000).toISOString().substr(14, 5)} - {t.name}
+                            {formatSecondsHMS(t.startSec)} - {t.name}
                           </div>
                         ))}
                     </div>
@@ -1646,4 +1643,3 @@ const filteredHistory = useMemo(() => {
 }
 
 export default ExportAudioPage
-

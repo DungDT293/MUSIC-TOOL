@@ -6,19 +6,36 @@ export interface PlaybackTestResult {
   exitCode: number | null
 }
 
+const PLAYBACK_TIMEOUT_MS = 30_000 // 30 seconds timeout to prevent infinite hang
+
 function runPlayerOnce(
   cmd: string,
   args: string[],
   label: 'mpv' | 'vlc'
 ): Promise<PlaybackTestResult> {
   return new Promise((resolve) => {
+    let resolved = false
+    const safeResolve = (result: PlaybackTestResult) => {
+      if (resolved) return
+      resolved = true
+      clearTimeout(timer)
+      resolve(result)
+    }
+
     try {
       const child = spawn(cmd, args, { windowsHide: true })
+
+      // Timeout to prevent infinite hang if player gets stuck
+      const timer = setTimeout(() => {
+        try { child.kill('SIGKILL') } catch {}
+        safeResolve({ player: label, success: false, exitCode: null })
+      }, PLAYBACK_TIMEOUT_MS)
+
       child.on('error', () => {
-        resolve({ player: label, success: false, exitCode: null })
+        safeResolve({ player: label, success: false, exitCode: null })
       })
       child.on('close', (code) => {
-        resolve({ player: label, success: code === 0, exitCode: code ?? null })
+        safeResolve({ player: label, success: code === 0, exitCode: code ?? null })
       })
     } catch {
       resolve({ player: label, success: false, exitCode: null })
@@ -51,7 +68,3 @@ export async function runPlaybackTest(outputPath: string): Promise<PlaybackTestR
 
   return { player: null, success: false, exitCode: null }
 }
-
-
-
-
