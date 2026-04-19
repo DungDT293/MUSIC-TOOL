@@ -618,7 +618,7 @@ export function registerAuthHandlers() {
     lastCheckTimestamp = now
 
     try {
-      const autoUpdater = await getAutoUpdater()
+      const autoUpdater = getAutoUpdater()
       if (!autoUpdater) {
         return { updateAvailable: false, error: 'AutoUpdater không khả dụng' }
       }
@@ -638,7 +638,7 @@ export function registerAuthHandlers() {
   // FIX 1.3: New handler — user explicitly requests download (autoDownload is now false)
   ipcMain.handle('app:downloadUpdate', async () => {
     try {
-      const autoUpdater = await getAutoUpdater()
+      const autoUpdater = getAutoUpdater()
       if (!autoUpdater) {
         return { ok: false, error: 'AutoUpdater không khả dụng' }
       }
@@ -663,7 +663,7 @@ export function registerAuthHandlers() {
     }
 
     try {
-      const autoUpdater = await getAutoUpdater()
+      const autoUpdater = getAutoUpdater()
       if (!autoUpdater) {
         return { ok: false, error: 'AutoUpdater không khả dụng' }
       }
@@ -678,7 +678,7 @@ export function registerAuthHandlers() {
 
   ipcMain.handle('app:getUpdateChannel', async () => {
     try {
-      const autoUpdater = await getAutoUpdater()
+      const autoUpdater = getAutoUpdater()
       if (!autoUpdater) {
         return { ok: true, channel: 'stable' as const }
       }
@@ -691,7 +691,7 @@ export function registerAuthHandlers() {
 
   ipcMain.handle('app:setUpdateChannel', async (_event, channel: string) => {
     try {
-      const autoUpdater = await getAutoUpdater()
+      const autoUpdater = getAutoUpdater()
       if (!autoUpdater) {
         return { ok: false, error: 'AutoUpdater không khả dụng' }
       }

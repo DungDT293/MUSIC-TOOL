@@ -17,6 +17,7 @@
 import { app, BrowserWindow, protocol, net } from 'electron'
 import * as path from 'path'
 import * as fs from 'fs'
+import { getAutoUpdater } from './autoUpdaterSingleton'
 import { getFfmpegPaths } from '../backend/ffmpeg/config'
 import { runFfprobe } from '../backend/ffmpeg/wrapper'
 import { getMachineHash } from '../backend/license/machineId'
@@ -483,13 +484,13 @@ app.on('before-quit', async (e) => {
 })
 
 // ─── Auto-updater ─────────────────────────────────────────────────────────────
-;(async () => {
+;(() => {
   try {
     if (!app.isPackaged) {
       console.log('[Updater] Skipping autoUpdater setup in development mode')
       return
     }
-    const autoUpdater = await (await import('./autoUpdaterSingleton')).getAutoUpdater()
+    const autoUpdater = getAutoUpdater()
     if (!autoUpdater) {
       console.warn('[Updater] electron-updater did not expose autoUpdater')
       return
