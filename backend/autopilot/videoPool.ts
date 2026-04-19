@@ -15,6 +15,7 @@
 
 import crypto from 'node:crypto'
 import fs from 'node:fs'
+import fsp from 'node:fs/promises'
 import path from 'node:path'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -63,6 +64,7 @@ const POOL_VERSION = 1
 const SESSION_VERSION = 1
 const MAX_SESSIONS = 500
 const FINGERPRINT_LENGTH = 50  // số clip IDs đầu để tạo fingerprint
+const PRUNE_AFTER_MS = 30 * 24 * 60 * 60 * 1000 // 30 ngày — xóa entries không còn file trên disk
 
 // ── Storage paths ─────────────────────────────────────────────────────────────
 
@@ -101,11 +103,15 @@ function loadPoolStore(): VideoPoolStore {
   }
 }
 
+/** Atomic write: ghi vào file .tmp rồi rename → tránh corrupt khi crash giữa chừng */
 function savePoolStore(store: VideoPoolStore): void {
   try {
     ensureDir()
     store.updatedAt = Date.now()
-    fs.writeFileSync(getPoolPath(), JSON.stringify(store, null, 2), 'utf8')
+    const target = getPoolPath()
+    const tmp = target + '.tmp'
+    fs.writeFileSync(tmp, JSON.stringify(store, null, 2), 'utf8')
+    fs.renameSync(tmp, target)
   } catch (err) {
     console.warn('[VideoPool] Failed to save pool store:', err)
   }
@@ -121,6 +127,7 @@ function loadSessionStore(): VideoSessionStore {
   }
 }
 
+/** Atomic write: ghi vào file .tmp rồi rename → tránh corrupt khi crash giữa chừng */
 function saveSessionStore(store: VideoSessionStore): void {
   try {
     ensureDir()
@@ -128,7 +135,10 @@ function saveSessionStore(store: VideoSessionStore): void {
     if (store.sessions.length > MAX_SESSIONS) {
       store.sessions = store.sessions.slice(-MAX_SESSIONS)
     }
-    fs.writeFileSync(getSessionPath(), JSON.stringify(store, null, 2), 'utf8')
+    const target = getSessionPath()
+    const tmp = target + '.tmp'
+    fs.writeFileSync(tmp, JSON.stringify(store, null, 2), 'utf8')
+    fs.renameSync(tmp, target)
   } catch (err) {
     console.warn('[VideoPool] Failed to save session store:', err)
   }
@@ -156,55 +166,94 @@ function shuffleInPlace<T>(arr: T[]): T[] {
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /**
+ * Prune pool entries không còn file trên disk sau PRUNE_AFTER_MS.
+ * Gọi tự động trong syncPoolWithFiles().
+ * @returns số entries đã xóa
+ */
+function pruneStaleEntries(store: VideoPoolStore, currentFileIds: Set<string>): number {
+  const now = Date.now()
+  let pruned = 0
+  for (const [id, entry] of Object.entries(store.entries)) {
+    if (!currentFileIds.has(id) && now - entry.addedAt > PRUNE_AFTER_MS) {
+      delete store.entries[id]
+      pruned++
+    }
+  }
+  if (pruned > 0) {
+    console.log(`[VideoPool] Pruned ${pruned} stale entries (not seen on disk for 30+ days)`)
+  }
+  return pruned
+}
+
+/**
  * Scan file list và sync vào pool:
  * - Clip mới → thêm vào pool
  * - Clip đã có → cập nhật path nếu đã move
+ * - Clip không còn file trên disk sau PRUNE_AFTER_MS → xóa khỏi pool
  * Trả về stats về thay đổi.
+ *
+ * PERF: Dùng async fs.promises.stat với batching (50 files/batch)
+ *       để tránh block event loop khi có 3000+ files.
  */
-export function syncPoolWithFiles(
+export async function syncPoolWithFiles(
   filePaths: string[],
   onProgress?: (current: number, total: number) => void,
-): { added: number; updated: number; total: number } {
+): Promise<{ added: number; updated: number; pruned: number; total: number }> {
   const store = loadPoolStore()
   let added = 0
   let updated = 0
 
-  for (let i = 0; i < filePaths.length; i++) {
-    if (onProgress && i % 200 === 0) onProgress(i, filePaths.length)
+  const BATCH_SIZE = 50
+  const currentFileIds = new Set<string>()
 
-    const fp = filePaths[i]
-    let fileSize = 0
-    try {
-      fileSize = fs.statSync(fp).size
-    } catch {
-      continue
-    }
+  for (let batchStart = 0; batchStart < filePaths.length; batchStart += BATCH_SIZE) {
+    const batch = filePaths.slice(batchStart, batchStart + BATCH_SIZE)
 
-    const basename = path.basename(fp)
-    const id = generateClipId(basename, fileSize)
+    if (onProgress && batchStart % 200 === 0) onProgress(batchStart, filePaths.length)
 
-    if (!store.entries[id]) {
-      store.entries[id] = {
-        id,
-        filePath: fp,
-        basename,
-        fileSize,
-        lastUsedAt: null,
-        useCount: 0,
-        addedAt: Date.now(),
-      }
-      added++
-    } else {
-      // Cập nhật path nếu clip đã move sang thư mục khác
-      if (store.entries[id].filePath !== fp) {
-        store.entries[id].filePath = fp
-        updated++
+    const statResults = await Promise.allSettled(
+      batch.map(async (fp) => {
+        const stats = await fsp.stat(fp)
+        return { fp, size: stats.size }
+      })
+    )
+
+    for (const result of statResults) {
+      if (result.status !== 'fulfilled') continue
+      const { fp, size: fileSize } = result.value
+
+      const basename = path.basename(fp)
+      const id = generateClipId(basename, fileSize)
+      currentFileIds.add(id)
+
+      if (!store.entries[id]) {
+        store.entries[id] = {
+          id,
+          filePath: fp,
+          basename,
+          fileSize,
+          lastUsedAt: null,
+          useCount: 0,
+          addedAt: Date.now(),
+        }
+        added++
+      } else {
+        // Cập nhật path nếu clip đã move sang thư mục khác
+        if (store.entries[id].filePath !== fp) {
+          store.entries[id].filePath = fp
+          updated++
+        }
       }
     }
   }
 
+  if (onProgress) onProgress(filePaths.length, filePaths.length)
+
+  // Prune: xóa entries không còn file trên disk sau 30 ngày
+  const pruned = pruneStaleEntries(store, currentFileIds)
+
   savePoolStore(store)
-  return { added, updated, total: Object.keys(store.entries).length }
+  return { added, updated, pruned, total: Object.keys(store.entries).length }
 }
 
 /**
@@ -213,21 +262,36 @@ export function syncPoolWithFiles(
  * 2. Dùng lâu nhất rồi (lastUsedAt asc)
  * 3. Nếu pool không đủ → fill bằng recently-used (không crash)
  *
+ * PERF: Dùng async fs.promises.stat với batching (50 files/batch)
+ *       để tránh block event loop khi có 3000+ files.
+ *
  * @returns clip IDs + filePaths đã sắp xếp theo LRU priority (chưa shuffle)
  */
-export function pickClipsLRU(
+export async function pickClipsLRU(
   availableFilePaths: string[],
   targetCount: number,
-): { clipIds: string[]; filePaths: string[]; reusedCount: number; totalAvailable: number } {
+): Promise<{ clipIds: string[]; filePaths: string[]; reusedCount: number; totalAvailable: number }> {
   const store = loadPoolStore()
 
-  // Build id→filepath từ available files
+  // Build id→filepath từ available files (async batched)
+  const BATCH_SIZE = 50
   const pathMap = new Map<string, string>()
-  for (const fp of availableFilePaths) {
-    let fileSize = 0
-    try { fileSize = fs.statSync(fp).size } catch { continue }
-    const id = generateClipId(path.basename(fp), fileSize)
-    pathMap.set(id, fp)
+
+  for (let batchStart = 0; batchStart < availableFilePaths.length; batchStart += BATCH_SIZE) {
+    const batch = availableFilePaths.slice(batchStart, batchStart + BATCH_SIZE)
+    const statResults = await Promise.allSettled(
+      batch.map(async (fp) => {
+        const stats = await fsp.stat(fp)
+        return { fp, size: stats.size }
+      })
+    )
+
+    for (const result of statResults) {
+      if (result.status !== 'fulfilled') continue
+      const { fp, size } = result.value
+      const id = generateClipId(path.basename(fp), size)
+      pathMap.set(id, fp)
+    }
   }
 
   const allIds = Array.from(pathMap.keys())
@@ -286,7 +350,7 @@ export function pickClipsLRU(
  * - Shuffle tối đa maxAttempts lần cho đến khi unique
  * - Nếu vẫn không unique sau maxAttempts → dùng kết quả cuối cùng (xác suất collision ≈ 0)
  */
-export function pickUniqueSequence(
+export async function pickUniqueSequence(
   availableFilePaths: string[],
   targetCount: number,
   dateCode: string,
@@ -304,7 +368,7 @@ export function pickUniqueSequence(
   const usedFingerprints = new Set(sessionStore.sessions.map(s => s.sequenceFingerprint))
 
   // Lấy clips theo LRU
-  const { clipIds, filePaths, reusedCount, totalAvailable } = pickClipsLRU(availableFilePaths, targetCount)
+  const { clipIds, filePaths, reusedCount, totalAvailable } = await pickClipsLRU(availableFilePaths, targetCount)
 
   if (filePaths.length === 0) {
     return {

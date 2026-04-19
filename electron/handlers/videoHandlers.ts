@@ -384,7 +384,7 @@ export function registerVideoHandlers() {
       const files = fs.readdirSync(folderPath)
         .filter((f) => VIDEO_EXTS.has(path.extname(f).toLowerCase()))
         .map((f) => path.join(folderPath, f))
-      const result = pickClipsLRU(files, count)
+      const result = await pickClipsLRU(files, count)
       return {
         ok: true,
         filePaths: result.filePaths,

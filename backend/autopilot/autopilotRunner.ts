@@ -357,6 +357,7 @@ async function flushBufferedLogsToFile(): Promise<void> {
   const payload = pendingLogFileLines.join('')
   pendingLogFileLines = []
 
+  // PERF: Reset chain sau mỗi cycle để tránh promise chain grow vô hạn (memory leak)
   logFileFlushChain = logFileFlushChain
     .then(async () => {
       await rotateLogsIfNeeded(basePath)
@@ -364,6 +365,10 @@ async function flushBufferedLogsToFile(): Promise<void> {
     })
     .catch(err => {
       console.warn('[Autopilot] Ghi log file thất bại:', err)
+    })
+    .finally(() => {
+      // Reset chain — giải phóng references đến các closures cũ
+      logFileFlushChain = Promise.resolve()
     })
 
   await logFileFlushChain
@@ -1982,15 +1987,15 @@ async function runAutopilotForDay(
   // ── Video Pool: sync + unique sequence ──────────────────────────────────────
   emitVerboseLog('info', `[Bước 3] Đang sync ${selectedVideoPaths.length} clip vào Video Pool...`)
   try {
-    const { added, updated } = syncPoolWithFiles(selectedVideoPaths, (cur, total) => {
+    const { added, updated, pruned } = await syncPoolWithFiles(selectedVideoPaths, (cur, total) => {
       if (cur % 500 === 0) emitVerboseLog('info', `[VideoPool] Đang sync ${cur}/${total}...`)
     })
-    if (added > 0 || updated > 0) {
-      emitVerboseLog('info', `[VideoPool] Sync xong: +${added} clip mới, ${updated} clip cập nhật path`)
+    if (added > 0 || updated > 0 || pruned > 0) {
+      emitVerboseLog('info', `[VideoPool] Sync xong: +${added} clip mới, ${updated} clip cập nhật path, ${pruned} clip cũ đã xóa`)
     }
 
     // Chọn sequence UNIQUE (LRU + shuffle đến khi fingerprint mới)
-    const poolResult = pickUniqueSequence(selectedVideoPaths, selectedVideoPaths.length, dateCode, 30)
+    const poolResult = await pickUniqueSequence(selectedVideoPaths, selectedVideoPaths.length, dateCode, 30)
     emitVerboseLog('info',
       `[VideoPool] Sequence: ${poolResult.isUnique ? '✅ Unique' : '⚠️ Có thể trùng'} | ` +
       `Thử: ${poolResult.attemptCount} lần | ` +
