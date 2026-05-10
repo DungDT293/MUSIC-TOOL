@@ -1,4 +1,4 @@
-# 93 Media Tool — Mix Nhạc v4.0.2
+# 93 Media Tool — Mix Nhạc v4.2.4
 
 Ứng dụng desktop chuyên xử lý media (nhạc + video) viết bằng TypeScript, chạy trên Electron với UI React. Hỗ trợ đầy đủ pipeline: quét nhạc → playlist → mix audio → visualizer sóng nhạc → cắt/ghép video → SEO metadata → xuất video hoàn chỉnh → tải YouTube.
 
