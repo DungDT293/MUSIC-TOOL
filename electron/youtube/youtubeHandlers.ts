@@ -1,4 +1,4 @@
-import { ipcMain, BrowserWindow } from 'electron';
+import { ipcMain, BrowserWindow, dialog } from 'electron';
 import { YouTubeDownloader } from '../../backend/youtube/youtubeDownloader';
 import { jobQueue } from '../../backend/jobQueue/jobQueue';
 import { 
@@ -13,6 +13,27 @@ import {
 let downloader: YouTubeDownloader | null = null;
 let currentYoutubeJobId: string | null = null;
 let youtubeHandlersRegistered = false; // FIX M20: Guard against double-registration
+
+const RETRYABLE_YTDLP_ERROR_PATTERNS = [
+  /bytes read,\s*\d+\s*more expected/i,
+  /got error:\s*\d+\s*bytes read/i,
+  /giving up after \d+ retries/i,
+  /timed?\s*out/i,
+  /timeout/i,
+  /connection (?:reset|aborted|closed)/i,
+  /econnreset/i,
+  /network/i,
+  /http error 5\d\d/i,
+];
+
+function isRetryableYtDlpError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error || '');
+  return RETRYABLE_YTDLP_ERROR_PATTERNS.some((pattern) => pattern.test(message));
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 /**
  * Initialize YouTube downloader và setup IPC handlers.
@@ -215,9 +236,35 @@ export function setupYouTubeHandlers(mainWindow: BrowserWindow) {
           activeDownloader.on('progress', progressListener);
 
           try {
-            const outputFile = await activeDownloader.downloadVideo(request);
-            ctx.updateProgress(100, 'Download completed');
-            return outputFile;
+            let lastError: unknown;
+
+            for (let attempt = 1; attempt <= 3; attempt++) {
+              try {
+                if (attempt > 1) {
+                  ctx.updateProgress(0, `Thử tải lại lần ${attempt}/3...`);
+                }
+
+                const outputFile = await activeDownloader.downloadVideo(request);
+                ctx.updateProgress(100, 'Download completed');
+                return outputFile;
+              } catch (error) {
+                lastError = error;
+
+                if (ctx.signal.aborted || attempt >= 3 || !isRetryableYtDlpError(error)) {
+                  throw error;
+                }
+
+                const waitMs = attempt * 3000;
+                console.warn(
+                  `[IPC] Retryable yt-dlp error, retrying ${attempt + 1}/3 after ${waitMs}ms:`,
+                  error
+                );
+                ctx.updateProgress(0, `Lỗi mạng/fragment, thử lại sau ${Math.round(waitMs / 1000)}s...`);
+                await sleep(waitMs);
+              }
+            }
+
+            throw lastError instanceof Error ? lastError : new Error(String(lastError || 'Download failed'));
           } finally {
             currentYoutubeJobId = null;
             activeDownloader.off('progress', progressListener);
@@ -256,6 +303,11 @@ export function setupYouTubeHandlers(mainWindow: BrowserWindow) {
         continueOnError?: boolean;
         concurrent?: boolean;
         concurrency?: number;
+        audioOnly?: boolean;
+        audioFormat?: 'mp3' | 'wav';
+        cookiesFile?: string;
+        cookiesFromBrowser?: any;
+        minDurationSeconds?: number;
       };
     }) => {
       try {
@@ -368,6 +420,95 @@ export function setupYouTubeHandlers(mainWindow: BrowserWindow) {
     }
   });
 
+  // ============================================
+  // Cookie Management Handlers
+  // ============================================
+
+  // Import cookie file (file dialog)
+  ipcMain.handle('youtube:cookie-import', async (_event, filePath?: string) => {
+    try {
+      if (!downloader) throw new Error('Downloader not initialized');
+
+      let cookieFilePath = filePath;
+
+      // If no path provided, open file dialog
+      if (!cookieFilePath) {
+        const result = await dialog.showOpenDialog(mainWindow, {
+          title: 'Chọn file cookies JSON (J2Team Cookies)',
+          filters: [
+            { name: 'JSON Files', extensions: ['json'] },
+            { name: 'All Files', extensions: ['*'] },
+          ],
+          properties: ['openFile'],
+        });
+
+        if (result.canceled || result.filePaths.length === 0) {
+          return { success: false, error: 'Cancelled' };
+        }
+        cookieFilePath = result.filePaths[0];
+      }
+
+      const cookieManager = downloader.getCookieManager();
+      const cookieFile = await cookieManager.importCookieFile(cookieFilePath!);
+
+      // If Facebook cookies, refresh scraper
+      if (cookieFile.platform === 'facebook') {
+        downloader.refreshFacebookCookies();
+      }
+
+      return { success: true, cookieFile };
+    } catch (error: any) {
+      console.error('[IPC] youtube:cookie-import error:', error);
+      return { success: false, error: error.message };
+    }
+  });
+
+  // List all cookie files
+  ipcMain.handle('youtube:cookie-list', async () => {
+    try {
+      if (!downloader) throw new Error('Downloader not initialized');
+      const cookieManager = downloader.getCookieManager();
+      return { success: true, cookieFiles: cookieManager.getCookieFiles() };
+    } catch (error: any) {
+      return { success: false, error: error.message, cookieFiles: [] };
+    }
+  });
+
+  // Test cookies for a platform
+  ipcMain.handle('youtube:cookie-test', async (_event, platform: string) => {
+    try {
+      if (!downloader) throw new Error('Downloader not initialized');
+      const cookieManager = downloader.getCookieManager();
+      const result = await cookieManager.testCookies(platform);
+      return { success: true, result };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  // Remove cookie file
+  ipcMain.handle('youtube:cookie-remove', async (_event, id: string) => {
+    try {
+      if (!downloader) throw new Error('Downloader not initialized');
+      const cookieManager = downloader.getCookieManager();
+      const removed = cookieManager.removeCookieFile(id);
+      return { success: removed };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  // Check if platform has cookies
+  ipcMain.handle('youtube:cookie-has', async (_event, platform: string) => {
+    try {
+      if (!downloader) throw new Error('Downloader not initialized');
+      const cookieManager = downloader.getCookieManager();
+      return { success: true, hasCookies: cookieManager.hasCookies(platform) };
+    } catch (error: any) {
+      return { success: false, hasCookies: false };
+    }
+  });
+
   console.log('[IPC] YouTube handlers setup complete')
   youtubeHandlersRegistered = true; // FIX M20: Mark as registered
 
@@ -441,6 +582,12 @@ export function cleanupYouTubeHandlers() {
     'youtube:download-channel',
     'youtube:cancel-download',
     'youtube:update-ytdlp',
+    // Cookie management
+    'youtube:cookie-import',
+    'youtube:cookie-list',
+    'youtube:cookie-test',
+    'youtube:cookie-remove',
+    'youtube:cookie-has',
   ];
   for (const ch of channels) {
     try { ipcMain.removeHandler(ch); } catch (_) {}

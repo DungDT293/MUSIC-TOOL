@@ -6,6 +6,14 @@
  */
 
 import { logAdminActivity } from './activity-log-api'
+import {
+  handleAdminAccountAction,
+  handleAdminAccounts,
+  handleAdminCreate,
+  handleAdminLogin,
+  handleAdminMe,
+  verifyAdminRequest,
+} from './admin-auth'
 
 // =========================
 // Password Hashing (duplicate from index.ts for dashboard-api.ts)
@@ -75,6 +83,16 @@ function isPasswordHashed(password: string): boolean {
   return base64Regex.test(parts[0]) && base64Regex.test(parts[1])
 }
 
+function generateTemporaryPassword(length = 14): string {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@$%'
+  const bytes = crypto.getRandomValues(new Uint8Array(length))
+  let password = ''
+  for (const byte of bytes) {
+    password += chars[byte % chars.length]
+  }
+  return password
+}
+
 interface Env {
   DB?: D1Database
   ADMIN_TOKEN?: string
@@ -114,13 +132,10 @@ function json(obj: any, status = 200): Response {
 /**
  * Verify admin token
  */
-function verifyAdminToken(request: Request, env: Env): boolean {
+async function verifyAdminToken(request: Request, env: Env): Promise<boolean> {
   const authHeader = request.headers.get('Authorization')
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return false
-  }
-  const token = authHeader.substring(7)
-  return token === env.ADMIN_TOKEN
+  if (authHeader?.startsWith('Bearer ') && authHeader.substring(7) === env.ADMIN_TOKEN) return true
+  return !!(await verifyAdminRequest(request, env))
 }
 
 /**
@@ -128,7 +143,7 @@ function verifyAdminToken(request: Request, env: Env): boolean {
  * Lấy danh sách security events với filters
  */
 export async function getEvents(request: Request, env: Env): Promise<Response> {
-  if (!verifyAdminToken(request, env)) {
+  if (!(await verifyAdminToken(request, env))) {
     return json({ error: 'Unauthorized' }, 401)
   }
 
@@ -211,7 +226,7 @@ export async function getEvents(request: Request, env: Env): Promise<Response> {
  * Lấy statistics về security events
  */
 export async function getStats(request: Request, env: Env): Promise<Response> {
-  if (!verifyAdminToken(request, env)) {
+  if (!(await verifyAdminToken(request, env))) {
     return json({ error: 'Unauthorized' }, 401)
   }
 
@@ -289,7 +304,7 @@ export async function getStats(request: Request, env: Env): Promise<Response> {
  * Lấy top machineIds có nhiều events
  */
 export async function getTopMachines(request: Request, env: Env): Promise<Response> {
-  if (!verifyAdminToken(request, env)) {
+  if (!(await verifyAdminToken(request, env))) {
     return json({ error: 'Unauthorized' }, 401)
   }
 
@@ -307,7 +322,19 @@ export async function getTopMachines(request: Request, env: Env): Promise<Respon
       `SELECT 
          machine_id,
          COUNT(*) as event_count,
-         MAX(severity) as max_severity,
+         CASE MIN(CASE severity
+           WHEN 'critical' THEN 1
+           WHEN 'high' THEN 2
+           WHEN 'medium' THEN 3
+           WHEN 'low' THEN 4
+           ELSE 5
+         END)
+           WHEN 1 THEN 'critical'
+           WHEN 2 THEN 'high'
+           WHEN 3 THEN 'medium'
+           WHEN 4 THEN 'low'
+           ELSE 'low'
+         END as max_severity,
          MAX(timestamp) as last_seen
        FROM security_events
        WHERE timestamp > ?
@@ -338,7 +365,7 @@ export async function getTopMachines(request: Request, env: Env): Promise<Respon
  * Lấy top machines có thời gian sử dụng app nhiều nhất (dựa trên request_count)
  */
 export async function getTopMachinesByUsage(request: Request, env: Env): Promise<Response> {
-  if (!verifyAdminToken(request, env)) {
+  if (!(await verifyAdminToken(request, env))) {
     return json({ error: 'Unauthorized' }, 401)
   }
 
@@ -388,7 +415,7 @@ export async function getTopMachinesByUsage(request: Request, env: Env): Promise
  * Lấy events theo thời gian để vẽ timeline chart
  */
 export async function getTimeline(request: Request, env: Env): Promise<Response> {
-  if (!verifyAdminToken(request, env)) {
+  if (!(await verifyAdminToken(request, env))) {
     return json({ error: 'Unauthorized' }, 401)
   }
 
@@ -509,7 +536,7 @@ export async function getTimeline(request: Request, env: Env): Promise<Response>
  * Lấy top usernames có nhiều events
  */
 export async function getTopUsernames(request: Request, env: Env): Promise<Response> {
-  if (!verifyAdminToken(request, env)) {
+  if (!(await verifyAdminToken(request, env))) {
     return json({ error: 'Unauthorized' }, 401)
   }
 
@@ -527,10 +554,22 @@ export async function getTopUsernames(request: Request, env: Env): Promise<Respo
       `SELECT 
          username,
          COUNT(*) as event_count,
-         MAX(severity) as max_severity,
+         CASE MIN(CASE severity
+           WHEN 'critical' THEN 1
+           WHEN 'high' THEN 2
+           WHEN 'medium' THEN 3
+           WHEN 'low' THEN 4
+           ELSE 5
+         END)
+           WHEN 1 THEN 'critical'
+           WHEN 2 THEN 'high'
+           WHEN 3 THEN 'medium'
+           WHEN 4 THEN 'low'
+           ELSE 'low'
+         END as max_severity,
          MAX(timestamp) as last_seen
        FROM security_events
-       WHERE timestamp > ? AND username IS NOT NULL
+       WHERE timestamp > ? AND username IS NOT NULL AND username != ''
        GROUP BY username
        ORDER BY event_count DESC
        LIMIT ?`
@@ -558,7 +597,7 @@ export async function getTopUsernames(request: Request, env: Env): Promise<Respo
  * Lấy top users xuất video nhiều nhất
  */
 export async function getTopUsersVideoExports(request: Request, env: Env): Promise<Response> {
-  if (!verifyAdminToken(request, env)) {
+  if (!(await verifyAdminToken(request, env))) {
     return json({ error: 'Unauthorized' }, 401)
   }
 
@@ -624,7 +663,7 @@ export async function getTopUsersVideoExports(request: Request, env: Env): Promi
  * Lấy danh sách tất cả users
  */
 export async function getUsers(request: Request, env: Env): Promise<Response> {
-  if (!verifyAdminToken(request, env)) {
+  if (!(await verifyAdminToken(request, env))) {
     return json({ error: 'Unauthorized' }, 401)
   }
 
@@ -676,7 +715,7 @@ export async function getUsers(request: Request, env: Env): Promise<Response> {
       SELECT 
         r.id,
         r.tai_khoan,
-        ${hasMatKhauColumn ? 'COALESCE(r.mat_khau, \'\') as mat_khau,' : '\'\' as mat_khau,'}
+        '' as mat_khau,
         r.ma_may,
         r.trang_thai,
         r.thoi_gian_tao,
@@ -728,17 +767,6 @@ export async function getUsers(request: Request, env: Env): Promise<Response> {
       video_failed_count: number
     }>()
 
-    // Debug: Log first user to check mat_khau field
-    if (result.results && result.results.length > 0) {
-      const firstUser = result.results[0] as any
-      console.log('[Dashboard API] First user sample:', {
-        tai_khoan: firstUser.tai_khoan,
-        hasMatKhau: 'mat_khau' in firstUser,
-        matKhauLength: firstUser.mat_khau?.length || 0,
-        matKhauPreview: firstUser.mat_khau ? firstUser.mat_khau.substring(0, 10) + '...' : 'null'
-      })
-    }
-
     // Get total count
     let countQuery = 'SELECT COUNT(*) as total FROM registrations WHERE 1=1'
     const countParams: any[] = []
@@ -769,7 +797,7 @@ export async function getUsers(request: Request, env: Env): Promise<Response> {
  * Update status của user
  */
 export async function updateUserStatus(request: Request, env: Env): Promise<Response> {
-  if (!verifyAdminToken(request, env)) {
+  if (!(await verifyAdminToken(request, env))) {
     return json({ error: 'Unauthorized' }, 401)
   }
 
@@ -906,7 +934,7 @@ export async function updateUserStatus(request: Request, env: Env): Promise<Resp
  * Lấy thông tin chi tiết của user
  */
 export async function getUser(request: Request, env: Env): Promise<Response> {
-  if (!verifyAdminToken(request, env)) {
+  if (!(await verifyAdminToken(request, env))) {
     return json({ error: 'Unauthorized' }, 401)
   }
 
@@ -923,7 +951,7 @@ export async function getUser(request: Request, env: Env): Promise<Response> {
     }
 
     const user = await env.DB.prepare(
-      `SELECT id, tai_khoan, mat_khau, ma_may, trang_thai, thoi_gian_tao, key_kich_hoat, key_status, version, license_expires_at
+      `SELECT id, tai_khoan, '' as mat_khau, ma_may, trang_thai, thoi_gian_tao, key_kich_hoat, key_status, version, license_expires_at
        FROM registrations
        WHERE id = ?`
     )
@@ -960,7 +988,7 @@ export async function getUser(request: Request, env: Env): Promise<Response> {
  * Lấy danh sách auth audit logs với filters
  */
 export async function getAuditLogs(request: Request, env: Env): Promise<Response> {
-  if (!verifyAdminToken(request, env)) {
+  if (!(await verifyAdminToken(request, env))) {
     return json({ error: 'Unauthorized' }, 401)
   }
 
@@ -1051,7 +1079,7 @@ export async function getAuditLogs(request: Request, env: Env): Promise<Response
  * Chỉnh sửa thông tin user (tài khoản, mật khẩu, mã máy, trạng thái)
  */
 export async function editUser(request: Request, env: Env): Promise<Response> {
-  if (!verifyAdminToken(request, env)) {
+  if (!(await verifyAdminToken(request, env))) {
     return json({ error: 'Unauthorized' }, 401)
   }
 
@@ -1093,9 +1121,11 @@ export async function editUser(request: Request, env: Env): Promise<Response> {
       params.push(tai_khoan)
     }
     if (mat_khau !== undefined && mat_khau.trim() !== '') {
-      // Lưu mật khẩu plaintext (theo yêu cầu: không mã hóa mật khẩu user đã đặt)
+      const passwordHash = await hashPassword(mat_khau)
+      // Store only a password hash when admin resets a password.
       updates.push('mat_khau = ?')
-      params.push(mat_khau)
+      params.push(`${passwordHash.hash}:${passwordHash.salt}`)
+      updates.push('device_token = NULL, device_token_expires_at = NULL, refresh_token = NULL, refresh_token_expires_at = NULL')
     }
     if (ma_may !== undefined) {
       updates.push('ma_may = ?')
@@ -1205,11 +1235,87 @@ export async function editUser(request: Request, env: Env): Promise<Response> {
 }
 
 /**
+ * POST /api/admin/users/:id/reset-password
+ * Generate a one-time temporary password for admin to copy, store only its hash.
+ */
+export async function resetUserPassword(request: Request, env: Env): Promise<Response> {
+  if (!(await verifyAdminToken(request, env))) {
+    return json({ error: 'Unauthorized' }, 401)
+  }
+
+  if (!env.DB) {
+    return json({ error: 'Database not available' }, 500)
+  }
+
+  try {
+    const url = new URL(request.url)
+    const parts = url.pathname.split('/').filter(p => p)
+    const id = parts.length >= 5 ? parts[parts.length - 2] : null
+
+    if (!id) {
+      return json({ error: 'Invalid id' }, 400)
+    }
+
+    const oldUser = await env.DB.prepare(
+      'SELECT id, tai_khoan, ma_may, trang_thai FROM registrations WHERE id = ?'
+    )
+      .bind(id)
+      .first<{ id: string; tai_khoan: string; ma_may: string; trang_thai: string }>()
+
+    if (!oldUser) {
+      return json({ error: 'User not found' }, 404)
+    }
+
+    const temporaryPassword = generateTemporaryPassword()
+    const passwordHash = await hashPassword(temporaryPassword)
+    const storedPassword = `${passwordHash.hash}:${passwordHash.salt}`
+
+    const result = await env.DB.prepare(
+      `UPDATE registrations
+       SET mat_khau = ?,
+           device_token = NULL,
+           device_token_expires_at = NULL,
+           refresh_token = NULL,
+           refresh_token_expires_at = NULL
+       WHERE id = ?`
+    )
+      .bind(storedPassword, id)
+      .run()
+
+    if (!result.success) {
+      return json({ error: 'Password reset failed' }, 500)
+    }
+
+    const adminInfo = getAdminInfo(request)
+    await logAdminActivity(
+      env,
+      'reset_password',
+      'user',
+      id,
+      oldUser.tai_khoan || null,
+      { tai_khoan: oldUser.tai_khoan, ma_may: oldUser.ma_may, trang_thai: oldUser.trang_thai },
+      { password_reset: true, tokens_revoked: true },
+      adminInfo.ip,
+      adminInfo.session
+    )
+
+    return json({
+      ok: true,
+      temporary_password: temporaryPassword,
+      message: 'Password reset successfully. Copy this temporary password now.',
+    })
+  } catch (error: any) {
+    console.error('[Dashboard API] Error resetting password:', error)
+    return json({ error: error.message || 'Internal error' }, 500)
+  }
+}
+
+/**
  * GET /api/admin/test-token
  * Test endpoint để kiểm tra admin token
  */
 export async function testToken(request: Request, env: Env): Promise<Response> {
-  const isValid = verifyAdminToken(request, env)
+  const isValid = await verifyAdminToken(request, env)
   return json({
     ok: isValid,
     message: isValid ? 'Token hợp lệ!' : 'Token không hợp lệ',
@@ -1222,6 +1328,38 @@ export async function testToken(request: Request, env: Env): Promise<Response> {
 export async function handleDashboardAPI(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url)
   const { pathname } = url
+
+  if (pathname === '/api/admin/auth/login' && request.method === 'POST') {
+    return handleAdminLogin(request, env)
+  }
+
+  if (pathname === '/api/admin/auth/me' && request.method === 'GET') {
+    return handleAdminMe(request, env)
+  }
+
+  const session = await verifyAdminRequest(request, env)
+  const isOwner = session?.role === 'owner'
+  const isAdminAllowedPath =
+    pathname === '/api/admin/test-token' ||
+    pathname === '/api/admin/users' ||
+    pathname.startsWith('/api/admin/users/') ||
+    pathname === '/api/admin/licenses' ||
+    pathname.startsWith('/api/admin/licenses/')
+  if (!isOwner && !isAdminAllowedPath) {
+    return json({ ok: false, error: 'Owner required' }, 403)
+  }
+
+  if (pathname === '/api/admin/admins' && request.method === 'GET') {
+    return handleAdminAccounts(request, env)
+  }
+
+  if (pathname === '/api/admin/admins' && request.method === 'POST') {
+    return handleAdminCreate(request, env)
+  }
+
+  if (pathname.startsWith('/api/admin/admins/') && request.method === 'POST') {
+    return handleAdminAccountAction(request, env)
+  }
 
   if (pathname === '/api/admin/test-token' && request.method === 'GET') {
     return testToken(request, env)
@@ -1265,6 +1403,10 @@ export async function handleDashboardAPI(request: Request, env: Env): Promise<Re
 
   if (pathname.startsWith('/api/admin/users/') && pathname.endsWith('/edit') && request.method === 'POST') {
     return editUser(request, env)
+  }
+
+  if (pathname.startsWith('/api/admin/users/') && pathname.endsWith('/reset-password') && request.method === 'POST') {
+    return resetUserPassword(request, env)
   }
 
   if (pathname.startsWith('/api/admin/users/') && request.method === 'GET') {
@@ -1333,7 +1475,7 @@ export async function handleDashboardAPI(request: Request, env: Env): Promise<Re
  * Lấy danh sách machine IDs của một user
  */
 export async function getUserMachines(request: Request, env: Env, username: string): Promise<Response> {
-  if (!verifyAdminToken(request, env)) {
+  if (!(await verifyAdminToken(request, env))) {
     return json({ error: 'Unauthorized' }, 401)
   }
 
@@ -1376,7 +1518,7 @@ export async function getUserMachines(request: Request, env: Env, username: stri
  * Lấy danh sách auto-block rules
  */
 export async function getAutoBlockRules(request: Request, env: Env): Promise<Response> {
-  if (!verifyAdminToken(request, env)) {
+  if (!(await verifyAdminToken(request, env))) {
     return json({ error: 'Unauthorized' }, 401)
   }
 
@@ -1406,7 +1548,7 @@ export async function getAutoBlockRules(request: Request, env: Env): Promise<Res
  * Export users to CSV or JSON
  */
 export async function exportUsers(request: Request, env: Env): Promise<Response> {
-  if (!verifyAdminToken(request, env)) {
+  if (!(await verifyAdminToken(request, env))) {
     return json({ error: 'Unauthorized' }, 401)
   }
 
@@ -1508,7 +1650,7 @@ export async function exportUsers(request: Request, env: Env): Promise<Response>
  * Export security events to CSV or JSON
  */
 export async function exportEvents(request: Request, env: Env): Promise<Response> {
-  if (!verifyAdminToken(request, env)) {
+  if (!(await verifyAdminToken(request, env))) {
     return json({ error: 'Unauthorized' }, 401)
   }
 
@@ -1603,7 +1745,7 @@ export async function exportEvents(request: Request, env: Env): Promise<Response
  * Lấy danh sách tất cả activation keys
  */
 export async function getLicenses(request: Request, env: Env): Promise<Response> {
-  if (!verifyAdminToken(request, env)) {
+  if (!(await verifyAdminToken(request, env))) {
     return json({ error: 'Unauthorized' }, 401)
   }
 
@@ -1629,7 +1771,7 @@ export async function getLicenses(request: Request, env: Env): Promise<Response>
     }
 
     let query = `
-      SELECT id, tai_khoan, mat_khau, ma_may, trang_thai, key_kich_hoat,
+      SELECT id, tai_khoan, '' as mat_khau, ma_may, trang_thai, key_kich_hoat,
         ${hasKeyStatusColumn ? 'key_status,' : "'PENDING' as key_status,"}
         thoi_gian_tao
       FROM registrations
@@ -1671,7 +1813,7 @@ export async function getLicenses(request: Request, env: Env): Promise<Response>
  * Thu hồi activation key
  */
 export async function revokeLicense(request: Request, env: Env): Promise<Response> {
-  if (!verifyAdminToken(request, env)) {
+  if (!(await verifyAdminToken(request, env))) {
     return json({ error: 'Unauthorized' }, 401)
   }
 
@@ -1731,7 +1873,7 @@ export async function revokeLicense(request: Request, env: Env): Promise<Respons
  * Tạo lại activation key
  */
 export async function regenerateLicense(request: Request, env: Env): Promise<Response> {
-  if (!verifyAdminToken(request, env)) {
+  if (!(await verifyAdminToken(request, env))) {
     return json({ error: 'Unauthorized' }, 401)
   }
 
@@ -1801,7 +1943,7 @@ export async function regenerateLicense(request: Request, env: Env): Promise<Res
  * Delete a user permanently
  */
 export async function deleteUser(request: Request, env: Env): Promise<Response> {
-  if (!verifyAdminToken(request, env)) {
+  if (!(await verifyAdminToken(request, env))) {
     return json({ error: 'Unauthorized' }, 401)
   }
 
@@ -1869,7 +2011,7 @@ export async function deleteUser(request: Request, env: Env): Promise<Response> 
  * Bulk update user statuses
  */
 export async function bulkUpdateUsers(request: Request, env: Env): Promise<Response> {
-  if (!verifyAdminToken(request, env)) {
+  if (!(await verifyAdminToken(request, env))) {
     return json({ error: 'Unauthorized' }, 401)
   }
 

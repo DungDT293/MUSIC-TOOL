@@ -101,6 +101,7 @@ const api: IPCAPI = {
     selectAudioFile: () => ipcRenderer.invoke('dialog:selectAudioFile'),
     selectAudioFilesMulti: () => ipcRenderer.invoke('dialog:selectAudioFilesMulti'),
     selectImageFile: () => ipcRenderer.invoke('dialog:selectImageFile'),
+    selectImageFilesMulti: () => ipcRenderer.invoke('dialog:selectImageFilesMulti'),
   scanMusicFolders: (payload: { priorityFolder: string | null; randomFolder: string | null }) =>
     ipcRenderer.invoke('music:scanFolders', payload),
   getLastScanResult: () => ipcRenderer.invoke('music:getLastScan'),
@@ -138,6 +139,34 @@ const api: IPCAPI = {
   listVideosInFolderSimple: (dir: string) => ipcRenderer.invoke('video:listVideosInFolderSimple', dir),
   ultraFastScanFolder: (folderPath: string) => ipcRenderer.invoke('video:ultraFastScanFolder', folderPath),
   batchLazyProbe: (paths: string[], concurrency?: number) => ipcRenderer.invoke('video:batchLazyProbe', paths, concurrency),
+  barsSpectrumPreview: (opts: {
+    bgPath: string
+    bgKind: 'image' | 'video'
+    audioPath: string
+    audioVisualizer: {
+      enabled: boolean
+      preset: 'bars-spectrum' | 'line-waveform' | 'mirror-waveform' | 'neon-waveform'
+      position?: 'top' | 'center' | 'bottom'
+      widthPercent?: number
+      heightPercent?: number
+      marginBottomPx?: number
+      primaryColor?: string
+      secondaryColor?: string
+      opacity?: number
+      barCount?: number
+      sensitivity?: number
+    }
+  }) => ipcRenderer.invoke('video:barsSpectrumPreview', opts) as Promise<{ ok: boolean; previewPath?: string; error?: string }>,
+  chromaKeyPreview: (opts: {
+    bgVideoPath: string
+    overlayVideoPath: string
+    bgType: 'green' | 'black'
+    keyColor: string
+    similarity: number
+    blend: number
+    position: 'center' | 'bottom'
+    scale: number
+  }) => ipcRenderer.invoke('video:chromaKeyPreview', opts) as Promise<{ ok: boolean; previewPath?: string; error?: string }>,
   videoAuditFolder: (paths: string[]) => ipcRenderer.invoke('video:auditFolder', paths),
   videoDeleteFiles: (paths: string[], rootDir: string) => ipcRenderer.invoke('video:deleteFiles', paths, rootDir),
   createDirectory: (dirPath: string) => ipcRenderer.invoke('system:createDirectory', dirPath),
@@ -302,6 +331,13 @@ const api: IPCAPI = {
     // Update yt-dlp binary to latest version
     updateYtDlp: () => ipcRenderer.invoke('youtube:update-ytdlp'),
 
+    // Cookie management
+    cookieImport: (filePath?: string) => ipcRenderer.invoke('youtube:cookie-import', filePath),
+    cookieList: () => ipcRenderer.invoke('youtube:cookie-list'),
+    cookieTest: (platform: string) => ipcRenderer.invoke('youtube:cookie-test', platform),
+    cookieRemove: (id: string) => ipcRenderer.invoke('youtube:cookie-remove', id),
+    cookieHas: (platform: string) => ipcRenderer.invoke('youtube:cookie-has', platform),
+
     // Listen to auto-update events (fired on startup)
     onAutoUpdated: (callback: (data: { success: boolean; version?: string; ageDays: number; message: string }) => void) => {
       const listener = (_event: IpcRendererEvent, data: any) => callback(data)
@@ -360,47 +396,6 @@ const api: IPCAPI = {
   security: {
     reportAntiDebug: (details: { method: string; detected: boolean }) =>
       ipcRenderer.invoke('security:reportAntiDebug', details) as Promise<{ ok: boolean }>,
-  },
-  songNhac: {
-    exportVideo: (options: any) => ipcRenderer.invoke('song-nhac:export-video', options),
-    getAudioDuration: (filePath: string) => ipcRenderer.invoke('song-nhac:get-audio-duration', filePath),
-    readAudioFile: (filePath: string) => ipcRenderer.invoke('song-nhac:read-audio-file', filePath),
-    decodeAudioForTimeline: (filePath: string) => ipcRenderer.invoke('song-nhac:decode-audio-timeline', filePath),
-    listAudioInFolder: (folderPath: string) => ipcRenderer.invoke('song-nhac:list-audio-in-folder', folderPath),
-    cancelExport: (jobId?: string) => ipcRenderer.invoke('song-nhac:cancel-export', jobId),
-    onExportStarted: (handler: (data: any) => void) => {
-      const listener = (_event: IpcRendererEvent, data: any) => handler(data)
-      ipcRenderer.on('song-nhac:export-started', listener)
-      return () => { ipcRenderer.removeListener('song-nhac:export-started', listener) }
-    },
-    onExportProgress: (handler: (data: any) => void) => {
-      const listener = (_event: IpcRendererEvent, data: any) => handler(data)
-      ipcRenderer.on('song-nhac:export-progress', listener)
-      return () => { ipcRenderer.removeListener('song-nhac:export-progress', listener) }
-    },
-    onExportCancel: (handler: () => void) => {
-      const listener = () => handler()
-      ipcRenderer.on('song-nhac:export-cancel', listener)
-      return () => { ipcRenderer.removeListener('song-nhac:export-cancel', listener) }
-    },
-    onExportConfig: (handler: (config: any) => void) => {
-      const listener = (_event: IpcRendererEvent, config: any) => handler(config)
-      ipcRenderer.on('song-nhac:export-config', listener)
-      return () => { ipcRenderer.removeListener('song-nhac:export-config', listener) }
-    },
-    sendExportReady: (opts?: { webcodecs?: boolean }) => ipcRenderer.send('song-nhac:export-ready', opts),
-    sendExportConfigAck: (config: any) => ipcRenderer.send('song-nhac:export-config-ack', config),
-    // Gửi frame đến main process (channel song-nhac:frame — khớp với ipcMain.on trong export handler)
-    sendExportFrame: (frameData: any) => ipcRenderer.send('song-nhac:frame', frameData?.jobId, frameData?.buffer),
-    sendExportProgress: (progress: any) => ipcRenderer.send('song-nhac:export-progress-report', progress),
-    sendExportDone: (result: any) => ipcRenderer.send('song-nhac:export-done', result),
-    // Signal kết thúc frame stream — triggers FFmpeg stdin.end() và unblocks export handler
-    sendExportEnd: (jobId: string) => ipcRenderer.send('song-nhac:end', jobId),
-    // ── PCM fast path: fetch 2048 samples from main process for FFT ──
-    // Main process pre-decodes audio via FFmpeg → stores PCM in memory.
-    // Each call returns 8KB Float32Array (2048 samples) — ~0.1ms IPC.
-    getPcmSamples: (jobId: string, timeSec: number) =>
-      ipcRenderer.invoke('song-nhac:pcm-samples', jobId, timeSec) as Promise<Float32Array>,
   },
   dialog: {
     /** Mở dialog chọn file (generic) — trả về { canceled, filePaths } */
@@ -463,10 +458,6 @@ const api: IPCAPI = {
       'autopilot:log',
       'system:disk-info',
       'jobQueue:update',
-      'song-nhac:export-progress',
-      'song-nhac:export-started',
-      'song-nhac:export-config',
-      'song-nhac:export-cancel',
       'music:exportProgress',
       'music:enhance:progress',
       'music:normalizeProgress',

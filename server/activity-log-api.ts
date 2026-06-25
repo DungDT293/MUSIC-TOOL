@@ -5,6 +5,8 @@ interface Env {
   ADMIN_TOKEN?: string
 }
 
+import { verifyAdminRequest } from './admin-auth'
+
 function json(obj: any, status = 200): Response {
   return new Response(JSON.stringify(obj), {
     status,
@@ -62,7 +64,7 @@ export async function getActivityLog(request: Request, env: Env): Promise<Respon
   }
 
   const token = authHeader.substring(7)
-  if (token !== env.ADMIN_TOKEN) {
+  if (token !== env.ADMIN_TOKEN && !(await verifyAdminRequest(request, env))) {
     return json({ error: 'Unauthorized' }, 401)
   }
 
@@ -140,4 +142,3 @@ export async function getActivityLog(request: Request, env: Env): Promise<Respon
     return json({ error: error.message || 'Internal error' }, 500)
   }
 }
-

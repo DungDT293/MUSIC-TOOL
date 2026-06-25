@@ -56,8 +56,12 @@ export async function confirmResourcesForVideoJob(
   kind: 'merge' | 'final-export' | 'mute' | 'normalize' | string,
   targetDir: string
 ): Promise<boolean> {
+  // PLAN A: CHỈ CẢNH BÁO, KHÔNG CHẶN. Luôn trả về true để user vẫn xuất được.
+  // Disk đo bằng fs.statfs (chính xác) — nếu thật sự thiếu thì FFmpeg sẽ báo ENOSPC,
+  // còn cảnh báo sai (WMIC lỗi → os.freemem) đã được fix ở getDiskSpace.
   try {
     const diskSpace = await getDiskSpace(targetDir)
+    if (diskSpace.unknown) return true // không đo được → fail-open, không cảnh báo nhiễu
     const minRequiredGiB: Record<string, number> = {
       'merge': 2,
       'final-export': 4,
@@ -68,15 +72,15 @@ export async function confirmResourcesForVideoJob(
     const spaceCheck = checkMinimumSpace(diskSpace.free, requiredGiB)
     if (!spaceCheck.enough) {
       console.warn(
-        `[confirmResources] Not enough disk space for ${kind}: ` +
-        `available=${formatBytes(spaceCheck.freeBytes)}, required=${formatBytes(spaceCheck.requiredBytes)}`
+        `[confirmResources] ⚠️ Dung lượng ổ ${diskSpace.drive} có thể không đủ cho ${kind}: ` +
+        `còn ${formatBytes(spaceCheck.freeBytes)}, khuyến nghị ${formatBytes(spaceCheck.requiredBytes)}. ` +
+        `Vẫn tiếp tục (chỉ cảnh báo).`
       )
     }
-    return spaceCheck.enough
   } catch (err) {
-    console.warn('[confirmResources] Could not check disk space:', err)
-    return true // Fail open
+    console.warn('[confirmResources] Could not check disk space (vẫn tiếp tục):', err)
   }
+  return true
 }
 
 // ─── Register handlers ─────────────────────────────────────────────────────
@@ -117,6 +121,13 @@ export function registerSystemHandlers(getMainWindow: () => Electron.BrowserWind
     return refreshDiskInfoAndBroadcast()
   })
   ipcMain.handle('system:refreshDiskInfo', async () => refreshDiskInfoAndBroadcast())
+
+  // Security monitoring
+  ipcMain.handle('security:reportAntiDebug', async (_event, details: { method: string; detected: boolean }) => {
+    const { reportAntiDebugTriggered } = await import('../../backend/security/securityMonitoring')
+    await reportAntiDebugTriggered(details)
+    return { ok: true }
+  })
 
   // Create directory
   ipcMain.handle('system:createDirectory', async (_event, dirPath: string) => {
@@ -243,6 +254,24 @@ export function registerSystemHandlers(getMainWindow: () => Electron.BrowserWind
       return result.filePaths[0]
     } catch (error) {
       console.error('[IPC] Error selecting image file:', error)
+      return null
+    }
+  })
+
+  ipcMain.handle('dialog:selectImageFilesMulti', async () => {
+    try {
+      const result = await dialog.showOpenDialog({
+        title: 'Chọn nhiều file ảnh',
+        filters: [
+          { name: 'Images', extensions: ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'svg'] },
+          { name: 'All Files', extensions: ['*'] },
+        ],
+        properties: ['openFile', 'multiSelections'],
+      })
+      if (result.canceled || result.filePaths.length === 0) return null
+      return result.filePaths
+    } catch (error) {
+      console.error('[IPC] Error selecting image files:', error)
       return null
     }
   })

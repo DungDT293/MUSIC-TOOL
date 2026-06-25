@@ -8,6 +8,7 @@ import { DEFAULT_VERSION_POLICY } from '../env'
 import type { Env } from '../env'
 import { validatePayload } from '../../backend/utils/validatePayload'
 import { VersionPolicySchema, ServerUpdateVersionPolicySchema } from '../../shared/ipcSchemas'
+import { verifyAdminRequest } from '../admin-auth'
 
 export async function handleVersionPolicy(request: Request, env: Env): Promise<Response> {
   if (!env.DB) {
@@ -79,7 +80,7 @@ export async function handleUpdateVersionPolicy(request: Request, env: Env): Pro
   // Support both x-admin-token header and Authorization Bearer token
   const adminToken = request.headers.get('x-admin-token') ||
                      request.headers.get('Authorization')?.replace('Bearer ', '')
-  if (!adminToken || adminToken !== env.ADMIN_TOKEN) {
+  if ((!adminToken || adminToken !== env.ADMIN_TOKEN) && !(await verifyAdminRequest(request, env))) {
     return json({ error: 'Admin token required' }, 401)
   }
 

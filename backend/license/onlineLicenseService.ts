@@ -3,6 +3,7 @@ import { getMachineHash } from './machineId'
 import { readStoredTicket, writeStoredTicket, clearStoredTicket } from './ticketStore'
 import { getDecryptedString } from '../security/stringEncryption'
 import { createSignedHeaders } from '../security/apiSigning'
+import { getLicenseServerBase, LEGACY_LICENSE_SERVER_BASE } from '../licenseServerConfig'
 
 // Ưu tiên process.env (inject tại CI/build time).
 // Nếu không có env var → throw để phát hiện sớm khi thiếu cấu hình.
@@ -17,7 +18,7 @@ try {
   DEFAULT_INSTALLER_KEY = process.env.LICENSE_INSTALLER_KEY
 } catch (err) {
   // Chỉ fallback URL public (không nhạy cảm), KHÔNG fallback secret key
-  DEFAULT_BASE = 'https://license-server.dungdong333.workers.dev'
+  DEFAULT_BASE = LEGACY_LICENSE_SERVER_BASE
   // FIX H5: NEVER fall back to empty string — empty key would allow unauthenticated registration.
   // Try env var one more time; if still missing, use a sentinel that the server will reject.
   DEFAULT_INSTALLER_KEY = process.env.LICENSE_INSTALLER_KEY || ''
@@ -29,7 +30,7 @@ try {
   }
 }
 
-const API_BASE = process.env.LICENSE_SERVER_BASE ?? DEFAULT_BASE
+const API_BASE = process.env.LICENSE_SERVER_BASE ? getLicenseServerBase() : DEFAULT_BASE
 const INSTALLER_KEY = process.env.LICENSE_INSTALLER_KEY ?? DEFAULT_INSTALLER_KEY
 const REQUEST_TIMEOUT_MS = 8000
 const OFFLINE_TTL_MS = 24 * 60 * 60 * 1000

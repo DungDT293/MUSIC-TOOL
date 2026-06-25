@@ -15,10 +15,14 @@ function runPlayerOnce(
 ): Promise<PlaybackTestResult> {
   return new Promise((resolve) => {
     let resolved = false
+    let timer: ReturnType<typeof setTimeout> | null = null
     const safeResolve = (result: PlaybackTestResult) => {
       if (resolved) return
       resolved = true
-      clearTimeout(timer)
+      if (timer) {
+        clearTimeout(timer)
+        timer = null
+      }
       resolve(result)
     }
 
@@ -26,7 +30,7 @@ function runPlayerOnce(
       const child = spawn(cmd, args, { windowsHide: true })
 
       // Timeout to prevent infinite hang if player gets stuck
-      const timer = setTimeout(() => {
+      timer = setTimeout(() => {
         try { child.kill('SIGKILL') } catch {}
         safeResolve({ player: label, success: false, exitCode: null })
       }, PLAYBACK_TIMEOUT_MS)
@@ -38,7 +42,7 @@ function runPlayerOnce(
         safeResolve({ player: label, success: code === 0, exitCode: code ?? null })
       })
     } catch {
-      resolve({ player: label, success: false, exitCode: null })
+      safeResolve({ player: label, success: false, exitCode: null })
     }
   })
 }

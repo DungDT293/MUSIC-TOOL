@@ -17,7 +17,7 @@ interface MenuItem {
 
 import { HIDE_FEATURE_AUTOPILOT } from '../config/featureFlags'
 
-// Thứ tự: 1–8, (9 Autopilot ẩn), 9 Sóng nhạc, 10 Cài đặt
+// Thứ tự: 1–8, (9 Autopilot ẩn), 9 Cài đặt
 const allMenuItems: (MenuItem & { hidden?: boolean })[] = [
   { path: '/music/scan', number: '1', label: 'Quét nhạc' },
   { path: '/music/playlist', number: '2', label: 'Tạo playlist' },
@@ -28,8 +28,7 @@ const allMenuItems: (MenuItem & { hidden?: boolean })[] = [
   { path: '/video/youtube-downloader', number: '7', label: 'YouTube Downloader' },
   { path: '/music/enhance', number: '8', label: 'Nâng cấp âm thanh' },
   { path: '/autopilot', number: '9', label: 'Autopilot', hidden: HIDE_FEATURE_AUTOPILOT },
-  { path: '/music/song-nhac', number: '10', label: 'Sóng nhạc' },
-  { path: '/settings', number: '11', label: 'Cài đặt' },
+  { path: '/settings', number: '10', label: 'Cài đặt' },
 ]
 
 // Lọc item ẩn và sắp xếp lại ID tuần tự (1–11 khi Autopilot ẩn)

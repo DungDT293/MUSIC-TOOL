@@ -12,6 +12,8 @@ export interface Env {
   INSTALLER_SECRET?: string
   ADMIN_TOKEN?: string
   JWT_SECRET?: string // V2: JWT signing secret
+  OWNER_EMAIL?: string
+  OWNER_PASSWORD_HASH?: string
 
   // Email service (optional)
   SENDGRID_API_KEY?: string
@@ -21,7 +23,7 @@ export interface Env {
   WEBHOOK_URL?: string
 }
 
-export const DEFAULT_POLICY_VERSION = '4.1.0'
+export const DEFAULT_POLICY_VERSION = '4.4.3'
 export const DEFAULT_VERSION_POLICY = {
   latest_version: DEFAULT_POLICY_VERSION,
   min_supported_version: DEFAULT_POLICY_VERSION,

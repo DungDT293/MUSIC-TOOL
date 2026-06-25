@@ -216,6 +216,11 @@
   word-break: break-all;
 }
 
+.folder-select .path.missing {
+  color: #f87171;
+  font-family: inherit;
+}
+
 /* Buttons */
 .btn-primary,
 .btn-download,
@@ -1118,7 +1123,6 @@ button:disabled {
   color: #888 !important;
   font-style: italic;
 }
-
 
 
 

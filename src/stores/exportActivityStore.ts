@@ -1,11 +1,8 @@
 /**
  * Global Export Activity Store
  *
- * FIX C-01 / H-05: Tracks whether ANY export is currently running across the app.
- * Used by App.tsx to DELAY auth/license teardown when an export is in progress,
- * preventing data loss from mid-export unmounting.
- *
- * Both FinalExportTab and SongNhac ExportDialog register/unregister here.
+ * Tracks whether ANY export is currently running across the app.
+ * Used by App.tsx to delay auth/license teardown when an export is in progress.
  */
 
 import { create } from 'zustand'

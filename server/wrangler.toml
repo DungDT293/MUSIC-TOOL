@@ -5,6 +5,13 @@ name = "license-server"
 main = "index.ts"
 compatibility_date = "2024-01-01"
 compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+
+# Custom domain is attached in Cloudflare Dashboard because the current
+# CLOUDFLARE_API_TOKEN cannot edit routes for admin93media.xyz.
+# routes = [
+#   { pattern = "admin93media.xyz/*", zone_name = "admin93media.xyz" }
+# ]
 
 # D1 Database binding
 [[d1_databases]]
@@ -19,12 +26,6 @@ database_id = "93f5890b-ab73-42f7-875e-788193b79c99"  # Thay bằng database_id 
 # ALERT_EMAIL - Email để nhận alerts (optional)
 # WEBHOOK_URL - Webhook URL cho Discord/Slack (optional)
 
-# Routes (nếu muốn custom domain)
-# routes = [
-#   { pattern = "api.yourdomain.com/*", zone_name = "yourdomain.com" }
-# ]
-
 # Build configuration
 # [build]
 # command = "npm run build"  # Comment vì package.json không có script build
-

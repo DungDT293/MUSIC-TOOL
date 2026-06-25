@@ -6,6 +6,7 @@ import type {
   FinalExportErrorPayload,
   FinalExportProgressPayload,
   FinalExportScanItem,
+  FinalExportVisualizerPreset,
 } from '../../../shared/videoFinalExportChannels'
 
 type SourceType = 'file' | 'folder' | 'files'
@@ -48,6 +49,40 @@ function formatSeconds(value?: number | null) {
   return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`
 }
 
+function describeUnknownError(err: any): string {
+  if (!err) return 'Không rõ lỗi.'
+  const parts = [err?.message || err?.error || String(err)]
+  if (err?.code) parts.push(`code=${err.code}`)
+  if (err?.errno) parts.push(`errno=${err.errno}`)
+  if (err?.syscall) parts.push(`syscall=${err.syscall}`)
+  if (err?.path) parts.push(`path=${err.path}`)
+  if (err?.cause?.message) parts.push(`cause=${err.cause.message}`)
+  return parts.filter(Boolean).join(' | ')
+}
+
+function buildFinalExportFixHint(message: string): string {
+  const lower = message.toLowerCase()
+  if (lower.includes('enospc') || lower.includes('dung lượng') || lower.includes('no space left') || lower.includes('disk full')) {
+    return 'Cách xử lý: giải phóng dung lượng ổ đĩa hoặc chọn thư mục output sang ổ còn trống nhiều hơn.'
+  }
+  if (lower.includes('eacces') || lower.includes('eperm') || lower.includes('không có quyền') || lower.includes('permission denied') || lower.includes('access is denied')) {
+    return 'Cách xử lý: kiểm tra quyền đọc/ghi thư mục, đóng file video/audio/output đang mở, bỏ read-only hoặc chạy app với quyền phù hợp.'
+  }
+  if (lower.includes('enoent') || lower.includes('không tồn tại') || lower.includes('not found') || lower.includes('no such file')) {
+    return 'Cách xử lý: kiểm tra lại file audio/video/ảnh và thư mục output; file có thể đã bị đổi tên, xóa hoặc nằm trong ổ rời chưa mount.'
+  }
+  if (lower.includes('timeout')) {
+    return 'Cách xử lý: thử với ít file hơn, kiểm tra FFmpeg có bị treo, hoặc đổi codec/chuẩn hóa video rồi chạy lại.'
+  }
+  if (lower.includes('ffmpeg')) {
+    return 'Cách xử lý: file media có thể lỗi/codec lạ; thử bật re-encode/chuẩn hóa video, loại file gây lỗi hoặc kiểm tra log FFmpeg ở console.'
+  }
+  if (lower.includes('sóng nhạc') || lower.includes('showwaves') || lower.includes('showfreqs')) {
+    return 'Cách xử lý: thử đổi kiểu sóng nhạc về Bars/Line, giảm chiều cao/độ mịn hoặc tắt sóng nhạc để xác định file nào gây lỗi.'
+  }
+  return 'Cách xử lý: xem job/audio/output trong phần Chi tiết, kiểm tra input của job đó rồi chạy lại sau khi sửa.'
+}
+
 const cardStyle: CSSProperties = {
   backgroundColor: '#2d2d2d',
   borderRadius: '8px',
@@ -82,6 +117,13 @@ const AUDIO_PREVIEW_LIMIT = 20
 const VIDEO_PREVIEW_LIMIT = 20
 const OUTPUT_PREVIEW_LIMIT = 6
 
+const AUDIO_VISUALIZER_PRESETS: Array<{ value: FinalExportVisualizerPreset; label: string; hint: string }> = [
+  { value: 'bars-spectrum', label: 'Bars Spectrum', hint: 'Cột phổ nhạc kiểu cũ' },
+  { value: 'line-waveform', label: 'Line Waveform', hint: 'Đường sóng ngang sạch, dễ nhìn' },
+  { value: 'mirror-waveform', label: 'Mirror Waveform', hint: 'Sóng gương quanh tâm' },
+  { value: 'neon-waveform', label: 'Neon Waveform', hint: 'Đường sóng phát sáng' },
+]
+
 function FinalExportTab() {
   // MED-14 fix: api stored in ref so it's not re-evaluated on every render
   const apiRef = useRef(window.api)
@@ -98,6 +140,7 @@ function FinalExportTab() {
 
   const [audioSource, setAudioSource] = useState<SelectedSource | null>(null)
   const [videoSource, setVideoSource] = useState<SelectedSource | null>(null)
+  const [imageSource, setImageSource] = useState<SelectedSource | null>(null)
   const [outputFolder, setOutputFolder] = useState<string | null>(null)
   const [outputFilename, setOutputFilename] = useState('final_video.mp4')
   const [outputNamesText, setOutputNamesText] = useState<string>('') // nhiều tên, mỗi dòng 1 tên (tùy chọn)
@@ -106,8 +149,21 @@ function FinalExportTab() {
   const [normalizeAudio, setNormalizeAudio] = useState<boolean>(false)
   const [useGpuEncoding, setUseGpuEncoding] = useState<'auto' | 'gpu' | 'cpu'>('auto') // Default: auto (backward compatible)
   const [deleteSourceFiles, setDeleteSourceFiles] = useState<boolean>(false) // Xóa file audio/video sau khi xuất xong
+  const [audioVisualizerEnabled, setAudioVisualizerEnabled] = useState<boolean>(false)
+  const [audioVisualizerPreset, setAudioVisualizerPreset] = useState<FinalExportVisualizerPreset>('neon-waveform')
+  const [audioVisualizerPosition, setAudioVisualizerPosition] = useState<'top' | 'center' | 'bottom'>('bottom')
+  const [audioVisualizerWidthPercent, setAudioVisualizerWidthPercent] = useState<number>(100)
+  const [audioVisualizerHeightPercent, setAudioVisualizerHeightPercent] = useState<number>(30)
+  const [audioVisualizerMarginBottomPx, setAudioVisualizerMarginBottomPx] = useState<number>(24)
+  const [audioVisualizerPrimaryColor, setAudioVisualizerPrimaryColor] = useState<string>('#00d1ff')
+  const [audioVisualizerSecondaryColor, setAudioVisualizerSecondaryColor] = useState<string>('#7c3aed')
+  const [audioVisualizerOpacity, setAudioVisualizerOpacity] = useState<number>(0.92)
+  const [audioVisualizerBarCount, setAudioVisualizerBarCount] = useState<number>(384)
+  const [audioVisualizerSensitivity, setAudioVisualizerSensitivity] = useState<number>(5)
+  const [audioVisualizerPreviewUrl, setAudioVisualizerPreviewUrl] = useState<string | null>(null)
+  const [audioVisualizerPreviewing, setAudioVisualizerPreviewing] = useState<boolean>(false)
 
-  const [activePicker, setActivePicker] = useState<'audio' | 'video' | null>(null)
+  const [activePicker, setActivePicker] = useState<'audio' | 'video' | 'image' | null>(null)
   const [isExporting, setIsExporting] = useState(false)
   const isExportingRef = useRef(false) // Ref để track trạng thái export ngay lập tức (tránh race condition)
   const [exportOutputs, setExportOutputs] = useState<FinalExportDonePayload['outputs'] | null>(null)
@@ -123,6 +179,9 @@ function FinalExportTab() {
   const [concatVideoDurationSec, setConcatVideoDurationSec] = useState<number | null>(null)
   const [audioItems, setAudioItems] = useState<FinalExportScanItem[]>([])
   const [videoItems, setVideoItems] = useState<FinalExportScanItem[]>([])
+  const [imageItems, setImageItems] = useState<FinalExportScanItem[]>([])
+  const [imageFileCount, setImageFileCount] = useState<number | null>(null)
+  const [imageTotalSec, setImageTotalSec] = useState<number | null>(null)
   const [diskSpaceError, setDiskSpaceError] = useState<string | null>(null)
 
   const [usePriorityVideos, setUsePriorityVideos] = useState<boolean>(false)
@@ -131,10 +190,29 @@ function FinalExportTab() {
   const [priorityVideoCount, setPriorityVideoCount] = useState<number | null>(null)
   const [priorityVideoTotalSec, setPriorityVideoTotalSec] = useState<number | null>(null)
 
+  // Chroma Key Overlay
+  const [chromaKeyEnabled, setChromaKeyEnabled] = useState(false)
+  const [chromaKeyVideoPath, setChromaKeyVideoPath] = useState<string | null>(null)
+  const [chromaKeyBgType, setChromaKeyBgType] = useState<'green' | 'black'>('green')
+  const [chromaKeyColor, setChromaKeyColor] = useState('#00FF00')
+  const [chromaKeySimilarity, setChromaKeySimilarity] = useState(0.15)
+  const [chromaKeyBlend, setChromaKeyBlend] = useState(0.05)
+  const [chromaKeyPosition, setChromaKeyPosition] = useState<'center' | 'bottom'>('center')
+  const [chromaKeyScale, setChromaKeyScale] = useState(1.0)
+  const [chromaKeyPreviewUrl, setChromaKeyPreviewUrl] = useState<string | null>(null)
+  const [chromaKeyPreviewing, setChromaKeyPreviewing] = useState(false)
+
   // Export Presets (Sprint 3.1)
   const [presets, setPresets] = useState<Array<{ id: string; name: string; settings: any }>>([])
   const [presetName, setPresetName] = useState('')
   const [showPresets, setShowPresets] = useState(false)
+
+  // Slideshow (image source) settings
+  const [perImageDurationSec, setPerImageDurationSec] = useState<number>(5)
+  const [imageShuffle, setImageShuffle] = useState<boolean>(false)
+  const [imageAspectMode, setImageAspectMode] = useState<'letterbox' | 'crop-fill' | 'blur-background'>('letterbox')
+  const [imageTransition, setImageTransition] = useState<string>('none')
+  const [imageKenBurns, setImageKenBurns] = useState<boolean>(false)
 
   const loadPresets = async () => {
     const w = window
@@ -143,13 +221,64 @@ function FinalExportTab() {
     if (res?.success) setPresets(res.presets ?? [])
   }
 
+  const buildAudioVisualizerOptions = () => ({
+    enabled: true,
+    preset: audioVisualizerPreset,
+    position: audioVisualizerPosition,
+    widthPercent: audioVisualizerWidthPercent,
+    heightPercent: audioVisualizerHeightPercent,
+    marginBottomPx: audioVisualizerMarginBottomPx,
+    primaryColor: audioVisualizerPrimaryColor,
+    secondaryColor: audioVisualizerSecondaryColor,
+    opacity: audioVisualizerOpacity,
+    barCount: audioVisualizerBarCount,
+    sensitivity: audioVisualizerSensitivity,
+  })
+
+  const handlePreviewAudioVisualizer = async () => {
+    if (!audioSource || (!videoSource && !imageSource) || audioItems.length === 0 || audioVisualizerPreviewing) return
+    const bgPath = videoItems[0]?.path || imageItems[0]?.path || videoSource?.path || imageSource?.path
+    const bgKind: 'image' | 'video' = imageSource && !videoSource ? 'image' : 'video'
+    const audioPath = audioItems[0]?.path || audioSource.path
+    if (!bgPath || !audioPath) {
+      setErrorMessage('Cần chọn audio và video/ảnh trước khi xem thử sóng nhạc.')
+      return
+    }
+
+    setAudioVisualizerPreviewing(true)
+    setAudioVisualizerPreviewUrl(null)
+    setErrorMessage(null)
+    try {
+      const result = await api?.barsSpectrumPreview?.({
+        bgPath,
+        bgKind,
+        audioPath,
+        audioVisualizer: buildAudioVisualizerOptions(),
+      })
+      if (result?.ok && result.previewPath) {
+        setAudioVisualizerPreviewUrl(`app://local-file/?path=${encodeURIComponent(result.previewPath)}`)
+      } else {
+        setErrorMessage(result?.error || 'Không tạo được preview sóng nhạc.')
+      }
+    } catch (err: any) {
+      console.error('[AudioVisualizer] Preview error', err)
+      const detail = describeUnknownError(err)
+      setErrorMessage(`Không tạo được preview sóng nhạc.\n${detail}\n${buildFinalExportFixHint(detail)}`)
+    } finally {
+      setAudioVisualizerPreviewing(false)
+    }
+  }
+
   const handleSavePreset = async () => {
     const w = window
     if (!w.api?.preset?.save) return
     const name = presetName.trim() || `Preset ${new Date().toLocaleString('vi-VN')}`
     const settings = {
       outputFilename, outputNamesText, tracklistEnabled, forceReencode, normalizeAudio,
-      useGpuEncoding, deleteSourceFiles, usePriorityVideos,
+      useGpuEncoding, deleteSourceFiles, audioVisualizerEnabled, audioVisualizerPreset, audioVisualizerPosition,
+      audioVisualizerWidthPercent, audioVisualizerHeightPercent, audioVisualizerMarginBottomPx,
+      audioVisualizerPrimaryColor, audioVisualizerSecondaryColor, audioVisualizerOpacity,
+      audioVisualizerBarCount, audioVisualizerSensitivity, usePriorityVideos,
       priorityVideoFolder: priorityVideoFolder ?? undefined,
     }
     const res = await w.api.preset.save(name, settings)
@@ -167,6 +296,17 @@ function FinalExportTab() {
     if (settings.normalizeAudio !== undefined) setNormalizeAudio(settings.normalizeAudio)
     if (settings.useGpuEncoding !== undefined) setUseGpuEncoding(settings.useGpuEncoding)
     if (settings.deleteSourceFiles !== undefined) setDeleteSourceFiles(settings.deleteSourceFiles)
+    if (settings.audioVisualizerEnabled !== undefined) setAudioVisualizerEnabled(settings.audioVisualizerEnabled)
+    if (settings.audioVisualizerPreset !== undefined) setAudioVisualizerPreset(settings.audioVisualizerPreset)
+    if (settings.audioVisualizerPosition !== undefined) setAudioVisualizerPosition(settings.audioVisualizerPosition)
+    if (settings.audioVisualizerWidthPercent !== undefined) setAudioVisualizerWidthPercent(settings.audioVisualizerWidthPercent)
+    if (settings.audioVisualizerHeightPercent !== undefined) setAudioVisualizerHeightPercent(settings.audioVisualizerHeightPercent)
+    if (settings.audioVisualizerMarginBottomPx !== undefined) setAudioVisualizerMarginBottomPx(settings.audioVisualizerMarginBottomPx)
+    if (settings.audioVisualizerPrimaryColor !== undefined) setAudioVisualizerPrimaryColor(settings.audioVisualizerPrimaryColor)
+    if (settings.audioVisualizerSecondaryColor !== undefined) setAudioVisualizerSecondaryColor(settings.audioVisualizerSecondaryColor)
+    if (settings.audioVisualizerOpacity !== undefined) setAudioVisualizerOpacity(settings.audioVisualizerOpacity)
+    if (settings.audioVisualizerBarCount !== undefined) setAudioVisualizerBarCount(settings.audioVisualizerBarCount)
+    if (settings.audioVisualizerSensitivity !== undefined) setAudioVisualizerSensitivity(settings.audioVisualizerSensitivity)
     if (settings.usePriorityVideos !== undefined) setUsePriorityVideos(settings.usePriorityVideos)
     if (settings.priorityVideoFolder !== undefined) setPriorityVideoFolder(settings.priorityVideoFolder)
   }
@@ -276,12 +416,12 @@ function FinalExportTab() {
       if (failedCount > 0 && totalOutputs > 0) {
         // Partial success
         const failDetails = payload.failedJobs!
-          .map(f => `• Job ${f.jobIndex + 1} (${f.fileName}): ${f.error.slice(0, 100)}`)
+          .map(f => `• Job ${f.jobIndex + 1} (${f.fileName}): ${f.error.slice(0, 300)}`)
           .join('\n')
         setStatusText(
           `⚠️ Đã xuất ${totalOutputs} video thành công, ${failedCount} video thất bại. ${warningText}`.trim()
         )
-        setErrorMessage(null)
+        setErrorMessage(`Có ${failedCount} video thất bại:\n${failDetails}\n${buildFinalExportFixHint(failDetails)}`)
       } else {
         const baseStatus =
           totalOutputs <= 1
@@ -318,9 +458,18 @@ function FinalExportTab() {
       setIsExporting(false)
       // FIX C-01: Unregister from global export activity store
       useExportActivityStore.getState().unregisterExport(payload.requestId)
-      const message = payload?.message || payload?.error || 'Đã xảy ra lỗi trong quá trình export.'
-      setStatusText(message)
-      if (message.startsWith('CẢNH BÁO: Dung lượng ổ đĩa không đủ')) {
+      const baseMessage = payload?.message || payload?.error || 'Đã xảy ra lỗi trong quá trình export.'
+      const contextParts = [
+        payload?.currentIndex ? `job=${payload.currentIndex}` : '',
+        payload?.currentAudioPath ? `audio=${getFileName(payload.currentAudioPath)}` : '',
+        payload?.requestId ? `requestId=${payload.requestId}` : '',
+      ].filter(Boolean)
+      const hint = buildFinalExportFixHint(baseMessage)
+      const message = contextParts.length > 0
+        ? `${baseMessage}\nChi tiết: ${contextParts.join(' | ')}\n${hint}`
+        : `${baseMessage}\n${hint}`
+      setStatusText(baseMessage)
+      if (baseMessage.startsWith('CẢNH BÁO: Dung lượng ổ đĩa không đủ')) {
         setDiskSpaceError(message)
         setErrorMessage(null)
       } else {
@@ -338,6 +487,7 @@ function FinalExportTab() {
       unsubscribeError?.()
     }
   }, [api, activeRequestId])
+
 
   // Logic: Nếu có nhiều audio/video → disable input "Tên file output" (single)
   // Nếu chỉ có 1 audio và 1 video → disable textarea "Tên file output (mỗi dòng một tên)"
@@ -362,11 +512,15 @@ function FinalExportTab() {
     videoItems.length > 0 &&
     audioItems.length !== videoItems.length
 
+  // Slideshow mode: allow export when imageSource is present (videoSource optional)
+  const isSlideshowMode = Boolean(imageSource && !videoSource)
+
   const canExport = useMemo(() => {
     const hasOutputName = multipleAudio ? true : outputFilename.trim().length > 0
+    const hasVideoOrImage = Boolean(videoSource || imageSource)
     return Boolean(
       audioSource &&
-      videoSource &&
+      hasVideoOrImage &&
       outputFolder &&
       hasOutputName &&
       !isExporting &&
@@ -376,6 +530,7 @@ function FinalExportTab() {
   }, [
     audioSource,
     videoSource,
+    imageSource,
     outputFolder,
     outputFilename,
     isExporting,
@@ -384,7 +539,7 @@ function FinalExportTab() {
     strictFilesPairingCountMismatch,
   ])
 
-  const handlePickSource = async (target: 'audio' | 'video', type: 'file' | 'folder' | 'file-single') => {
+  const handlePickSource = async (target: 'audio' | 'video' | 'image', type: 'file' | 'folder' | 'file-single') => {
     setActivePicker(null)
     setExportOutputs(null)
     if (target === 'audio') {
@@ -412,11 +567,26 @@ function FinalExportTab() {
           if (!paths || paths.length === 0) return
           source =
             paths.length === 1 ? { type: 'file', path: paths[0] } : { type: 'files', path: paths[0], paths }
+        } else if (target === 'image') {
+          const paths: string[] | null = await api?.selectImageFilesMulti?.()
+          if (!paths || paths.length === 0) return
+          source =
+            paths.length === 1 ? { type: 'file', path: paths[0] } : { type: 'files', path: paths[0], paths }
+          // Chọn ảnh thì bỏ videoSource để bật slideshow mode rõ ràng
+          setVideoItems([])
+          setVideoFileCount(null)
+          setVideoTotalSec(null)
+          setVideoSource(null)
         } else {
           const paths: string[] | null = await api?.selectVideoFilesMulti?.()
           if (!paths || paths.length === 0) return
           source =
             paths.length === 1 ? { type: 'file', path: paths[0] } : { type: 'files', path: paths[0], paths }
+          // Chọn video thì bỏ imageSource để tránh trộn mode
+          setImageItems([])
+          setImageFileCount(null)
+          setImageTotalSec(null)
+          setImageSource(null)
         }
       } else {
         const selectedPath = await api?.selectFolder?.()
@@ -437,9 +607,11 @@ function FinalExportTab() {
             setAudioItems(scanRes.items || [])
           }
         } catch (err) {
-          console.error('[FinalExportTab] scanAudioSource error', err)
+          const detail = describeUnknownError(err)
+          console.error('[FinalExportTab] scanAudioSource error', detail, err)
+          setErrorMessage(`Không quét được audio nguồn.\n${detail}\n${buildFinalExportFixHint(detail)}`)
         }
-      } else {
+      } else if (target === 'video') {
         setVideoSource(source)
         try {
           const scanRes = await api?.videoFinalExport?.scanVideoSource({
@@ -452,7 +624,27 @@ function FinalExportTab() {
             setVideoItems(scanRes.items || [])
           }
         } catch (err) {
-          console.error('[FinalExportTab] scanVideoSource error', err)
+          const detail = describeUnknownError(err)
+          console.error('[FinalExportTab] scanVideoSource error', detail, err)
+          setErrorMessage(`Không quét được video nguồn.\n${detail}\n${buildFinalExportFixHint(detail)}`)
+        }
+      } else if (target === 'image') {
+        setImageSource(source)
+        try {
+          const scanRes = await api?.videoFinalExport?.scanImageSource?.({
+            requestId: `scan-image-${Date.now()}`,
+            imageSource: source,
+            perImageDurationSec,
+          })
+          if (scanRes && scanRes.kind === 'image') {
+            setImageFileCount(scanRes.fileCount)
+            setImageTotalSec(scanRes.totalDurationSec)
+            setImageItems(scanRes.items || [])
+          }
+        } catch (err) {
+          const detail = describeUnknownError(err)
+          console.error('[FinalExportTab] scanImageSource error', detail, err)
+          setErrorMessage(`Không quét được ảnh nguồn.\n${detail}\n${buildFinalExportFixHint(detail)}`)
         }
       }
     } catch (error) {
@@ -553,7 +745,7 @@ function FinalExportTab() {
       console.warn('[FinalExportTab] Export đang chạy, bỏ qua request mới')
       return
     }
-    if (!canExport || !audioSource || !videoSource || !outputFolder) return
+    if (!canExport || !audioSource || (!videoSource && !imageSource) || !outputFolder) return
     if (nameMismatch) {
       setErrorMessage('Số dòng tên output không khớp số job. Vui lòng nhập đủ hoặc để trống để dùng output_1..N.')
       return
@@ -573,7 +765,8 @@ function FinalExportTab() {
     const payload = {
       requestId,
       audioSource,
-      videoSource,
+      videoSource: videoSource || undefined,
+      imageSource: imageSource || undefined,
       outputFolder,
       outputFilename,
       outputNames: parsedOutputNames.length > 0 ? parsedOutputNames : undefined,
@@ -595,8 +788,23 @@ function FinalExportTab() {
                 paths: priorityVideoPaths,
               }
           : undefined,
-      subtitle: undefined, // Tính năng subtitle đã tắt
       deleteSourceFiles, // Xóa file audio/video sau khi xuất xong
+      chromaKeyOverlay: chromaKeyEnabled && chromaKeyVideoPath ? {
+        enabled: true,
+        videoPath: chromaKeyVideoPath,
+        bgType: chromaKeyBgType,
+        keyColor: chromaKeyColor,
+        similarity: chromaKeySimilarity,
+        blend: chromaKeyBlend,
+        position: chromaKeyPosition,
+        scale: chromaKeyScale,
+      } : undefined,
+      audioVisualizer: audioVisualizerEnabled ? buildAudioVisualizerOptions() : undefined,
+      // Slideshow fields (only meaningful when imageSource present)
+      perImageDurationSec: isSlideshowMode ? perImageDurationSec : undefined,
+      imageAspectMode: isSlideshowMode ? imageAspectMode : undefined,
+      imageTransition: isSlideshowMode ? imageTransition : undefined,
+      imageKenBurns: isSlideshowMode ? imageKenBurns : undefined,
     }
 
     if (!api?.videoFinalExport?.start) {
@@ -637,8 +845,9 @@ function FinalExportTab() {
       setIsExporting(false)
       // FIX C-01: Unregister on start failure
       useExportActivityStore.getState().unregisterExport(requestId)
+      const detail = describeUnknownError(error)
       setStatusText('Không thể khởi tạo job xuất video.')
-      setErrorMessage('Không thể khởi tạo job xuất video.')
+      setErrorMessage(`Không thể khởi tạo job xuất video.\n${detail}\n${buildFinalExportFixHint(detail)}`)
       setActiveRequestId(null)
     }
   }
@@ -729,11 +938,11 @@ function FinalExportTab() {
   }
   
   const renderSourceStatus = (
-    source: SelectedSource | null,
+    source: SelectedSource | null | undefined,
     emptyText: string,
     count: number | null
   ) => {
-    if (!source) return emptyText
+    if (source == null) return emptyText
     if (source.type === 'file') {
       const suffix = typeof count === 'number' ? ` (số file: ${count})` : ''
       return `Đã chọn file: ${getFileName(source.path)}${suffix}`
@@ -931,13 +1140,13 @@ function FinalExportTab() {
           </div>
 
           <div style={{ flex: '1 1 320px', backgroundColor: '#252525', borderRadius: '8px', padding: '16px', border: '1px solid #333' }}>
-            <div style={{ fontSize: '15px', fontWeight: 600, marginBottom: '12px' }}>Thư mục chứa video clips</div>
+            <div style={{ fontSize: '15px', fontWeight: 600, marginBottom: '12px' }}>Thư mục chứa video clips / ảnh</div>
             <button
               onClick={() => setActivePicker((prev) => (prev === 'video' ? null : 'video'))}
               style={{ ...buttonStyle, width: '100%' }}
               disabled={isExporting}
             >
-              Chọn clips (file hoặc thư mục)
+              Chọn video / ảnh (file hoặc thư mục)
             </button>
             {activePicker === 'video' && (
               <div style={pickerMenuStyle}>
@@ -957,26 +1166,53 @@ function FinalExportTab() {
                   onClick={() => handlePickSource('video', 'folder')}
                   style={{ ...buttonStyle, backgroundColor: '#444' }}
                 >
-                  Chọn thư mục clips
+                  Chọn thư mục video
+                </button>
+                <div style={{ height: '1px', backgroundColor: '#3d3d3d', margin: '6px 0' }} />
+                <button
+                  onClick={() => handlePickSource('image', 'file')}
+                  style={{ ...buttonStyle, backgroundColor: '#16a34a' }}
+                >
+                  Chọn nhiều file ảnh
+                </button>
+                <button
+                  onClick={() => handlePickSource('image', 'folder')}
+                  style={{ ...buttonStyle, backgroundColor: '#15803d' }}
+                >
+                  Chọn thư mục ảnh
                 </button>
               </div>
             )}
-            <div style={{ marginTop: '12px', fontSize: '14px', color: videoSource ? '#fff' : '#b0b0b0' }}>
-              {renderSourceStatus(videoSource, 'Chưa chọn clips.', videoFileCount)}
+            <div style={{ marginTop: '12px', fontSize: '14px', color: (videoSource || imageSource) ? '#fff' : '#b0b0b0' }}>
+              {videoSource
+                ? renderSourceStatus(videoSource, 'Chưa chọn clips.', videoFileCount)
+                : imageSource
+                ? renderSourceStatus(imageSource, 'Chưa chọn ảnh.', imageFileCount)
+                : 'Chưa chọn video hoặc ảnh.'}
             </div>
-            {videoSource && (
+            {(videoSource || imageSource) && (
               <button
-                onClick={clearVideoSelection}
+                onClick={() => {
+                  if (videoSource) clearVideoSelection()
+                  if (imageSource) {
+                    setImageSource(null)
+                    setImageItems([])
+                    setImageFileCount(null)
+                    setImageTotalSec(null)
+                  }
+                }}
                 style={{ marginTop: '8px', ...buttonStyle, backgroundColor: '#444' }}
                 disabled={isExporting}
               >
-                Xóa danh sách clips
+                Xóa danh sách
               </button>
             )}
             <div style={{ marginTop: '6px', fontSize: '12px', color: '#9f9f9f' }}>
               {videoTotalSec != null
                 ? `Tổng thời lượng video clips: ${formatSeconds(videoTotalSec)}`
-                : 'Tab 6 dùng 1-1 mapping: mỗi video sẽ ghép với 1 audio tương ứng (theo thứ tự alphabet).'}
+                : imageTotalSec != null
+                ? `Tổng thời lượng ảnh (ước tính): ${formatSeconds(imageTotalSec)}`
+                : 'Chọn video (ghép 1-1) hoặc ảnh (slideshow).'}
             </div>
             {/* Video ưu tiên */}
             <div style={{ marginTop: '10px', padding: '8px', borderRadius: '6px', backgroundColor: '#1f2933', border: '1px solid #374151' }}>
@@ -1112,6 +1348,239 @@ function FinalExportTab() {
         )}
       </div>
 
+      {/* Chroma Key Overlay */}
+      <div style={cardStyle}>
+        <h3 style={{ marginTop: 0, marginBottom: '12px', fontSize: '16px' }}>
+          Chroma Key Overlay
+        </h3>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600, cursor: 'pointer' }}>
+          <input
+            type="checkbox"
+            checked={chromaKeyEnabled}
+            onChange={(e) => setChromaKeyEnabled(e.target.checked)}
+            disabled={isExporting}
+          />{' '}
+          Chèn video phông xanh/đen lên video
+        </label>
+        <div style={{ marginTop: '4px', fontSize: '12px', color: '#9f9f9f' }}>
+          Tách nền video phông xanh hoặc đen, đè lên video hoàn chỉnh khi xuất.
+        </div>
+
+        {chromaKeyEnabled && (
+          <div style={{ marginTop: '14px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            {/* Chọn video */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+              <button
+                style={{ ...buttonStyle, minWidth: '200px' }}
+                disabled={isExporting}
+                onClick={async () => {
+                  const path: string | null = await api?.selectVideoFile?.()
+                  if (path) {
+                    setChromaKeyVideoPath(path)
+                    setChromaKeyPreviewUrl(null)
+                  }
+                }}
+              >
+                Chon video overlay
+              </button>
+              <span style={{ fontSize: '13px', color: chromaKeyVideoPath ? '#aee' : '#888', wordBreak: 'break-all', maxWidth: '350px' }}>
+                {chromaKeyVideoPath ? getFileName(chromaKeyVideoPath) : 'Chua chon video'}
+              </span>
+            </div>
+
+            {/* Loai nen */}
+            <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
+              <span style={{ fontWeight: 600, fontSize: '13px' }}>Loai nen:</span>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
+                <input
+                  type="radio"
+                  name="chromaKeyBgType"
+                  checked={chromaKeyBgType === 'green'}
+                  onChange={() => { setChromaKeyBgType('green'); setChromaKeyColor('#00FF00'); setChromaKeyPreviewUrl(null) }}
+                  disabled={isExporting}
+                />
+                <span style={{ color: '#4ade80' }}>Phong xanh</span>
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
+                <input
+                  type="radio"
+                  name="chromaKeyBgType"
+                  checked={chromaKeyBgType === 'black'}
+                  onChange={() => { setChromaKeyBgType('black'); setChromaKeyColor('#000000'); setChromaKeyPreviewUrl(null) }}
+                  disabled={isExporting}
+                />
+                <span style={{ color: '#aaa' }}>Phong den</span>
+              </label>
+            </div>
+
+            {/* Cai dat tach nen */}
+            <div style={{ border: '1px solid #3d3d3d', borderRadius: '6px', padding: '12px', backgroundColor: '#1e1e1e' }}>
+              <div style={{ fontWeight: 600, fontSize: '13px', marginBottom: '10px' }}>Cai dat tach nen:</div>
+
+              {/* Mau nen */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
+                <span style={{ fontSize: '13px', minWidth: '100px' }}>Mau nen:</span>
+                <input
+                  type="color"
+                  value={chromaKeyColor}
+                  onChange={(e) => { setChromaKeyColor(e.target.value); setChromaKeyPreviewUrl(null) }}
+                  disabled={isExporting}
+                  style={{ width: '36px', height: '28px', border: 'none', backgroundColor: 'transparent', cursor: 'pointer' }}
+                />
+                <input
+                  type="text"
+                  value={chromaKeyColor}
+                  onChange={(e) => {
+                    const v = e.target.value
+                    if (/^#[0-9A-Fa-f]{0,6}$/.test(v)) { setChromaKeyColor(v); setChromaKeyPreviewUrl(null) }
+                  }}
+                  disabled={isExporting}
+                  style={{
+                    width: '90px', padding: '4px 8px', borderRadius: '4px',
+                    border: '1px solid #555', backgroundColor: '#2a2a2a', color: '#fff', fontSize: '13px',
+                  }}
+                />
+              </div>
+
+              {/* Tolerance */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
+                <span style={{ fontSize: '13px', minWidth: '100px' }}>Tolerance:</span>
+                <input
+                  type="range" min={0.01} max={1.0} step={0.01}
+                  value={chromaKeySimilarity}
+                  onChange={(e) => { setChromaKeySimilarity(parseFloat(e.target.value)); setChromaKeyPreviewUrl(null) }}
+                  disabled={isExporting} style={{ flex: 1 }}
+                />
+                <span style={{ fontSize: '13px', color: '#aee', minWidth: '40px', textAlign: 'right' }}>
+                  {chromaKeySimilarity.toFixed(2)}
+                </span>
+              </div>
+
+              {/* Smoothing */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
+                <span style={{ fontSize: '13px', minWidth: '100px' }}>Smoothing:</span>
+                <input
+                  type="range" min={0.0} max={1.0} step={0.01}
+                  value={chromaKeyBlend}
+                  onChange={(e) => { setChromaKeyBlend(parseFloat(e.target.value)); setChromaKeyPreviewUrl(null) }}
+                  disabled={isExporting} style={{ flex: 1 }}
+                />
+                <span style={{ fontSize: '13px', color: '#aee', minWidth: '40px', textAlign: 'right' }}>
+                  {chromaKeyBlend.toFixed(2)}
+                </span>
+              </div>
+
+              {/* Scale */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <span style={{ fontSize: '13px', minWidth: '100px' }}>Ti le:</span>
+                <input
+                  type="range" min={0.1} max={2.0} step={0.05}
+                  value={chromaKeyScale}
+                  onChange={(e) => { setChromaKeyScale(parseFloat(e.target.value)); setChromaKeyPreviewUrl(null) }}
+                  disabled={isExporting} style={{ flex: 1 }}
+                />
+                <span style={{ fontSize: '13px', color: '#aee', minWidth: '55px', textAlign: 'right' }}>
+                  {(chromaKeyScale * 100).toFixed(0)}%
+                </span>
+              </div>
+            </div>
+
+            {/* Vi tri: 2 nut */}
+            <div>
+              <span style={{ fontWeight: 600, fontSize: '13px', marginRight: '12px' }}>Vi tri:</span>
+              {(['center', 'bottom'] as const).map((pos) => (
+                <button
+                  key={pos}
+                  onClick={() => { setChromaKeyPosition(pos); setChromaKeyPreviewUrl(null) }}
+                  disabled={isExporting}
+                  style={{
+                    ...buttonStyle,
+                    padding: '6px 16px',
+                    fontSize: '13px',
+                    marginRight: '8px',
+                    backgroundColor: chromaKeyPosition === pos ? '#007acc' : '#444',
+                    border: chromaKeyPosition === pos ? '2px solid #3ba0e6' : '2px solid transparent',
+                  }}
+                >
+                  {pos === 'center' ? 'Chinh giua' : 'Phia duoi'}
+                </button>
+              ))}
+            </div>
+
+            {/* Preview */}
+            <div>
+              <button
+                style={{
+                  ...buttonStyle,
+                  backgroundColor: chromaKeyPreviewing ? '#555' : '#1e6b3a',
+                  minWidth: '160px',
+                }}
+                disabled={isExporting || chromaKeyPreviewing || !chromaKeyVideoPath || !videoSource}
+                onClick={async () => {
+                  if (!chromaKeyVideoPath || !videoSource) return
+                  setChromaKeyPreviewing(true)
+                  setChromaKeyPreviewUrl(null)
+                  try {
+                    // Lay 1 video tu nguon lam background
+                    let bgPath = ''
+                    if (videoSource.type === 'file') {
+                      bgPath = videoSource.path
+                    } else if (videoSource.type === 'files' && videoSource.paths && videoSource.paths.length > 0) {
+                      bgPath = videoSource.paths[0]
+                    } else if (videoSource.type === 'folder') {
+                      // Lay file dau tien trong folder
+                      const items = await api?.listVideosInFolderSimple?.(videoSource.path)
+                      if (items && items.length > 0) bgPath = items[0]
+                    }
+                    if (!bgPath) {
+                      setChromaKeyPreviewing(false)
+                      return
+                    }
+                    const result = await api?.chromaKeyPreview?.({
+                      bgVideoPath: bgPath,
+                      overlayVideoPath: chromaKeyVideoPath,
+                      bgType: chromaKeyBgType,
+                      keyColor: chromaKeyColor,
+                      similarity: chromaKeySimilarity,
+                      blend: chromaKeyBlend,
+                      position: chromaKeyPosition,
+                      scale: chromaKeyScale,
+                    })
+                    if (result?.ok && result.previewPath) {
+                      // Dung app:// protocol de hien thi anh
+                      setChromaKeyPreviewUrl(`app://local-file/?path=${encodeURIComponent(result.previewPath)}`)
+                    }
+                  } catch (err) {
+                    console.error('[ChromaKey] Preview error', err)
+                  } finally {
+                    setChromaKeyPreviewing(false)
+                  }
+                }}
+              >
+                {chromaKeyPreviewing ? 'Dang tao preview...' : 'Xem thu (Preview)'}
+              </button>
+              {!videoSource && chromaKeyVideoPath && (
+                <span style={{ fontSize: '12px', color: '#f59e0b', marginLeft: '10px' }}>
+                  Chon nguon video truoc de xem preview
+                </span>
+              )}
+            </div>
+
+            {/* Preview image */}
+            {chromaKeyPreviewUrl && (
+              <div style={{ marginTop: '4px', border: '1px solid #3d3d3d', borderRadius: '6px', overflow: 'hidden', backgroundColor: '#111' }}>
+                <img
+                  src={chromaKeyPreviewUrl}
+                  alt="Chroma Key Preview"
+                  style={{ width: '100%', maxHeight: '360px', objectFit: 'contain', display: 'block' }}
+                  onError={() => setChromaKeyPreviewUrl(null)}
+                />
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
       <div style={cardStyle}>
         <h3 style={{ marginTop: 0, marginBottom: '12px', fontSize: '16px' }}>2. Thư mục & tên file xuất</h3>
         <button
@@ -1215,9 +1684,145 @@ function FinalExportTab() {
             Chuẩn hoá âm lượng (audio)
           </label>
           <div style={{ marginTop: '6px', fontSize: '12px', color: '#9f9f9f' }}>
-            Tự động cân bằng âm lượng giữa các video để đảm bảo chất lượng âm thanh đồng đều. 
+            Tự động cân bằng âm lượng giữa các video để đảm bảo chất lượng âm thanh đồng đều.
             Bật tùy chọn này sẽ làm chậm quá trình xuất video nhưng đảm bảo chất lượng âm thanh tốt hơn.
           </div>
+        </div>
+        <div style={{ marginTop: '16px', padding: '12px', border: '1px solid #374151', borderRadius: '6px', backgroundColor: '#111827' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600 }}>
+            <input
+              type="checkbox"
+              checked={audioVisualizerEnabled}
+              onChange={(e) => {
+                setAudioVisualizerEnabled(e.target.checked)
+                setAudioVisualizerPreviewUrl(null)
+              }}
+              disabled={isExporting}
+            />{' '}
+            Hiển thị sóng nhạc
+          </label>
+          <div style={{ marginTop: '6px', fontSize: '12px', color: '#9f9f9f', lineHeight: 1.5 }}>
+            Vẽ phổ hoặc đường sóng nhạc từ audio lên video hoặc slideshow ảnh khi xuất. Khi bật, video sẽ được re-encode nên có thể chậm hơn.
+          </div>
+          {audioVisualizerEnabled && (
+            <div style={{ marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <label style={{ fontSize: '12px', color: '#d1d5db', display: 'flex', flexDirection: 'column', gap: '6px', maxWidth: '360px' }}>
+                Kiểu sóng nhạc
+                <select
+                  value={audioVisualizerPreset}
+                  disabled={isExporting}
+                  onChange={(e) => {
+                    setAudioVisualizerPreset(e.target.value as FinalExportVisualizerPreset)
+                    setAudioVisualizerPreviewUrl(null)
+                  }}
+                  style={{
+                    padding: '8px 10px',
+                    borderRadius: '6px',
+                    border: '1px solid #4b5563',
+                    backgroundColor: '#1f2937',
+                    color: '#f3f4f6',
+                    fontSize: '13px',
+                  }}
+                >
+                  {AUDIO_VISUALIZER_PRESETS.map((preset) => (
+                    <option key={preset.value} value={preset.value}>{preset.label} — {preset.hint}</option>
+                  ))}
+                </select>
+              </label>
+
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+                <span style={{ fontSize: '13px', fontWeight: 600 }}>Vị trí:</span>
+                {(['bottom', 'center', 'top'] as const).map((pos) => (
+                  <button
+                    key={pos}
+                    onClick={() => { setAudioVisualizerPosition(pos); setAudioVisualizerPreviewUrl(null) }}
+                    disabled={isExporting}
+                    style={{
+                      ...buttonStyle,
+                      padding: '5px 12px',
+                      fontSize: '12px',
+                      backgroundColor: audioVisualizerPosition === pos ? '#2563eb' : '#374151',
+                    }}
+                  >
+                    {pos === 'bottom' ? 'Dưới' : pos === 'center' ? 'Giữa' : 'Trên'}
+                  </button>
+                ))}
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '12px' }}>
+                <label style={{ fontSize: '12px', color: '#d1d5db' }}>
+                  Chiều rộng: {audioVisualizerWidthPercent}%
+                  <input type="range" min={10} max={100} step={1} value={audioVisualizerWidthPercent} disabled={isExporting}
+                    onChange={(e) => { setAudioVisualizerWidthPercent(Number(e.target.value)); setAudioVisualizerPreviewUrl(null) }} style={{ width: '100%' }} />
+                </label>
+                <label style={{ fontSize: '12px', color: '#d1d5db' }}>
+                  Chiều cao: {audioVisualizerHeightPercent}%
+                  <input type="range" min={5} max={60} step={1} value={audioVisualizerHeightPercent} disabled={isExporting}
+                    onChange={(e) => { setAudioVisualizerHeightPercent(Number(e.target.value)); setAudioVisualizerPreviewUrl(null) }} style={{ width: '100%' }} />
+                </label>
+                <label style={{ fontSize: '12px', color: '#d1d5db' }}>
+                  Cách mép: {audioVisualizerMarginBottomPx}px
+                  <input type="range" min={0} max={400} step={4} value={audioVisualizerMarginBottomPx} disabled={isExporting}
+                    onChange={(e) => { setAudioVisualizerMarginBottomPx(Number(e.target.value)); setAudioVisualizerPreviewUrl(null) }} style={{ width: '100%' }} />
+                </label>
+                <label style={{ fontSize: '12px', color: '#d1d5db' }}>
+                  Độ trong suốt: {Math.round(audioVisualizerOpacity * 100)}%
+                  <input type="range" min={0.1} max={1} step={0.01} value={audioVisualizerOpacity} disabled={isExporting}
+                    onChange={(e) => { setAudioVisualizerOpacity(Number(e.target.value)); setAudioVisualizerPreviewUrl(null) }} style={{ width: '100%' }} />
+                </label>
+                <label style={{ fontSize: '12px', color: '#d1d5db' }}>
+                  Số cột / độ mịn: {audioVisualizerBarCount}
+                  <input type="range" min={64} max={1024} step={16} value={audioVisualizerBarCount} disabled={isExporting}
+                    onChange={(e) => { setAudioVisualizerBarCount(Number(e.target.value)); setAudioVisualizerPreviewUrl(null) }} style={{ width: '100%' }} />
+                </label>
+                <label style={{ fontSize: '12px', color: '#d1d5db' }}>
+                  Độ nhạy / Beat boost: {audioVisualizerSensitivity.toFixed(1)}x
+                  <input type="range" min={1} max={12} step={0.5} value={audioVisualizerSensitivity} disabled={isExporting}
+                    onChange={(e) => { setAudioVisualizerSensitivity(Number(e.target.value)); setAudioVisualizerPreviewUrl(null) }} style={{ width: '100%' }} />
+                </label>
+              </div>
+
+              <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
+                <label style={{ fontSize: '12px', color: '#d1d5db', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  Màu chính
+                  <input type="color" value={audioVisualizerPrimaryColor} disabled={isExporting}
+                    onChange={(e) => { setAudioVisualizerPrimaryColor(e.target.value); setAudioVisualizerPreviewUrl(null) }} />
+                </label>
+                <label style={{ fontSize: '12px', color: '#d1d5db', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  Màu phụ
+                  <input type="color" value={audioVisualizerSecondaryColor} disabled={isExporting}
+                    onChange={(e) => { setAudioVisualizerSecondaryColor(e.target.value); setAudioVisualizerPreviewUrl(null) }} />
+                </label>
+              </div>
+
+              <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+                <button
+                  onClick={handlePreviewAudioVisualizer}
+                  disabled={isExporting || audioVisualizerPreviewing || !audioSource || (!videoSource && !imageSource)}
+                  style={{ ...buttonStyle, backgroundColor: audioVisualizerPreviewing ? '#555' : '#1e6b3a', padding: '8px 14px', fontSize: '13px' }}
+                >
+                  {audioVisualizerPreviewing ? 'Đang tạo preview 10s...' : 'Xem thử sóng nhạc 10s'}
+                </button>
+                <span style={{ fontSize: '12px', color: '#9ca3af' }}>
+                  Preview tạo video 10 giây từ audio và video/ảnh đầu tiên. Chỉnh xong bấm lại để xem thử, tránh nhấp nháy khi kéo slider.
+                </span>
+              </div>
+
+              {audioVisualizerPreviewUrl && (
+                <div style={{ marginTop: '4px', border: '1px solid #3d3d3d', borderRadius: '6px', overflow: 'hidden', backgroundColor: '#111' }}>
+                  <video
+                    src={audioVisualizerPreviewUrl}
+                    controls
+                    autoPlay
+                    muted
+                    loop
+                    style={{ width: '100%', maxHeight: '420px', objectFit: 'contain', display: 'block' }}
+                    onError={() => setAudioVisualizerPreviewUrl(null)}
+                  />
+                </div>
+              )}
+            </div>
+          )}
         </div>
         <div style={{ marginTop: '16px' }}>
           <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600 }}>

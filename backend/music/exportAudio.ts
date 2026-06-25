@@ -308,11 +308,13 @@ export async function exportPlaylistToFile(
       // Estimate: assume each track needs ~50MB temp space
       const estimatedBytes = playlist.tracks.length * 50 * 1024 * 1024
       const spaceCheck = checkMinimumSpace(diskInfo.free, Math.ceil(estimatedBytes / (1024 * 1024 * 1024)))
-      if (!spaceCheck.enough) {
-        return {
-          success: false,
-          error: `Không đủ dung lượng ổ đĩa để tạo temp files. Cần: ${formatBytes(estimatedBytes)}, Còn: ${formatBytes(diskInfo.free)}`,
-        }
+      if (!spaceCheck.enough && !diskInfo.unknown) {
+        // PLAN A: CHỈ CẢNH BÁO, KHÔNG CHẶN — user vẫn xuất được; nếu thật sự đầy
+        // FFmpeg sẽ báo ENOSPC. getDiskSpace đã đo đúng bằng fs.statfs.
+        console.warn(
+          `[ExportAudio] ⚠️ Temp dir có thể thiếu dung lượng (vẫn tiếp tục): ` +
+          `cần ~${formatBytes(estimatedBytes)}, còn ${formatBytes(diskInfo.free)}`
+        )
       }
     } catch (diskErr: any) {
       console.warn('[ExportAudio] Disk space check failed, continuing anyway:', diskErr)
@@ -385,7 +387,28 @@ export async function exportPlaylistToFile(
         listFile = createConcatListFile(playlist.tracks, tempDir, req.playlistId)
         if (listFile) tempFiles.add(listFile) // Fix High #2.1: Track for cleanup
 
-        if (req.format === 'mp3') {
+        // Detect nếu tất cả track đầu vào là AAC native (m4a/aac)
+        // → dùng -c copy thay vì re-encode để nhanh gấp 20-50x
+        const AAC_EXTS = new Set(['.m4a', '.aac'])
+        const allTracksAreAac = playlist.tracks.every(t =>
+          AAC_EXTS.has(path.extname(t.path).toLowerCase())
+        )
+        const canStreamCopy = req.format === 'aac' && allTracksAreAac
+
+        if (canStreamCopy) {
+          // Stream copy: input AAC → output AAC, không re-encode
+          console.log(`[ExportAudio] ✓ All tracks are AAC → using stream copy (no re-encode)`)
+          args = [
+            '-hide_banner',
+            '-y',
+            '-f', 'concat',
+            '-safe', '0',
+            '-i', listFile,
+            '-vn',
+            '-c', 'copy',
+            outputPath,
+          ]
+        } else if (req.format === 'mp3') {
           args = [
             '-hide_banner',
             '-y', // overwrite output file
@@ -407,6 +430,7 @@ export async function exportPlaylistToFile(
             outputPath,
           ]
         } else if (req.format === 'aac') {
+          // AAC input nhưng không phải tất cả là m4a/aac → re-encode bình thường
           args = [
             '-hide_banner',
             '-y',

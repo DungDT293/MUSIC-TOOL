@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { createHash } from 'crypto'
 import { probeFile } from '../ffmpeg/probe'
@@ -28,6 +29,8 @@ export interface ScanMusicResult {
   tracks: ScannedTrack[]
   summary: ScanSummary
   scannedAt?: number
+  /** Các file audio KHÔNG phải chuẩn AAC (.m4a / .aac). Cần chuẩn hóa. */
+  nonAacFiles?: string[]
 }
 
 export interface ScanMusicPayload {
@@ -35,124 +38,186 @@ export interface ScanMusicPayload {
   randomFolder: string | null
 }
 
+export interface ScanMusicProgress {
+  phase: 'discover' | 'probe'
+  folderType: 'priority' | 'random'
+  currentPath: string
+  directoriesScanned?: number
+  filesDiscovered?: number
+  filesProcessed?: number
+  totalFiles?: number
+}
+
+export interface ScanMusicOptions {
+  signal?: AbortSignal
+  onProgress?: (progress: ScanMusicProgress) => void
+}
+
 const SUPPORTED_AUDIO_EXTENSIONS = ['.mp3', '.wav', '.flac', '.aac', '.m4a', '.ogg']
+const AAC_EXTENSIONS = new Set(['.m4a', '.aac'])
+const DISCOVER_PROGRESS_STEP = 25
+const DISCOVER_YIELD_EVERY_DIRS = 25
 
 function isSupportedAudioExtension(fileName: string): boolean {
   const ext = path.extname(fileName).toLowerCase()
   return SUPPORTED_AUDIO_EXTENSIONS.includes(ext)
 }
 
-function getAllAudioFiles(dir: string): string[] {
+function throwIfAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return
+  const error = new Error('Music scan was cancelled.')
+  ;(error as Error & { code?: string }).code = 'ABORT_ERR'
+  throw error
+}
+
+async function yieldToEventLoop(): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, 0))
+}
+
+async function getAllAudioFiles(
+  dir: string,
+  folderType: 'priority' | 'random',
+  options: ScanMusicOptions = {},
+): Promise<string[]> {
   const files: string[] = []
-  // Symlink protection: track visited realpaths để tránh vòng lặp vô tận
   const visitedDirs = new Set<string>()
   const visitedFiles = new Set<string>()
+  const stack: string[] = [dir]
+  let directoriesScanned = 0
 
-  function walkDir(currentDir: string) {
+  while (stack.length > 0) {
+    throwIfAborted(options.signal)
+    const currentDir = stack.pop()!
+
+    let realDir: string
     try {
-      // Resolve realpath của directory trước khi đệ quy — chống symlink loop
-      let realDir: string
-      try {
-        realDir = fs.realpathSync(currentDir)
-      } catch {
-        console.warn(`[ScanMusic] Cannot resolve realpath for dir ${currentDir}, skipping`)
-        return
-      }
-      if (visitedDirs.has(realDir)) {
-        console.warn(`[ScanMusic] Symlink loop detected, skipping: ${currentDir} -> ${realDir}`)
-        return
-      }
-      visitedDirs.add(realDir)
+      realDir = await fsp.realpath(currentDir)
+    } catch {
+      console.warn(`[ScanMusic] Cannot resolve realpath for dir ${currentDir}, skipping`)
+      continue
+    }
 
-      const entries = fs.readdirSync(currentDir, { withFileTypes: true })
+    if (visitedDirs.has(realDir)) {
+      console.warn(`[ScanMusic] Symlink loop detected, skipping: ${currentDir} -> ${realDir}`)
+      continue
+    }
+    visitedDirs.add(realDir)
 
-      for (const entry of entries) {
-        const fullPath = path.join(currentDir, entry.name)
-
-        if (entry.isDirectory()) {
-          walkDir(fullPath)
-        } else if (entry.isFile() && isSupportedAudioExtension(entry.name)) {
-          // Resolve realpath của file — chống symlink trỏ đến cùng file
-          let realFile: string
-          try {
-            realFile = fs.realpathSync(fullPath)
-          } catch {
-            console.warn(`[ScanMusic] Cannot resolve realpath for file ${fullPath}, skipping`)
-            continue
-          }
-          if (visitedFiles.has(realFile)) {
-            console.warn(`[ScanMusic] Duplicate file via symlink, skipping: ${fullPath} -> ${realFile}`)
-            continue
-          }
-          visitedFiles.add(realFile)
-          files.push(fullPath)
-        }
-      }
+    let entries: fs.Dirent[]
+    try {
+      entries = await fsp.readdir(currentDir, { withFileTypes: true })
     } catch (err) {
       console.warn(`[ScanMusic] Failed to read directory ${currentDir}:`, err)
+      continue
+    }
+
+    directoriesScanned++
+    options.onProgress?.({
+      phase: 'discover',
+      folderType,
+      currentPath: currentDir,
+      directoriesScanned,
+      filesDiscovered: files.length,
+    })
+
+    for (const entry of entries) {
+      throwIfAborted(options.signal)
+      const fullPath = path.join(currentDir, entry.name)
+
+      if (entry.isDirectory()) {
+        stack.push(fullPath)
+        continue
+      }
+
+      if (!entry.isFile() || !isSupportedAudioExtension(entry.name)) {
+        continue
+      }
+
+      let realFile: string
+      try {
+        realFile = await fsp.realpath(fullPath)
+      } catch {
+        console.warn(`[ScanMusic] Cannot resolve realpath for file ${fullPath}, skipping`)
+        continue
+      }
+
+      if (visitedFiles.has(realFile)) {
+        console.warn(`[ScanMusic] Duplicate file via symlink, skipping: ${fullPath} -> ${realFile}`)
+        continue
+      }
+
+      visitedFiles.add(realFile)
+      files.push(fullPath)
+
+      if (files.length === 1 || files.length % DISCOVER_PROGRESS_STEP === 0) {
+        options.onProgress?.({
+          phase: 'discover',
+          folderType,
+          currentPath: fullPath,
+          directoriesScanned,
+          filesDiscovered: files.length,
+        })
+      }
+    }
+
+    if (directoriesScanned % DISCOVER_YIELD_EVERY_DIRS === 0) {
+      await yieldToEventLoop()
     }
   }
 
-  walkDir(dir)
   return files
 }
 
 async function runWithConcurrency<T, R>(
   items: T[],
   limit: number,
-  worker: (item: T) => Promise<R>
+  worker: (item: T) => Promise<R>,
+  options: {
+    signal?: AbortSignal
+    onItemCompleted?: (completed: number, total: number, item: T) => void
+  } = {},
 ): Promise<R[]> {
-  const results: (R | null)[] = new Array(items.length)
-  const executing: Array<{ promise: Promise<void>; index: number }> = []
+  if (items.length === 0) return []
 
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i]
-    const index = i
+  const results: (R | null)[] = new Array(items.length).fill(null)
+  const workerCount = Math.max(1, Math.min(limit, items.length))
+  let nextIndex = 0
+  let completed = 0
 
-    const promise = worker(item)
-      .then((result) => {
-        results[index] = result
-      })
-      .catch((err) => {
-        console.warn(`[ScanMusic] Worker failed for item ${index}:`, err)
-        results[index] = null
-      })
-      .then(() => {
-        // Remove from executing when done
-        const execIndex = executing.findIndex((e) => e.index === index)
-        if (execIndex >= 0) {
-          executing.splice(execIndex, 1)
-        }
-      })
+  const workerLoop = async () => {
+    while (true) {
+      throwIfAborted(options.signal)
+      const currentIndex = nextIndex++
+      if (currentIndex >= items.length) return
 
-    executing.push({ promise, index })
+      const item = items[currentIndex]
+      try {
+        results[currentIndex] = await worker(item)
+      } catch (err) {
+        console.warn(`[ScanMusic] Worker failed for item ${currentIndex}:`, err)
+        results[currentIndex] = null
+      }
 
-    // Wait if we've reached the limit
-    if (executing.length >= limit) {
-      await Promise.race(executing.map((e) => e.promise))
+      completed++
+      options.onItemCompleted?.(completed, items.length, item)
     }
   }
 
-  // Wait for all remaining promises
-  await Promise.all(executing.map((e) => e.promise))
-
-  // Filter out null results
-  return results.filter((r): r is R => r !== null)
+  await Promise.all(Array.from({ length: workerCount }, () => workerLoop()))
+  return results.filter((result): result is R => result !== null)
 }
 
 async function scanSingleFile(
   filePath: string,
-  folderType: 'priority' | 'random'
+  folderType: 'priority' | 'random',
 ): Promise<ScannedTrack | null> {
   try {
-    // Medium: check file exists trước khi probe để tránh lỗi không cần thiết
     if (!fs.existsSync(filePath)) {
       console.warn(`[ScanMusic] File not found (skip): ${filePath}`)
       return null
     }
 
     const probeResult = await probeFile(filePath)
-
     if (!probeResult.audio) {
       console.warn(`[ScanMusic] File has no audio stream: ${filePath}`)
       return null
@@ -161,11 +226,12 @@ async function scanSingleFile(
     const id = createHash('md5').update(filePath).digest('hex')
     const fileName = path.basename(filePath)
     const duration = probeResult.format.duration || 0
+    const minDurationSeconds = 5
 
-    // Duration filter: bỏ qua file ngắn hơn 5 giây (jingle, noise, file lỗi)
-    const MIN_DURATION_SECONDS = 5
-    if (duration < MIN_DURATION_SECONDS) {
-      console.warn(`[ScanMusic] File too short (${duration.toFixed(2)}s < ${MIN_DURATION_SECONDS}s), skipping: ${filePath}`)
+    if (duration < minDurationSeconds) {
+      console.warn(
+        `[ScanMusic] File too short (${duration.toFixed(2)}s < ${minDurationSeconds}s), skipping: ${filePath}`,
+      )
       return null
     }
 
@@ -177,9 +243,7 @@ async function scanSingleFile(
       duration,
       size: probeResult.format.size || 0,
       codec: probeResult.audio.codec,
-      bitrate: probeResult.format.bit_rate
-        ? Math.round(probeResult.format.bit_rate / 1000)
-        : undefined, // Convert to kbps
+      bitrate: probeResult.format.bit_rate ? Math.round(probeResult.format.bit_rate / 1000) : undefined,
     }
   } catch (err) {
     console.warn(`[ScanMusic] Failed to probe file ${filePath}:`, err)
@@ -188,7 +252,8 @@ async function scanSingleFile(
 }
 
 export async function scanMusicFolders(
-  payload: ScanMusicPayload
+  payload: ScanMusicPayload,
+  options: ScanMusicOptions = {},
 ): Promise<ScanMusicResult> {
   const { priorityFolder, randomFolder } = payload
 
@@ -197,50 +262,78 @@ export async function scanMusicFolders(
   }
 
   const allTracks: ScannedTrack[] = []
+  throwIfAborted(options.signal)
 
-  // Scan priority folder
   if (priorityFolder) {
     if (!fs.existsSync(priorityFolder)) {
       throw new Error(`Priority folder does not exist: ${priorityFolder}`)
     }
 
     console.log(`[ScanMusic] Scanning priority folder: ${priorityFolder}`)
-    const priorityFiles = getAllAudioFiles(priorityFolder)
+    const priorityFiles = await getAllAudioFiles(priorityFolder, 'priority', options)
     console.log(`[ScanMusic] priorityFiles: ${priorityFiles.length}`)
 
     const priorityTracks = await runWithConcurrency(
       priorityFiles,
-      5, // Limit to 5 concurrent probes
-      (filePath) => scanSingleFile(filePath, 'priority')
+      5,
+      (filePath) => scanSingleFile(filePath, 'priority'),
+      {
+        signal: options.signal,
+        onItemCompleted: (completed, total, item) => {
+          options.onProgress?.({
+            phase: 'probe',
+            folderType: 'priority',
+            currentPath: item,
+            filesDiscovered: total,
+            filesProcessed: completed,
+            totalFiles: total,
+          })
+        },
+      },
     )
 
     console.log(`[ScanMusic] priorityTracks scanned: ${priorityTracks.length}`)
     allTracks.push(...priorityTracks.filter((track): track is ScannedTrack => track !== null))
   }
 
-  // Scan random folder
+  throwIfAborted(options.signal)
+
   if (randomFolder) {
     if (!fs.existsSync(randomFolder)) {
       throw new Error(`Random folder does not exist: ${randomFolder}`)
     }
 
     console.log(`[ScanMusic] Scanning random folder: ${randomFolder}`)
-    const randomFiles = getAllAudioFiles(randomFolder)
+    const randomFiles = await getAllAudioFiles(randomFolder, 'random', options)
     console.log(`[ScanMusic] randomFiles: ${randomFiles.length}`)
 
     const randomTracks = await runWithConcurrency(
       randomFiles,
-      5, // Limit to 5 concurrent probes
-      (filePath) => scanSingleFile(filePath, 'random')
+      5,
+      (filePath) => scanSingleFile(filePath, 'random'),
+      {
+        signal: options.signal,
+        onItemCompleted: (completed, total, item) => {
+          options.onProgress?.({
+            phase: 'probe',
+            folderType: 'random',
+            currentPath: item,
+            filesDiscovered: total,
+            filesProcessed: completed,
+            totalFiles: total,
+          })
+        },
+      },
     )
 
     console.log(`[ScanMusic] randomTracks scanned: ${randomTracks.length}`)
     allTracks.push(...randomTracks.filter((track): track is ScannedTrack => track !== null))
   }
 
-  // Calculate summary
-  const priorityTracks = allTracks.filter((t) => t.folderType === 'priority')
-  const randomTracks = allTracks.filter((t) => t.folderType === 'random')
+  throwIfAborted(options.signal)
+
+  const priorityTracks = allTracks.filter((track) => track.folderType === 'priority')
+  const randomTracks = allTracks.filter((track) => track.folderType === 'random')
 
   console.log(`[ScanMusic] tracks total: ${allTracks.length}`)
 
@@ -248,41 +341,21 @@ export async function scanMusicFolders(
     priorityCount: priorityTracks.length,
     randomCount: randomTracks.length,
     totalCount: allTracks.length,
-    priorityDuration: priorityTracks.reduce((sum, t) => sum + t.duration, 0),
-    randomDuration: randomTracks.reduce((sum, t) => sum + t.duration, 0),
-    totalDuration: allTracks.reduce((sum, t) => sum + t.duration, 0),
+    priorityDuration: priorityTracks.reduce((sum, track) => sum + track.duration, 0),
+    randomDuration: randomTracks.reduce((sum, track) => sum + track.duration, 0),
+    totalDuration: allTracks.reduce((sum, track) => sum + track.duration, 0),
   }
 
   const result: ScanMusicResult = {
     tracks: allTracks,
     summary,
     scannedAt: Date.now(),
+    // Danh sách file không phải chuẩn AAC (.m4a/.aac) — cần chuẩn hóa
+    nonAacFiles: allTracks
+      .filter((track) => !AAC_EXTENSIONS.has(path.extname(track.path).toLowerCase()))
+      .map((track) => track.path),
   }
 
   saveScanResult(result)
-
   return result
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

@@ -23,6 +23,7 @@ import {
   ServerAllowRebindSchema,
 } from '../shared/ipcSchemas'
 import { generateToken, verifyToken, generateRefreshToken } from './utils/jwt'
+import { verifyAdminRequest } from './admin-auth'
 // Import password functions from index.ts
 // Note: These are not exported, so we'll duplicate the logic here
 async function verifyPassword(password: string, storedHash: string, storedSalt: string): Promise<boolean> {
@@ -484,40 +485,6 @@ export async function handleValidateKey(request: Request, env: Env): Promise<Res
 
     // Check machineId
     const machineIdChangedForValidateKey = row.ma_may !== ma_may
-    if (false && machineIdChangedForValidateKey) {
-      // V2: Report tamper event
-      await reportTamperEvent(env.DB, tai_khoan, ma_may, ipAddress, {
-        reason: 'Machine ID mismatch',
-        storedMachineId: row.ma_may,
-        providedMachineId: ma_may,
-        context: 'validate-key',
-      })
-
-      // V2: Check tamper count and get action
-      const tamperCheck = await checkTamperAndGetAction(env.DB, tai_khoan, ma_may)
-
-      if (tamperCheck.action === 'BLOCKED') {
-        // Block account
-        await env.DB.prepare('UPDATE registrations SET trang_thai = ? WHERE tai_khoan = ?')
-          .bind('CHAN', tai_khoan)
-          .run()
-
-        return json({
-          valid: false,
-          action: 'BLOCKED',
-          message: 'Tài khoản đã bị chặn do phát hiện can thiệp hệ thống. Vui lòng liên hệ admin.',
-        })
-      } else if (tamperCheck.action === 'SUSPICIOUS') {
-        return json({
-          valid: false,
-          action: 'SUSPICIOUS',
-          message: 'Cảnh báo: Phát hiện can thiệp hệ thống. Key chỉ hoạt động trên máy đã đăng ký.',
-          tamperCount: tamperCheck.tamperCount,
-        })
-      }
-
-      return json({ valid: false, message: 'Key chỉ hoạt động trên máy đã đăng ký.' })
-    }
 
     // Check key
     if (!activationKeysMatch(row.key_kich_hoat, key_kich_hoat)) {
@@ -581,7 +548,16 @@ export async function handleValidateKey(request: Request, env: Env): Promise<Res
     }
 
     if (machineIdChangedForValidateKey) {
-      await autoRebindMachineId(env.DB, tai_khoan, row.ma_may, ma_may, ipAddress, 'validate-key')
+      await writeAuditLog(env.DB, tai_khoan, 'TOKEN_MACHINE_MISMATCH', 'warning', ipAddress, ma_may, {
+        context: 'validate-key',
+        storedMachineId: row.ma_may,
+        providedMachineId: ma_may,
+      })
+      return json({
+        valid: false,
+        action: 'RELOGIN_REQUIRED',
+        message: 'Key chỉ hoạt động trên máy đã đăng ký. Admin cần đổi máy trước khi kích hoạt trên máy mới.',
+      })
     }
 
     // Key is correct - generate tokens
@@ -688,50 +664,44 @@ export async function handleValidateToken(request: Request, env: Env): Promise<R
       })
     }
 
-    if (false && payload.machine_id !== machine_id) {
-      // V2: Report tamper event
-      await reportTamperEvent(env.DB, payload.sub, machine_id, ipAddress, {
-        reason: 'Machine ID mismatch',
-        tokenMachineId: payload.machine_id,
-        providedMachineId: machine_id,
-        context: 'validate-token',
-      })
-
-      // V2: Check tamper count and get action
-      const tamperCheck = await checkTamperAndGetAction(env.DB, payload.sub, machine_id)
-
-      if (tamperCheck.action === 'BLOCKED') {
-        // Block account
-        await env.DB.prepare('UPDATE registrations SET trang_thai = ? WHERE tai_khoan = ?')
-          .bind('CHAN', payload.sub)
-          .run()
-
-        return json({
-          valid: false,
-          action: 'BLOCKED',
-          error: 'Tài khoản đã bị chặn do phát hiện can thiệp hệ thống. Vui lòng liên hệ admin.',
-        })
-      } else if (tamperCheck.action === 'SUSPICIOUS') {
-        return json({
-          valid: false,
-          action: 'SUSPICIOUS',
-          error: 'Cảnh báo: Phát hiện can thiệp hệ thống. Token không khớp với máy hiện tại.',
-          tamperCount: tamperCheck.tamperCount,
-        })
-      }
-
-      return json({ valid: false, error: 'Token không khớp với máy hiện tại.' })
-    }
-
     // Check account status and key_status in database
     const row = await env.DB.prepare(
-      'SELECT id, trang_thai, key_status, device_token_expires_at, license_expires_at FROM registrations WHERE tai_khoan = ? ORDER BY thoi_gian_tao DESC LIMIT 1'
+      `SELECT id, ma_may, key_kich_hoat, trang_thai, key_status, device_token, device_token_expires_at, license_expires_at
+       FROM registrations
+       WHERE tai_khoan = ? AND ma_may = ?
+       ORDER BY thoi_gian_tao DESC
+       LIMIT 1`
     )
-      .bind(payload.sub)
-      .first<{ id: string; trang_thai: string; key_status: string | null; device_token_expires_at: number | null; license_expires_at: number | null }>()
+      .bind(payload.sub, machine_id)
+      .first<{
+        id: string
+        ma_may: string
+        key_kich_hoat: string | null
+        trang_thai: string
+        key_status: string | null
+        device_token: string | null
+        device_token_expires_at: number | null
+        license_expires_at: number | null
+      }>()
 
     if (!row) {
       return json({ valid: false, error: 'Tài khoản không tồn tại.' })
+    }
+
+    if (row.device_token !== device_token) {
+      return json({
+        valid: false,
+        action: 'RELOGIN_REQUIRED',
+        error: 'Phiên đăng nhập đã bị thu hồi hoặc đã được cấp lại. Vui lòng đăng nhập lại.',
+      })
+    }
+
+    if (payload.key_id && row.key_kich_hoat && payload.key_id !== row.key_kich_hoat) {
+      return json({
+        valid: false,
+        action: 'RELOGIN_REQUIRED',
+        error: 'Key đã được thay đổi. Vui lòng kích hoạt lại bằng key mới.',
+      })
     }
 
     // Check account status (CHAN = blocked)
@@ -852,7 +822,7 @@ export async function handleRefreshToken(request: Request, env: Env): Promise<Re
 
     // Check key_status
     if (row.key_status === 'REVOKED' || row.key_status === 'LOCKED') {
-      return json({ ok: false, error: 'Key đã bị thu hồi hoặc khóa.' })
+      return json({ ok: false, status: row.key_status === 'REVOKED' ? 'revoked' : 'locked', action: 'REVOKED', error: 'Key đã bị thu hồi hoặc khóa.' })
     }
 
     // Check refresh token expiry
@@ -862,42 +832,16 @@ export async function handleRefreshToken(request: Request, env: Env): Promise<Re
 
     // Check machineId — SAU tất cả validation checks để tránh mutate data khi token hết hạn
     if (row.ma_may !== machine_id) {
-      await autoRebindMachineId(env.DB, row.tai_khoan, row.ma_may, machine_id, ipAddress, 'refresh-token')
-    }
-
-    if (false && row.ma_may !== machine_id) {
-      // V2: Report tamper event
-      await reportTamperEvent(env.DB, row.tai_khoan, machine_id, ipAddress, {
-        reason: 'Machine ID mismatch',
+      await writeAuditLog(env.DB, row.tai_khoan, 'TOKEN_MACHINE_MISMATCH', 'warning', ipAddress, machine_id, {
+        context: 'refresh-token',
         storedMachineId: row.ma_may,
         providedMachineId: machine_id,
-        context: 'refresh-token',
       })
-
-      // V2: Check tamper count and get action
-      const tamperCheck = await checkTamperAndGetAction(env.DB, row.tai_khoan, machine_id)
-
-      if (tamperCheck.action === 'BLOCKED') {
-        // Block account
-        await env.DB.prepare('UPDATE registrations SET trang_thai = ? WHERE tai_khoan = ?')
-          .bind('CHAN', row.tai_khoan)
-          .run()
-
-        return json({
-          ok: false,
-          action: 'BLOCKED',
-          error: 'Tài khoản đã bị chặn do phát hiện can thiệp hệ thống. Vui lòng liên hệ admin.',
-        })
-      } else if (tamperCheck.action === 'SUSPICIOUS') {
-        return json({
-          ok: false,
-          action: 'SUSPICIOUS',
-          error: 'Cảnh báo: Phát hiện can thiệp hệ thống. Refresh token không khớp với máy hiện tại.',
-          tamperCount: tamperCheck.tamperCount,
-        })
-      }
-
-      return json({ ok: false, error: 'Refresh token không khớp với máy hiện tại.' })
+      return json({
+        ok: false,
+        action: 'RELOGIN_REQUIRED',
+        error: 'Refresh token không khớp với máy đã đăng ký.',
+      })
     }
 
     // Generate new tokens
@@ -986,10 +930,12 @@ export async function handleLogin(request: Request, env: Env): Promise<Response>
       key_status: string | null
       ma_may: string
       key_kich_hoat: string | null
+      device_token: string | null
+      last_login_at: number | null
       license_expires_at: number | null
     }>(
       env.DB,
-      'id, mat_khau, trang_thai, key_status, ma_may, key_kich_hoat, license_expires_at',
+      'id, mat_khau, trang_thai, key_status, ma_may, key_kich_hoat, device_token, last_login_at, license_expires_at',
       tai_khoan,
       ma_may,
     )
@@ -1028,51 +974,35 @@ export async function handleLogin(request: Request, env: Env): Promise<Response>
 
     // Check key_status — SAU password verify để không leak thông tin
     if (row.key_status === 'REVOKED' || row.key_status === 'LOCKED') {
-      return json({ ok: false, error: 'Key đã bị thu hồi hoặc khóa.' })
+      return json({ ok: false, status: row.key_status === 'REVOKED' ? 'revoked' : 'locked', action: 'REVOKED', error: 'Key đã bị thu hồi hoặc khóa.' })
     }
 
     // LICENSE EXPIRY CHECK — NULL = vĩnh viễn
     if (row.license_expires_at && row.license_expires_at < now) {
-      return json({ ok: false, error: 'Tài khoản đã hết hạn sử dụng. Vui lòng liên hệ admin để gia hạn.' })
+      return json({ ok: false, status: 'expired', action: 'EXPIRED', error: 'Tài khoản đã hết hạn sử dụng. Vui lòng liên hệ admin để gia hạn.' })
     }
 
     // Check machineId — chỉ sau khi password đã xác thực đúng
     if (row.ma_may !== ma_may) {
-      await autoRebindMachineId(env.DB, tai_khoan, row.ma_may, ma_may, ipAddress, 'login')
-    }
-
-    if (false && row.ma_may !== ma_may) {
-      // V2: Report tamper event
-      await reportTamperEvent(env.DB, tai_khoan, ma_may, ipAddress, {
-        reason: 'Machine ID mismatch',
+      await writeAuditLog(env.DB, tai_khoan, 'TOKEN_MACHINE_MISMATCH', 'warning', ipAddress, ma_may, {
+        context: 'login',
         storedMachineId: row.ma_may,
         providedMachineId: ma_may,
-        context: 'login',
       })
+      return json({
+        ok: false,
+        action: 'RELOGIN_REQUIRED',
+        error: 'Tài khoản này chỉ được dùng trên máy đã đăng ký. Admin cần đổi máy trước khi đăng nhập trên máy mới.',
+      })
+    }
 
-      // V2: Check tamper count and get action
-      const tamperCheck = await checkTamperAndGetAction(env.DB, tai_khoan, ma_may)
-
-      if (tamperCheck.action === 'BLOCKED') {
-        // Block account
-        await env.DB.prepare('UPDATE registrations SET trang_thai = ? WHERE tai_khoan = ?')
-          .bind('CHAN', tai_khoan)
-          .run()
-
-        return json({
-          ok: false,
-          action: 'BLOCKED',
-          error: 'Tài khoản đã bị chặn do phát hiện can thiệp hệ thống. Vui lòng liên hệ admin.',
-        })
-      } else if (tamperCheck.action === 'SUSPICIOUS') {
-        return json({
-          ok: false,
-          action: 'SUSPICIOUS',
-          error: 'Cảnh báo: Phát hiện can thiệp hệ thống. Tài khoản này chỉ được phép dùng trên 1 máy.',
-        })
-      }
-
-      return json({ ok: false, error: 'Tài khoản này chỉ được phép dùng trên 1 máy.' })
+    if (row.key_kich_hoat && !row.device_token && !row.last_login_at) {
+      return json({
+        ok: false,
+        status: 'pending',
+        action: 'KEY_REQUIRED',
+        error: 'Tài khoản đã được duyệt. Vui lòng nhập key kích hoạt để sử dụng lần đầu.',
+      })
     }
 
     // Generate new tokens
@@ -1093,7 +1023,7 @@ export async function handleLogin(request: Request, env: Env): Promise<Response>
 
     // Save tokens
     await env.DB.prepare(
-      `UPDATE registrations 
+      `UPDATE registrations
        SET device_token = ?1,
            device_token_expires_at = ?2,
            refresh_token = ?3,
@@ -1130,7 +1060,7 @@ export async function handleLogin(request: Request, env: Env): Promise<Response>
 export async function handleUnlockKey(request: Request, env: Env): Promise<Response> {
   // SECURITY: Require admin token
   const adminToken = request.headers.get('x-admin-token')
-  if (!adminToken || adminToken !== env.ADMIN_TOKEN) {
+  if ((!adminToken || adminToken !== env.ADMIN_TOKEN) && !(await verifyAdminRequest(request, env))) {
     return json({ error: 'Admin token required' }, 401)
   }
 
@@ -1203,7 +1133,7 @@ export async function handleUnlockKey(request: Request, env: Env): Promise<Respo
 export async function handleRevokeKey(request: Request, env: Env): Promise<Response> {
   // SECURITY: Require admin token
   const adminToken = request.headers.get('x-admin-token')
-  if (!adminToken || adminToken !== env.ADMIN_TOKEN) {
+  if ((!adminToken || adminToken !== env.ADMIN_TOKEN) && !(await verifyAdminRequest(request, env))) {
     return json({ error: 'Admin token required' }, 401)
   }
 
@@ -1273,7 +1203,7 @@ export async function handleRevokeKey(request: Request, env: Env): Promise<Respo
 export async function handleAllowRebind(request: Request, env: Env): Promise<Response> {
   // SECURITY: Require admin token
   const adminToken = request.headers.get('x-admin-token')
-  if (!adminToken || adminToken !== env.ADMIN_TOKEN) {
+  if ((!adminToken || adminToken !== env.ADMIN_TOKEN) && !(await verifyAdminRequest(request, env))) {
     return json({ error: 'Admin token required' }, 401)
   }
 

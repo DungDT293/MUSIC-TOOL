@@ -33,6 +33,8 @@ export interface ProbeResult {
     codec: string
     width: number
     height: number
+    coded_width?: number
+    coded_height?: number
     fps: number
     pix_fmt?: string
   }
@@ -50,7 +52,7 @@ export async function probeFile(filePath: string): Promise<ProbeResult> {
   // Dùng ffprobe để lấy metadata (bao gồm tags và lyrics)
   const args = [
     '-v', 'error',
-    '-show_entries', 'format=duration,size,format_name,bit_rate,start_time:format_tags=title,artist,album,album_artist,genre,date,lyrics,LYRICS,USLT:stream=codec_name,codec_type,sample_rate,channels,channel_layout,width,height,r_frame_rate,pix_fmt',
+    '-show_entries', 'format=duration,size,format_name,bit_rate,start_time:format_tags=title,artist,album,album_artist,genre,date,lyrics,LYRICS,USLT:stream=codec_name,codec_type,sample_rate,channels,channel_layout,width,height,coded_width,coded_height,r_frame_rate,pix_fmt',
     '-of', 'json',
     filePath,
   ]
@@ -121,10 +123,14 @@ export async function probeFile(filePath: string): Promise<ProbeResult> {
         }
       }
 
+      const codedW = videoStream.coded_width ? parseInt(videoStream.coded_width, 10) : 0
+      const codedH = videoStream.coded_height ? parseInt(videoStream.coded_height, 10) : 0
       videoInfo = {
         codec: videoStream.codec_name || 'unknown',
         width: videoStream.width ? parseInt(videoStream.width, 10) : 0,
         height: videoStream.height ? parseInt(videoStream.height, 10) : 0,
+        coded_width: codedW > 0 ? codedW : undefined,
+        coded_height: codedH > 0 ? codedH : undefined,
         fps: fps,
         pix_fmt: videoStream.pix_fmt || undefined,
       }

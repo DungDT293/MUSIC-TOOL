@@ -141,6 +141,7 @@ let nextLogSequence = 1
 // If `status === 'running'` but heartbeat is stale (> STALE_LOCK_TIMEOUT_MS),
 // the lock is considered stuck and will be auto-reset by `startAutopilot()`.
 let lastHeartbeatAt = 0
+let activeRunToken: string | null = null
 const STALE_LOCK_TIMEOUT_MS = 5 * 60 * 1000 // 5 minutes without any progress update = stuck
 
 const SCAN_TIMEOUT_MS = 10 * 60 * 1000 // 10 phút
@@ -392,6 +393,48 @@ type EmitLogOptions = {
   skipConsole?: boolean
 }
 
+function describeAutopilotError(err: any): string {
+  const parts = [err?.message || err?.error || String(err) || 'Lỗi không xác định']
+  if (err?.code) parts.push(`code=${err.code}`)
+  if (err?.errno) parts.push(`errno=${err.errno}`)
+  if (err?.syscall) parts.push(`syscall=${err.syscall}`)
+  if (err?.path) parts.push(`path=${err.path}`)
+  if (err?.exitCode !== undefined) parts.push(`exitCode=${err.exitCode}`)
+  if (err?.cause?.message) parts.push(`cause=${err.cause.message}`)
+  return parts.filter(Boolean).join(' | ')
+}
+
+function buildAutopilotFixHint(message: string): string {
+  const lower = message.toLowerCase()
+  if (lower.includes('enospc') || lower.includes('dung lượng') || lower.includes('no space left') || lower.includes('disk full')) {
+    return 'Cách xử lý: giải phóng dung lượng ổ đĩa hoặc chọn thư mục output sang ổ còn trống nhiều hơn.'
+  }
+  if (lower.includes('eacces') || lower.includes('eperm') || lower.includes('không có quyền') || lower.includes('permission denied') || lower.includes('access is denied')) {
+    return 'Cách xử lý: kiểm tra quyền ghi/đọc thư mục, đóng file đang mở, bỏ read-only hoặc chạy app với quyền phù hợp.'
+  }
+  if (lower.includes('enoent') || lower.includes('không tồn tại') || lower.includes('not found') || lower.includes('no such file')) {
+    return 'Cách xử lý: kiểm tra lại đường dẫn thư mục/file đầu vào; nếu dùng thư mục theo ngày, chắc chắn thư mục ngày đó đã tồn tại.'
+  }
+  if (lower.includes('timeout')) {
+    return 'Cách xử lý: giảm số playlist/clip, kiểm tra ổ đĩa/FFmpeg có bị treo, hoặc thử chạy lại với tập dữ liệu nhỏ hơn.'
+  }
+  if (lower.includes('ffmpeg')) {
+    return 'Cách xử lý: kiểm tra file media bị lỗi/codec lạ, thử bật chuẩn hóa video hoặc loại file đang gây lỗi rồi chạy lại.'
+  }
+  if (lower.includes('không tìm thấy bài nhạc')) {
+    return 'Cách xử lý: chọn đúng thư mục nhạc ưu tiên/random và đảm bảo bên trong có file audio hỗ trợ.'
+  }
+  if (lower.includes('không tìm thấy video') || lower.includes('không đủ video')) {
+    return 'Cách xử lý: chọn đúng thư mục video đã cắt, tăng số clip video hoặc giảm mục tiêu số clip tối thiểu.'
+  }
+  return 'Cách xử lý: xem dòng lỗi ngay trước đó để biết bước hỏng, kiểm tra lại input/output của bước đó rồi chạy lại.'
+}
+
+function emitDetailedErrorLog(prefix: string, err: any) {
+  const detail = describeAutopilotError(err)
+  emitLog('error', `${prefix}: ${detail}\n${buildAutopilotFixHint(detail)}`)
+}
+
 function emitLog(
   level: 'info' | 'warn' | 'error',
   message: string,
@@ -478,6 +521,20 @@ export const __autopilotTestUtils = {
       clearTimeout(logFileFlushTimer)
       logFileFlushTimer = null
     }
+    activeRunToken = null
+    lastHeartbeatAt = 0
+    isCancelling = false
+    activeAbortControllers = []
+    currentProgress = {
+      status: 'idle',
+      currentDayIndex: null,
+      currentStep: null,
+      stepPercent: 0,
+      message: undefined,
+      error: undefined,
+      videoSelectedCount: undefined,
+      videoTargetMin: undefined,
+    }
   },
   seedRecentLogs(entries: AutopilotLogEntry[]) {
     recentLogs = entries.slice(-LOG_BUFFER_LIMIT)
@@ -551,6 +608,7 @@ export function forceResetAutopilot(): { reset: boolean; previousStatus: string 
   activeAbortControllers = []
 
   isCancelling = false
+  activeRunToken = null
   currentProgress = {
     status: 'idle',
     currentDayIndex: null,
@@ -595,6 +653,455 @@ export function validateDateCode(dateCode: string): boolean {
   // Kiểm tra số ngày hợp lệ trong tháng
   const daysInMonth = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
   return day <= daysInMonth[month - 1]
+}
+
+export async function startAutopilot(
+  config: AutopilotConfig,
+  preparedConfig?: PreparedAutopilotStartContext,
+): Promise<void> {
+  if (
+    currentProgress.status === 'running' ||
+    currentProgress.status === 'paused' ||
+    currentProgress.status === 'cancelling'
+  ) {
+    const staleDuration = Date.now() - lastHeartbeatAt
+    // Recover from stale lock when heartbeat is older than STALE_LOCK_TIMEOUT_MS.
+    // Do NOT gate on `!activeRunToken` — when a previous run crashes after setting
+    // activeRunToken but before the finally clears it, the token stays non-null forever
+    // and the recovery branch would never trigger. The recovery itself nulls the token.
+    if (lastHeartbeatAt > 0 && staleDuration > STALE_LOCK_TIMEOUT_MS) {
+      console.warn(
+        `[Autopilot] Detected stale status='${currentProgress.status}' after ${Math.round(staleDuration / 1000)}s (token=${activeRunToken ? 'present-but-stale' : 'absent'}). Resetting to idle.`,
+      )
+      currentProgress.status = 'idle'
+      isCancelling = false
+      activeAbortControllers = []
+      activeRunToken = null
+    } else {
+      throw new Error('Autopilot đang chạy. Hãy dừng job hiện tại trước khi chạy job mới.')
+    }
+  }
+
+  const runToken = randomUUID()
+  activeRunToken = runToken
+  currentProgress.status = 'running'
+  lastHeartbeatAt = Date.now()
+  recentLogs = []
+  nextLogSequence = 1
+  activeAbortControllers = []
+  isCancelling = false
+
+  emit({
+    status: 'running',
+    currentDayIndex: null,
+    currentStep: 1,
+    stepPercent: 0,
+    message: 'Bắt đầu chạy Autopilot...',
+    error: undefined,
+    videoSelectedCount: undefined,
+    videoTargetMin: undefined,
+  })
+  emitLog('info', '🚀 Bắt đầu Autopilot...')
+  if (config.runtimeOverrides?.healthCheckNotice) {
+    emitLog(
+      config.runtimeOverrides.healthCheckNoticeLevel ?? 'info',
+      config.runtimeOverrides.healthCheckNotice,
+    )
+  }
+
+  try {
+    const prepared = preparedConfig ?? await validateAutopilotStartConfig(config)
+    const { validPlans, priorityFolder, randomFolder } = prepared
+    const normalizedPlans = validPlans.map((plan) => ({
+      ...plan,
+      dateCode: resolveAutopilotDateCode(plan.dateCode),
+    }))
+    const totalDays = normalizedPlans.length
+
+    emit({
+      currentStep: 1,
+      stepPercent: 5,
+      message: 'Đang quét thư mục nhạc ưu tiên / random...',
+    })
+
+    const scanController = new AbortController()
+    activeAbortControllers.push(scanController)
+    let lastScanProgressAt = 0
+    let lastScanLogAt = 0
+    let lastScanDiscovered = -1
+    let lastScanProbeBucket = -1
+    let scanResult: ScanMusicResult
+
+    try {
+      scanResult = await withTimeout(
+        scanMusicFolders(
+          {
+            priorityFolder,
+            randomFolder,
+          },
+          {
+            signal: scanController.signal,
+            onProgress: (progress) => {
+              const nowMs = Date.now()
+
+              if (progress.phase === 'discover') {
+                const discovered = progress.filesDiscovered ?? 0
+                if (discovered !== lastScanDiscovered || nowMs - lastScanProgressAt >= 4000) {
+                  lastScanDiscovered = discovered
+                  lastScanProgressAt = nowMs
+                  emit({
+                    currentStep: 1,
+                    stepPercent: 5,
+                    message: `Đang quét nhạc ${progress.folderType}... đã thấy ${discovered} file.`,
+                  })
+                }
+
+                if (nowMs - lastScanLogAt >= 15000) {
+                  lastScanLogAt = nowMs
+                  emitVerboseLog(
+                    'info',
+                    `[Bước 1] Scan ${progress.folderType}: ${progress.directoriesScanned ?? 0} thư mục, ${discovered} file.`,
+                  )
+                }
+                return
+              }
+
+              const processed = progress.filesProcessed ?? 0
+              const totalFiles = Math.max(progress.totalFiles ?? 0, 1)
+              const probeBucket = Math.min(9, Math.floor((processed / totalFiles) * 10))
+              if (probeBucket !== lastScanProbeBucket || nowMs - lastScanProgressAt >= 3000) {
+                lastScanProbeBucket = probeBucket
+                lastScanProgressAt = nowMs
+                emit({
+                  currentStep: 1,
+                  stepPercent: Math.min(14, 5 + probeBucket),
+                  message: `Đang đọc metadata nhạc ${progress.folderType}: ${processed}/${totalFiles} file.`,
+                })
+              }
+            },
+          },
+        ),
+        SCAN_TIMEOUT_MS,
+        'Quét thư mục nhạc (Autopilot)',
+        () => {
+          emitLog('error', '[Autopilot] Timeout khi quét thư mục nhạc, huỷ job.')
+          isCancelling = true
+          cancelAutopilotVideoJobs()
+          scanController.abort()
+        },
+      )
+    } finally {
+      activeAbortControllers = activeAbortControllers.filter((controller) => controller !== scanController)
+    }
+
+    emit({
+      currentStep: 1,
+      stepPercent: 15,
+      message: `Đã quét ${scanResult.summary.totalCount} bài nhạc (ưu tiên ${scanResult.summary.priorityCount}, random ${scanResult.summary.randomCount}).`,
+    })
+
+    const failedDays: { dateCode: string; error: string }[] = []
+    const succeededDays: string[] = []
+    const startTime = Date.now()
+
+    for (let i = 0; i < normalizedPlans.length; i++) {
+      if (isCancelling) break
+
+      const plan = normalizedPlans[i]
+      const dayStartTime = Date.now()
+
+      emit({
+        currentDayIndex: i,
+        currentStep: 1,
+        stepPercent: currentProgress.stepPercent,
+        message: `Bắt đầu ngày ${plan.dateCode} (${i + 1}/${totalDays})...`,
+      })
+      emitLog('info', `📅 Bắt đầu ngày ${plan.dateCode} (${i + 1}/${totalDays})`)
+
+      try {
+        await runAutopilotForDay(plan, i, { ...config, dayPlans: normalizedPlans }, scanResult)
+        const dayElapsed = Math.round((Date.now() - dayStartTime) / 1000)
+        const dayElapsedStr = formatDuration(dayElapsed)
+        succeededDays.push(plan.dateCode)
+        const overallPercent = Math.round(((i + 1) / totalDays) * 100)
+
+        emit({
+          currentDayIndex: i,
+          currentStep: 5,
+          stepPercent: Math.max(currentProgress.stepPercent ?? 0, overallPercent),
+          message: `Hoàn tất ngày ${plan.dateCode} (${i + 1}/${totalDays}). Tiến độ tổng: ${overallPercent}%.`,
+        })
+        emitLog(
+          'info',
+          `✓ Hoàn tất ngày ${plan.dateCode} (${i + 1}/${totalDays}) — thời gian: ${dayElapsedStr}. Tiến độ tổng: ${overallPercent}%.`,
+        )
+      } catch (err: any) {
+        const dayElapsed = Math.round((Date.now() - dayStartTime) / 1000)
+        const dayElapsedStr = formatDuration(dayElapsed)
+        const errorMsg = describeAutopilotError(err)
+        failedDays.push({ dateCode: plan.dateCode, error: errorMsg })
+        emitDetailedErrorLog(`[Autopilot] ❌ Lỗi ở ngày ${plan.dateCode} (sau ${dayElapsedStr})`, err)
+        if (isCancelling) break
+      }
+    }
+
+    const totalElapsed = Math.round((Date.now() - startTime) / 1000)
+    const totalElapsedStr = formatDuration(totalElapsed)
+    const failedDateCodes = failedDays.map((day) => day.dateCode)
+
+    const summaryLines: string[] = [
+      '',
+      '╔══════════════════════════════════════════════════════════╗',
+      '║           📊 BÁO CÁO TỔNG KẾT AUTOPILOT                ║',
+      '╠══════════════════════════════════════════════════════════╣',
+      `║  ✅ ${succeededDays.length}/${normalizedPlans.length} ngày thành công${succeededDays.length > 0 ? ` (${succeededDays.join(', ')})` : ''}`,
+    ]
+    if (failedDays.length > 0) {
+      summaryLines.push(`║  ❌ ${failedDays.length} ngày thất bại (${failedDateCodes.join(', ')})`)
+    }
+    summaryLines.push(`║  ⏱️  Tổng thời gian: ${totalElapsedStr}`)
+    if (isCancelling) {
+      summaryLines.push('║  ⚠️  Đã bị huỷ bởi người dùng')
+    }
+    summaryLines.push('╚══════════════════════════════════════════════════════════╝')
+
+    if (failedDays.length > 0) {
+      summaryLines.push('')
+      summaryLines.push('📋 CHI TIẾT LỖI:')
+      for (const failedDay of failedDays) {
+        summaryLines.push(`  • Ngày ${failedDay.dateCode}: ${failedDay.error.slice(0, 200)}`)
+      }
+      summaryLines.push('💡 Cách xử lý: đọc dòng "Cách xử lý" ngay dưới lỗi của từng ngày; thường cần kiểm tra thư mục input/output, quyền truy cập, dung lượng ổ đĩa hoặc file media lỗi.')
+    }
+    emitLogBlock('info', summaryLines)
+
+    if (isCancelling) {
+      emit({
+        status: 'idle',
+        currentStep: null,
+        stepPercent: 0,
+        message: 'Đã dừng Autopilot theo yêu cầu người dùng.',
+      })
+    } else if (failedDays.length > 0) {
+      emit({
+        status: 'completed_with_errors',
+        currentStep: currentProgress.currentStep,
+        stepPercent: currentProgress.stepPercent,
+        message: `Autopilot hoàn tất — ${succeededDays.length}/${normalizedPlans.length} ngày thành công, ${failedDays.length} ngày lỗi (${failedDateCodes.join(', ')}). Tổng: ${totalElapsedStr}.`,
+        error: `Ngày lỗi: ${failedDateCodes.join(', ')}`,
+      })
+    } else {
+      emit({
+        status: 'completed',
+        currentStep: 5,
+        stepPercent: 100,
+        message: `Autopilot đã hoàn tất tất cả ${normalizedPlans.length} ngày trong kế hoạch. Tổng: ${totalElapsedStr}.`,
+      })
+    }
+  } catch (error: any) {
+    if (error?.code === 'ABORT_ERR') {
+      emit({
+        status: 'idle',
+        currentStep: null,
+        stepPercent: 0,
+        message: 'Đã dừng Autopilot theo yêu cầu người dùng.',
+      })
+      return
+    }
+
+    const detailedError = describeAutopilotError(error)
+    emitDetailedErrorLog('[Autopilot] ❌ Lỗi tổng', error)
+    emit({
+      status: 'error',
+      currentStep: currentProgress.currentStep,
+      error: detailedError || 'Lỗi không xác định trong Autopilot.',
+      message: detailedError || 'Lỗi khi chạy Autopilot.',
+    })
+    throw error
+  } finally {
+    const finalStatus = currentProgress.status as AutopilotStatus
+    isCancelling = false
+    activeAbortControllers = []
+    if (logFileFlushTimer) {
+      clearTimeout(logFileFlushTimer)
+      logFileFlushTimer = null
+    }
+    await flushBufferedLogsToFile()
+    if (activeRunToken === runToken) {
+      activeRunToken = null
+    }
+    if (finalStatus === 'running' || finalStatus === 'cancelling') {
+      currentProgress.status = 'idle'
+    }
+  }
+}
+
+export interface PreparedAutopilotStartContext {
+  validPlans: DayPlanConfig[]
+  priorityFolder: string | null
+  randomFolder: string | null
+}
+
+const AUTOPILOT_RX_PIPE = /\|/g
+const AUTOPILOT_RX_INVALID_CHARS = /[<>:"/\\?*\x00-\x1F]/g
+const AUTOPILOT_RX_MULTI_SPACE = /\s+/g
+const AUTOPILOT_RX_MULTI_UNDERSCORE_MID = /([^ ])_+([^ ])/g
+const AUTOPILOT_RX_MULTI_UNDERSCORE_END = /([^ ])_+$/g
+const AUTOPILOT_RX_MULTI_UNDERSCORE_START = /^_+([^ ])/g
+const AUTOPILOT_RX_TRIM_UNDERSCORE_SPACE = /^[\s_]+|[\s_]+$/g
+
+function resolveAutopilotDateCode(dateCode?: string | null): string {
+  if (dateCode && dateCode.trim().length > 0) {
+    return dateCode.trim()
+  }
+
+  const now = new Date()
+  const day = `${now.getDate()}`.padStart(2, '0')
+  const month = `${now.getMonth() + 1}`.padStart(2, '0')
+  return `${day}${month}`
+}
+
+function sanitizeAutopilotOutputName(name: string): string {
+  let result = name.replace(AUTOPILOT_RX_PIPE, ' _ ')
+  result = result.replace(AUTOPILOT_RX_INVALID_CHARS, '_')
+  result = result.replace(AUTOPILOT_RX_MULTI_SPACE, ' ')
+  result = result.replace(AUTOPILOT_RX_MULTI_UNDERSCORE_MID, '$1_$2')
+  result = result.replace(AUTOPILOT_RX_MULTI_UNDERSCORE_END, '$1_')
+  result = result.replace(AUTOPILOT_RX_MULTI_UNDERSCORE_START, '_$1')
+  result = result.replace(AUTOPILOT_RX_TRIM_UNDERSCORE_SPACE, '')
+  return result.trim()
+}
+
+function buildProjectedAutopilotOutputPaths(
+  plan: DayPlanConfig,
+  folders: AutopilotFoldersConfig,
+): string[] {
+  const dateCode = resolveAutopilotDateCode(plan.dateCode)
+  const finalDir = getDayFolder(folders.rootFinal, dateCode, folders.autoCreateDailySubfolder)
+  const playlistCount = normalizeNumber(plan.playlistCount as any, 0)
+  const baseOutputName = buildBaseOutputNameFromPreset(plan.presetId)
+  const outputNames = generateSimpleTitles(
+    playlistCount,
+    baseOutputName,
+    dateCode,
+    plan.overrides,
+    plan.presetId,
+  )
+
+  return outputNames.map((name) => {
+    const sanitized = sanitizeAutopilotOutputName(name) || 'output'
+    const fileName = sanitized.endsWith('.mp4') ? sanitized : `${sanitized}.mp4`
+    return path.join(finalDir, fileName)
+  })
+}
+
+function assertNoAutopilotOutputCollisions(
+  plans: DayPlanConfig[],
+  folders: AutopilotFoldersConfig,
+): void {
+  if (folders.autoCreateDailySubfolder || plans.length <= 1) return
+
+  const seen = new Map<string, { dateCode: string; outputPath: string }>()
+  const collisions: Array<{ first: string; second: string; outputPath: string }> = []
+
+  for (const plan of plans) {
+    const dateCode = resolveAutopilotDateCode(plan.dateCode)
+    const outputPaths = buildProjectedAutopilotOutputPaths(plan, folders)
+    for (const outputPath of outputPaths) {
+      const key = outputPath.toLowerCase()
+      const previous = seen.get(key)
+      if (previous) {
+        collisions.push({
+          first: previous.dateCode,
+          second: dateCode,
+          outputPath,
+        })
+        continue
+      }
+      seen.set(key, { dateCode, outputPath })
+    }
+  }
+
+  if (collisions.length === 0) return
+
+  const sample = collisions
+    .slice(0, 3)
+    .map((collision) => `${collision.outputPath} (${collision.first} <> ${collision.second})`)
+    .join(' | ')
+
+  throw new Error(
+    `Phat hien trung ten file output giua cac ngay khi tat autoCreateDailySubfolder: ${sample}. ` +
+      'Hay bat tao subfolder theo ngay hoac doi ten output/custom title de tranh ghi de.',
+  )
+}
+
+export async function validateAutopilotStartConfig(
+  config: AutopilotConfig,
+): Promise<PreparedAutopilotStartContext> {
+  if (!config.dayPlans || config.dayPlans.length === 0) {
+    throw new Error('Chua co ke hoach ngay nao trong Autopilot.')
+  }
+
+  const validPlans = config.dayPlans.filter(
+    (plan) =>
+      normalizeNumber(plan.playlistCount as any, 0) > 0 &&
+      normalizeNumber(plan.minutesPerPlaylist as any, 0) > 0,
+  )
+
+  if (validPlans.length === 0) {
+    throw new Error('Tat ca ke hoach ngay deu co so playlist hoac thoi luong khong hop le.')
+  }
+
+  const priorityFolder = pickFirstFolder(config.folders.priorityMusicFolder)
+  const randomFolder = pickFirstFolder(config.folders.randomMusicFolder)
+  if (!priorityFolder && !randomFolder) {
+    throw new Error('Hay chon it nhat mot thu muc nhac uu tien hoac nhac random cho Autopilot.')
+  }
+
+  if (priorityFolder) {
+    await validateFolder(priorityFolder, 'Thu muc nhac uu tien')
+  }
+  if (randomFolder) {
+    await validateFolder(randomFolder, 'Thu muc nhac random')
+  }
+
+  await fsp.mkdir(config.folders.rootAudio, { recursive: true }).catch(() => {})
+  await validateFolder(config.folders.rootAudio, 'Thu muc xuat Audio')
+  await validateMultiFolder(config.folders.rootVideo, 'Thu muc goc Video da cat')
+  await fsp.mkdir(config.folders.rootFinal, { recursive: true }).catch(() => {})
+  await validateFolder(config.folders.rootFinal, 'Thu muc xuat Video hoan chinh')
+
+  const dateCodeSeen = new Set<string>()
+  for (let index = 0; index < validPlans.length; index++) {
+    const plan = validPlans[index]
+    const planDateCode = resolveAutopilotDateCode(plan.dateCode)
+
+    if (!validateDateCode(planDateCode)) {
+      throw new Error(
+        `Day plan ${index + 1}: DateCode "${planDateCode}" khong hop le. DateCode phai co format ddMM (4 ky tu so, vi du: 0412 cho ngay 04 thang 12).`,
+      )
+    }
+
+    const playlistCount = normalizeNumber(plan.playlistCount as any, 0)
+    if (playlistCount > MAX_PLAYLIST_COUNT) {
+      throw new Error(
+        `Day plan ${index + 1}: playlistCount=${playlistCount} vuot gioi han toi da ${MAX_PLAYLIST_COUNT}. Giam so playlist hoac tach ngay.`,
+      )
+    }
+
+    if (dateCodeSeen.has(planDateCode)) {
+      throw new Error(`Co 2 ke hoach dung cung dateCode "${planDateCode}". Hay chinh lai de tranh ghi de output.`)
+    }
+    dateCodeSeen.add(planDateCode)
+  }
+
+  assertNoAutopilotOutputCollisions(validPlans, config.folders)
+
+  return {
+    validPlans,
+    priorityFolder,
+    randomFolder,
+  }
 }
 
 function createStallHeartbeat(
@@ -1359,16 +1866,16 @@ function generateSimpleTitles(
       let picked: string[] = []
 
       if (allowRepeatAcross) {
-        const shuffled = [...DEFAULT_DJS]; shuffleInPlace(shuffled)
+        const shuffled = [...DEFAULT_DJS]; shuffleArrayInPlace(shuffled)
         picked = shuffled.slice(0, needed)
       } else {
         const unused = DEFAULT_DJS.filter((dj) => !usedDjsGlobal.has(dj))
-        const shuffledUnused = [...unused]; shuffleInPlace(shuffledUnused)
+        const shuffledUnused = [...unused]; shuffleArrayInPlace(shuffledUnused)
         picked.push(...shuffledUnused.slice(0, Math.min(needed, shuffledUnused.length)))
 
         if (picked.length < needed) {
           const remainingPool = DEFAULT_DJS.filter((dj) => !picked.includes(dj))
-          const shuffledRemaining = [...remainingPool]; shuffleInPlace(shuffledRemaining)
+          const shuffledRemaining = [...remainingPool]; shuffleArrayInPlace(shuffledRemaining)
           picked.push(...shuffledRemaining.slice(0, needed - picked.length))
         }
       }
@@ -1410,18 +1917,18 @@ function generateSimpleTitles(
 
     if (allowRepeatAcross) {
       // Cho phép trùng giữa các video → chỉ cần random 4 DJ bất kỳ, không trùng trong cùng title
-      const shuffled = [...DEFAULT_DJS]; shuffleInPlace(shuffled)
+      const shuffled = [...DEFAULT_DJS]; shuffleArrayInPlace(shuffled)
       picked = shuffled.slice(0, needed)
     } else {
       // Ưu tiên dùng các DJ CHƯA dùng ở video trước
       const unused = DEFAULT_DJS.filter((dj) => !usedDjsGlobal.has(dj))
-      const shuffledUnused = [...unused]; shuffleInPlace(shuffledUnused)
+      const shuffledUnused = [...unused]; shuffleArrayInPlace(shuffledUnused)
       picked.push(...shuffledUnused.slice(0, Math.min(needed, shuffledUnused.length)))
 
       // Nếu không đủ 4 DJ (hết pool) → lấy thêm từ toàn bộ list, tránh trùng trong cùng title
       if (picked.length < needed) {
         const remainingPool = DEFAULT_DJS.filter((dj) => !picked.includes(dj))
-        const shuffledRemaining = [...remainingPool]; shuffleInPlace(shuffledRemaining)
+        const shuffledRemaining = [...remainingPool]; shuffleArrayInPlace(shuffledRemaining)
         picked.push(...shuffledRemaining.slice(0, needed - picked.length))
       }
     }
@@ -1581,13 +2088,13 @@ async function runExportVideoWithOptions(
       // callback error của 1 ngày sẽ ghi đè status toàn cục, gây UI desync
       // khi pipeline tiếp tục chạy ngày tiếp theo. Chỉ log lỗi + giữ status='running'.
       // Terminal error sẽ do try/catch chính của startAutopilot xử lý.
-      const errMsg = err.message || err.error || 'Xuất video thất bại.'
+      const errMsg = describeAutopilotError(err)
       emit({
         currentStep: 4,
         stepPercent: 0,
         message: `Ngày ${dateCode}: Lỗi khi xuất video — ${errMsg}`,
       })
-      emitLog('error', `[Bước 4] ✗ Lỗi khi xuất video: ${errMsg}`)
+      emitDetailedErrorLog(`[Bước 4] ✗ Lỗi khi xuất video ngày ${dateCode}`, err)
     },
   }
   
@@ -1616,8 +2123,6 @@ async function runExportVideoWithOptions(
     !!jobRequest.forceReencode,
     !!jobRequest.normalizeAudio,
     !!jobRequest.tracklistAuto,
-    undefined, // subtitle removed
-    undefined, // options removed
     jobRequest.useGpuEncoding || 'auto', // GPU encoding choice (default: 'auto')
     !!jobRequest.deleteSourceFiles, // Xóa file audio/video sau khi xuất xong
     !!jobRequest.unifyFormat,       // Chuẩn hóa tỉ lệ khung hình + FPS
@@ -1687,12 +2192,7 @@ async function runAutopilotForDay(
   let _poolClipIds: string[] = []
   let _poolFingerprint = ''
 
-  const dateCode = plan.dateCode || (() => {
-    const now = new Date()
-    const d = `${now.getDate()}`.padStart(2, '0')
-    const m = `${now.getMonth() + 1}`.padStart(2, '0')
-    return `${d}${m}`
-  })()
+  const dateCode = resolveAutopilotDateCode(plan.dateCode)
 
   // Validate dateCode format
   if (!validateDateCode(dateCode)) {
@@ -1723,6 +2223,8 @@ async function runAutopilotForDay(
   await ensureDir(audioDir)
   await ensureDir(finalDir)
   emitLog('info', `[Bước 1] ✓ Đã tạo thư mục Audio + Video`)
+  emitLog('info', `[Bước 1] Thư mục Audio: ${audioDir}`)
+  emitLog('info', `[Bước 1] Thư mục Video hoàn chỉnh: ${finalDir}`)
 
   throwIfCancelling()
 
@@ -1815,7 +2317,7 @@ async function runAutopilotForDay(
 
     const pl = playlists[i]
     const fileNameBase = `${dateCode}_P${(i + 1).toString().padStart(2, '0')}`
-    const exportRequestId = `autopilot-export-${dateCode}-${i}`
+    const exportRequestId = `autopilot-export-${dateCode}-${index}-${i}-${activeRunToken?.slice(0, 8) ?? randomUUID().slice(0, 8)}`
     const req: ExportPlaylistRequest = {
       playlistId: pl.id,
       outputDir: audioDir,
@@ -2132,6 +2634,12 @@ async function runAutopilotForDay(
 
   {
     const step4Lines: string[] = [`[Bước 4] Ngày ${dateCode}: Xuất ${playlists.length} video hoàn chỉnh...`]
+    step4Lines.push(`  Output folder: ${finalDir}`)
+    step4Lines.push(`  Request ID: ${requestId}`)
+    step4Lines.push(`  Planned outputs: ${outputNames.length}`)
+    if (outputNames.length > 0) {
+      step4Lines.push(`  First output name: ${outputNames[0]}`)
+    }
     if (overrides.normalizeVideoInput) {
       step4Lines.push(`  Re-encode: BẬT (an toàn hơn)`)
     }
@@ -2190,271 +2698,5 @@ async function runAutopilotForDay(
     } catch (poolErr: any) {
       emitLog('warn', `[VideoPool] Không thể ghi pool history: ${poolErr?.message}`)
     }
-  }
-}
-
-export async function startAutopilot(config: AutopilotConfig): Promise<void> {
-  if (
-    currentProgress.status === 'running' ||
-    currentProgress.status === 'paused' ||
-    currentProgress.status === 'cancelling'
-  ) {
-    // FIX H-04: Detect stuck lock via stale heartbeat.
-    // If status is 'running' but no progress has been emitted for STALE_LOCK_TIMEOUT_MS,
-    // the previous run likely crashed (unhandled rejection in deeply nested async I/O)
-    // and the finally block never reset the status. Auto-recover instead of blocking forever.
-    const staleDuration = Date.now() - lastHeartbeatAt
-    if (lastHeartbeatAt > 0 && staleDuration > STALE_LOCK_TIMEOUT_MS) {
-      console.warn(
-        `[Autopilot] Detected stuck lock: status='${currentProgress.status}' but last heartbeat was ${Math.round(staleDuration / 1000)}s ago. Auto-resetting to idle.`
-      )
-      currentProgress.status = 'idle'
-      isCancelling = false
-      activeAbortControllers = []
-      // Fall through to start normally
-    } else {
-      throw new Error('Autopilot đang chạy. Hãy dừng job hiện tại trước khi chạy job mới.')
-    }
-  }
-
-  // Set status synchronously ngay sau guard để tránh race condition
-  // nếu có 2 call đồng thời (cả 2 pass guard trước khi emit chạy)
-  currentProgress.status = 'running'
-  // FIX H-04: Initialize heartbeat so staleness detection has a baseline
-  lastHeartbeatAt = Date.now()
-  recentLogs = []
-  nextLogSequence = 1
-
-  activeAbortControllers = []
-  isCancelling = false
-  emit({
-    status: 'running',
-    currentDayIndex: null,
-    currentStep: 1,
-    stepPercent: 0,
-    message: 'Bắt đầu chạy Autopilot...',
-    error: undefined,
-    videoSelectedCount: undefined,
-    videoTargetMin: undefined,
-  })
-  emitLog('info', '🚀 Bắt đầu Autopilot...')
-  if (config.runtimeOverrides?.healthCheckNotice) {
-    emitLog(
-      config.runtimeOverrides.healthCheckNoticeLevel ?? 'info',
-      config.runtimeOverrides.healthCheckNotice,
-    )
-  }
-
-  try {
-    if (!config.dayPlans || config.dayPlans.length === 0) {
-      throw new Error('Chưa có kế hoạch ngày nào trong Autopilot.')
-    }
-
-    const validPlans = config.dayPlans.filter(
-      (p) =>
-        normalizeNumber(p.playlistCount as any, 0) > 0 &&
-        normalizeNumber(p.minutesPerPlaylist as any, 0) > 0,
-    )
-
-    if (validPlans.length === 0) {
-      throw new Error('Tất cả kế hoạch ngày đều có số playlist hoặc thời lượng không hợp lệ.')
-    }
-    const totalDays = validPlans.length
-
-    const priorityFolder = pickFirstFolder(config.folders.priorityMusicFolder)
-    const randomFolder = pickFirstFolder(config.folders.randomMusicFolder)
-    if (!priorityFolder && !randomFolder) {
-      throw new Error('Hãy chọn ít nhất một thư mục nhạc ưu tiên hoặc nhạc random cho Autopilot.')
-    }
-
-    // Validate thư mục nhạc
-    if (priorityFolder) {
-      await validateFolder(priorityFolder, 'Thư mục nhạc ưu tiên')
-    }
-    if (randomFolder) {
-      await validateFolder(randomFolder, 'Thư mục nhạc random')
-    }
-
-    // Validate thư mục output — auto-create nếu chưa tồn tại (không block first-run)
-    await fsp.mkdir(config.folders.rootAudio, { recursive: true }).catch(() => {})
-    await validateFolder(config.folders.rootAudio, 'Thư mục xuất Audio')
-    await validateMultiFolder(config.folders.rootVideo, 'Thư mục gốc Video đã cắt')
-    await fsp.mkdir(config.folders.rootFinal, { recursive: true }).catch(() => {})
-    await validateFolder(config.folders.rootFinal, 'Thư mục xuất Video hoàn chỉnh')
-
-    // Validate dateCode cho tất cả day plans
-    const dateCodeSeen = new Set<string>()
-    for (let i = 0; i < validPlans.length; i++) {
-      const plan = validPlans[i]
-      const planDateCode = plan.dateCode || (() => {
-        const now = new Date()
-        const d = `${now.getDate()}`.padStart(2, '0')
-        const m = `${now.getMonth() + 1}`.padStart(2, '0')
-        return `${d}${m}`
-      })()
-      
-      if (!validateDateCode(planDateCode)) {
-        throw new Error(
-          `Day plan ${i + 1}: DateCode "${planDateCode}" không hợp lệ. DateCode phải có format ddMM (4 ký tự số, ví dụ: 0412 cho ngày 04 tháng 12).`
-        )
-      }
-
-      const playlistCount = normalizeNumber(plan.playlistCount as any, 0)
-      if (playlistCount > MAX_PLAYLIST_COUNT) {
-        throw new Error(
-          `Day plan ${i + 1}: playlistCount=${playlistCount} vượt giới hạn tối đa ${MAX_PLAYLIST_COUNT}. Giảm số playlist hoặc tách ngày.`,
-        )
-      }
-
-      if (dateCodeSeen.has(planDateCode)) {
-        throw new Error(`Có 2 kế hoạch dùng cùng dateCode "${planDateCode}". Hãy chỉnh lại để tránh ghi đè output.`)
-      }
-      dateCodeSeen.add(planDateCode)
-    }
-
-    emit({
-      currentStep: 1,
-      stepPercent: 5,
-      message: 'Đang quét thư mục nhạc ưu tiên / random...',
-    })
-
-    const scanResult = await withTimeout(
-      scanMusicFolders({
-        priorityFolder,
-        randomFolder,
-      }),
-      SCAN_TIMEOUT_MS,
-      'Quét thư mục nhạc (Autopilot)',
-      () => {
-        emitLog('error', '[Autopilot] Timeout khi quét thư mục nhạc, huỷ job.')
-        isCancelling = true
-        cancelAutopilotVideoJobs()
-      },
-    )
-
-    emit({
-      currentStep: 1,
-      stepPercent: 15,
-      message: `Đã quét ${scanResult.summary.totalCount} bài nhạc (ưu tiên ${scanResult.summary.priorityCount}, random ${scanResult.summary.randomCount}).`,
-    })
-
-    const failedDays: { dateCode: string; error: string }[] = []
-    const succeededDays: string[] = []
-    const startTime = Date.now()
-
-    // Process all days sequentially
-    for (let i = 0; i < validPlans.length; i++) {
-      if (isCancelling) break
-      const plan = validPlans[i]
-      const totalDays = validPlans.length
-      const dayStartTime = Date.now()
-      emit({
-        currentDayIndex: i,
-        currentStep: 1,
-        stepPercent: currentProgress.stepPercent,
-        message: `Bắt đầu ngày ${plan.dateCode} (${i + 1}/${totalDays})...`,
-      })
-      emitLog('info', `📅 Bắt đầu ngày ${plan.dateCode} (${i + 1}/${totalDays})`)
-      try {
-        await runAutopilotForDay(plan, i, { ...config, dayPlans: validPlans }, scanResult)
-        const dayElapsed = Math.round((Date.now() - dayStartTime) / 1000)
-        const dayElapsedStr = formatDuration(dayElapsed)
-        succeededDays.push(plan.dateCode)
-        const overallPercent = Math.round(((i + 1) / totalDays) * 100)
-        emit({
-          currentDayIndex: i,
-          currentStep: 5,
-          stepPercent: Math.max(currentProgress.stepPercent ?? 0, overallPercent),
-          message: `Hoàn tất ngày ${plan.dateCode} (${i + 1}/${totalDays}). Tiến độ tổng: ${overallPercent}%.`,
-        })
-        emitLog('info', `✓ Hoàn tất ngày ${plan.dateCode} (${i + 1}/${totalDays}) — thời gian: ${dayElapsedStr}. Tiến độ tổng: ${overallPercent}%.`)
-      } catch (err: any) {
-        const dayElapsed = Math.round((Date.now() - dayStartTime) / 1000)
-        const dayElapsedStr = formatDuration(dayElapsed)
-        const errorMsg = err?.message || String(err)
-        failedDays.push({ dateCode: plan.dateCode || `plan-${i + 1}`, error: errorMsg })
-        emitLog('error', `[Autopilot] ❌ Lỗi ở ngày ${plan.dateCode || i + 1} (sau ${dayElapsedStr}): ${errorMsg}`)
-        if (isCancelling) break
-      }
-    }
-
-    // ── BÁO CÁO TỔNG KẾT — gộp thành 1 log block ─────────────────────
-    const totalElapsed = Math.round((Date.now() - startTime) / 1000)
-    const totalElapsedStr = formatDuration(totalElapsed)
-    const failedDateCodes = failedDays.map(d => d.dateCode)
-
-    const summaryLines: string[] = [
-      ``,
-      `╔══════════════════════════════════════════════════════════╗`,
-      `║           📊 BÁO CÁO TỔNG KẾT AUTOPILOT               ║`,
-      `╠══════════════════════════════════════════════════════════╣`,
-      `║  ✅ ${succeededDays.length}/${validPlans.length} ngày thành công${succeededDays.length > 0 ? ` (${succeededDays.join(', ')})` : ''}`,
-    ]
-    if (failedDays.length > 0) {
-      summaryLines.push(`║  ❌ ${failedDays.length} ngày thất bại (${failedDateCodes.join(', ')})`)
-    }
-    summaryLines.push(`║  ⏱️  Tổng thời gian: ${totalElapsedStr}`)
-    if (isCancelling) {
-      summaryLines.push(`║  ⚠️  Đã bị huỷ bởi người dùng`)
-    }
-    summaryLines.push(`╚══════════════════════════════════════════════════════════╝`)
-
-    if (failedDays.length > 0) {
-      summaryLines.push(``)
-      summaryLines.push(`📋 CHI TIẾT LỖI:`)
-      for (const fd of failedDays) {
-        summaryLines.push(`  • Ngày ${fd.dateCode}: ${fd.error.slice(0, 200)}`)
-      }
-      summaryLines.push(`💡 Kiểm tra log ở trên | FFmpeg lỗi → kiểm tra file nguồn | Timeout → giảm playlist`)
-    }
-    emitLogBlock('info', summaryLines)
-
-    if (isCancelling) {
-      emit({
-        status: 'idle',
-        currentStep: null,
-        stepPercent: 0,
-        message: 'Đã dừng Autopilot theo yêu cầu người dùng.',
-      })
-    } else if (failedDays.length > 0) {
-      emit({
-        status: 'completed_with_errors',
-        currentStep: currentProgress.currentStep,
-        stepPercent: currentProgress.stepPercent,
-        message: `Autopilot hoàn tất — ${succeededDays.length}/${validPlans.length} ngày thành công, ${failedDays.length} ngày lỗi (${failedDateCodes.join(', ')}). Tổng: ${totalElapsedStr}.`,
-        error: `Ngày lỗi: ${failedDateCodes.join(', ')}`,
-      })
-    } else {
-      // Không có lỗi và không bị cancel → hoàn tất
-      emit({
-        status: 'completed',
-        currentStep: 5,
-        stepPercent: 100,
-        message: `Autopilot đã hoàn tất tất cả ${validPlans.length} ngày trong kế hoạch. Tổng: ${totalElapsedStr}.`,
-      })
-    }
-  } catch (error: any) {
-    emit({
-      status: 'error',
-      currentStep: currentProgress.currentStep,
-      error: error?.message || 'Lỗi không xác định trong Autopilot.',
-      message: error?.message || 'Lỗi khi chạy Autopilot.',
-    })
-    throw error
-  } finally {
-    const finalStatus = currentProgress.status as AutopilotStatus
-    isCancelling = false
-    activeAbortControllers = []
-    if (logFileFlushTimer) {
-      clearTimeout(logFileFlushTimer)
-      logFileFlushTimer = null
-    }
-    await flushBufferedLogsToFile()
-    // Reset status to idle so autopilot can be started again
-    if (finalStatus === 'running' || finalStatus === 'cancelling') {
-      currentProgress.status = 'idle'
-    }
-    // Không null hoá listener khi error/cancel — listener được register 1 lần từ main.ts
-    // Nếu null hoá, batch tiếp theo sẽ không gửi được event nào về UI → freeze hoàn toàn
   }
 }

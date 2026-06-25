@@ -1,7 +1,6 @@
 import { defineConfig } from 'electron-vite'
 import react from '@vitejs/plugin-react'
 import path from 'node:path'
-import glsl from 'vite-plugin-glsl'
 import { obfuscatePlugin } from './vite-plugin-obfuscate'
 
 export default defineConfig({
@@ -51,7 +50,6 @@ export default defineConfig({
     },
     plugins: [
       react(),
-      glsl(), // GLSL shader loader
       // Obfuscate chỉ trong production build
       ...(process.env.NODE_ENV === 'production' ? [obfuscatePlugin()] : []),
     ],

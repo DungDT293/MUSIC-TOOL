@@ -8,6 +8,7 @@ import path from 'node:path'
 import { getDecryptedString } from '../backend/security/stringEncryption'
 import { createSignedHeaders } from '../backend/security/apiSigning'
 import { getMachineHash, hasMachineHashCacheFootprint } from '../backend/license/machineId'
+import { getAuthServerBase, LEGACY_LICENSE_SERVER_BASE } from '../backend/licenseServerConfig'
 import {
   readEncryptedAuthState,
   writeEncryptedAuthState,
@@ -24,9 +25,9 @@ import {
 // Fallback về plaintext nếu encryption fail (dev mode)
 let AUTH_BASE: string
 try {
-  AUTH_BASE = getDecryptedString('AUTH_BASE')
+  AUTH_BASE = process.env.AUTH_BASE || process.env.LICENSE_SERVER_BASE || getDecryptedString('AUTH_BASE')
 } catch {
-  AUTH_BASE = process.env.AUTH_BASE || 'https://license-server.dungdong333.workers.dev'
+  AUTH_BASE = getAuthServerBase() || LEGACY_LICENSE_SERVER_BASE
 }
 
 export const AUTH_REQUEST_TIMEOUT_MS = 10_000

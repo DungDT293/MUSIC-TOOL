@@ -10,7 +10,7 @@ import { registerSystemHandlers } from './systemHandlers'
 import { registerMusicHandlers } from './musicHandlers'
 import { registerVideoHandlers } from './videoHandlers'
 import { registerVideoFinalExportHandlers } from './videoFinalExportHandlers'
-import { registerSongNhacHandlers } from './songNhacHandlers'
+import { registerAutopilotHandlers } from './autopilotHandlers'
 
 export function registerAllHandlers(
   _mainWindow: BrowserWindow | null,
@@ -21,10 +21,9 @@ export function registerAllHandlers(
   registerMusicHandlers(getMainWindow)
   registerVideoHandlers()
   registerVideoFinalExportHandlers(getMainWindow)
-  registerSongNhacHandlers(getMainWindow)
+  registerAutopilotHandlers(getMainWindow)
 }
 
 // Re-export helper utilities needed by main.ts
 export { refreshLicenseState, getLicenseState } from './authHandlers'
 export { refreshDiskInfoAndBroadcast } from './systemHandlers'
-export { activeSongNhacExports } from './songNhacHandlers'

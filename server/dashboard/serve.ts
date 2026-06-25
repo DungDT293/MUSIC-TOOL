@@ -80,15 +80,14 @@ export function serveDashboard(): Response {
     .badge-high { background: rgba(249, 115, 22, 0.2); color: #f97316; border: 1px solid rgba(249, 115, 22, 0.3); }
     .badge-medium { background: rgba(234, 179, 8, 0.2); color: #eab308; border: 1px solid rgba(234, 179, 8, 0.3); }
     .badge-low { background: rgba(34, 197, 94, 0.2); color: #22c55e; border: 1px solid rgba(34, 197, 94, 0.3); }
-    .loading { text-align: center; padding: 60px 20px; color: #94a3b8; font-size: 14px; }
-    .loading::before { content: '⏳ '; }
+    .loading { text-align: center; padding: 40px 20px; color: #94a3b8; font-size: 14px; }
     .error { background: linear-gradient(135deg, #7f1d1d 0%, #991b1b 100%); border: 1px solid #dc2626; border-radius: 8px; padding: 16px; margin-bottom: 20px; color: #fca5a5; display: flex; align-items: center; gap: 12px; }
     .error::before { content: '⚠️ '; font-size: 20px; }
     .auth-overlay { display: flex; align-items: center; justify-content: center; min-height: 100vh; background: #0f172a; padding: 20px; }
-    .auth-form { background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%); border: 1px solid #334155; border-radius: 16px; padding: 48px 40px; max-width: 440px; width: 100%; box-shadow: 0 25px 80px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(14, 165, 233, 0.05); }
-    .auth-logo { text-align: center; margin-bottom: 8px; font-size: 48px; }
-    .auth-form h2 { margin-bottom: 8px; color: #f1f5f9; font-size: 24px; text-align: center; font-weight: 700; }
-    .auth-subtitle { text-align: center; color: #64748b; font-size: 14px; margin-bottom: 32px; }
+    .auth-form { background: #111827; border: 1px solid #253348; border-radius: 12px; padding: 34px 32px 28px; max-width: 420px; width: 100%; box-shadow: 0 18px 60px rgba(0, 0, 0, 0.42); }
+    .auth-logo { width: 48px; height: 48px; margin: 0 auto 18px; border-radius: 12px; display: flex; align-items: center; justify-content: center; background: #0f172a; color: #38bdf8; border: 1px solid #334155; font-size: 24px; font-weight: 800; }
+    .auth-form h2 { margin-bottom: 8px; color: #f8fafc; font-size: 24px; text-align: center; font-weight: 700; }
+    .auth-subtitle { text-align: center; color: #94a3b8; font-size: 14px; margin-bottom: 28px; }
     .auth-field-label { display: block; color: #94a3b8; font-size: 13px; font-weight: 500; margin-bottom: 8px; }
     .auth-input-wrapper { display: flex; align-items: center; background: #0f172a; border: 2px solid #334155; border-radius: 10px; transition: all 0.2s; margin-bottom: 8px; }
     .auth-input-wrapper:focus-within { border-color: #0ea5e9; box-shadow: 0 0 0 4px rgba(14, 165, 233, 0.15); }
@@ -96,13 +95,22 @@ export function serveDashboard(): Response {
     .auth-input-wrapper input::placeholder { color: #475569; }
     .auth-input-wrapper .toggle-btn { padding: 10px 14px; background: none; border: none; color: #64748b; cursor: pointer; font-size: 18px; border-radius: 0 8px 8px 0; transition: color 0.2s; flex-shrink: 0; }
     .auth-input-wrapper .toggle-btn:hover { color: #e2e8f0; }
-    .auth-form button#loginButton { width: 100%; padding: 14px; background: linear-gradient(135deg, #0ea5e9 0%, #0284c7 100%); border: none; border-radius: 10px; color: white; cursor: pointer; font-size: 16px; font-weight: 600; margin-top: 20px; transition: all 0.25s; letter-spacing: 0.3px; }
-    .auth-form button#loginButton:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(14, 165, 233, 0.4); }
+    .auth-form button#loginButton { width: 100%; padding: 13px; background: #0ea5e9; border: none; border-radius: 8px; color: white; cursor: pointer; font-size: 15px; font-weight: 700; margin-top: 18px; transition: all 0.2s; }
+    .auth-form button#loginButton:hover { background: #0284c7; box-shadow: 0 8px 24px rgba(14, 165, 233, 0.24); }
     .auth-form button#loginButton:active { transform: translateY(0); }
+    .auth-help { margin-top: 18px; border-top: 1px solid #253348; padding-top: 16px; color: #64748b; text-align: center; font-size: 12px; line-height: 1.6; }
+    .auth-help button { color: #38bdf8; background: none; border: none; cursor: pointer; font-size: 12px; padding: 0; }
+    .auth-help button:hover { text-decoration: underline; }
     .hidden { display: none; }
     code { background: rgba(14, 165, 233, 0.1); padding: 2px 6px; border-radius: 4px; font-family: 'Courier New', monospace; font-size: 12px; color: #0ea5e9; }
-    .empty-state { text-align: center; padding: 60px 20px; color: #64748b; }
-    .empty-state::before { content: '📊 '; font-size: 48px; display: block; margin-bottom: 16px; }
+    .empty-state { text-align: center; padding: 40px 20px; color: #64748b; }
+    .data-table { width: 100%; border-collapse: collapse; }
+    .data-table th { padding: 10px 12px; text-align: left; font-size: 12px; color: #94a3b8; border-bottom: 1px solid #334155; text-transform: uppercase; letter-spacing: .04em; }
+    .data-table td { padding: 12px; border-bottom: 1px solid #253348; color: #dbeafe; }
+    .data-table td.number, .data-table th.number { text-align: right; }
+    .data-table td.center, .data-table th.center { text-align: center; }
+    .muted-note { color: #64748b; font-size: 12px; margin-top: 8px; }
+    .chart-empty { display: flex; min-height: 220px; align-items: center; justify-content: center; color: #64748b; border: 1px dashed #334155; border-radius: 8px; }
     .tabs { display: none; }
     .tab { display: none; }
     .tab-content { display: none; }
@@ -171,17 +179,20 @@ export function serveDashboard(): Response {
 <body>
   <div id="authOverlay" class="auth-overlay">
     <div id="authForm" class="auth-form">
-      <div class="auth-logo">🛡️</div>
+      <div class="auth-logo">93</div>
       <h2>93 Media Tool</h2>
-      <p class="auth-subtitle">Đăng nhập bảng quản trị</p>
-      <label class="auth-field-label" for="tokenInput">Admin Token</label>
+      <p class="auth-subtitle">Dang nhap bang quan tri</p>
+      <label class="auth-field-label" for="emailInput">Email</label>
       <div class="auth-input-wrapper">
-        <input type="password" id="tokenInput" placeholder="Nhập Admin Token của bạn..." autocomplete="off">
-        <button type="button" id="tokenToggleBtn" class="toggle-btn" onclick="toggleTokenVisibility()" title="Hiện/ẩn token">👁️</button>
+        <input type="email" id="emailInput" placeholder="admin@example.com" autocomplete="username">
+      </div>
+      <label class="auth-field-label" for="tokenInput">Mat khau</label>
+      <div class="auth-input-wrapper">
+        <input type="password" id="tokenInput" placeholder="Nhap mat khau..." autocomplete="current-password">
+        <button type="button" id="tokenToggleBtn" class="toggle-btn" onclick="toggleTokenVisibility()" title="Hien/an mat khau">Show</button>
       </div>
       <div id="authError" class="error hidden" style="margin-top: 12px; margin-bottom: 0;"></div>
-      <button id="loginButton">Đăng Nhập</button>
-      <p style="margin-top: 20px; font-size: 12px; color: #475569; text-align: center; line-height: 1.6;">Quên token? Chạy lệnh <code>wrangler secret put ADMIN_TOKEN</code></p>
+      <button id="loginButton">Dang Nhap</button>
     </div>
   </div>
   <div id="dashboard" class="app-layout hidden">
@@ -192,51 +203,34 @@ export function serveDashboard(): Response {
         <div class="brand-sub">Admin Dashboard</div>
       </div>
 
-      <div class="sidebar-group">
-        <div class="sidebar-group-title">📊 TỔNG QUAN</div>
-        <div class="sidebar-item active" onclick="switchTab('events')" data-tab="events">
-          <span class="icon">📊</span> Dashboard
-        </div>
-        <div class="sidebar-item" onclick="switchTab('top')" data-tab="top">
-          <span class="icon">🏆</span> Top Users & Máy
-        </div>
+      <div class="sidebar-group" data-owner-only="true">
+        <div class="sidebar-group-title">TONG QUAN</div>
+        <div class="sidebar-item active" onclick="switchTab('events')" data-tab="events"><span class="icon">D</span> Dashboard</div>
+        <div class="sidebar-item" onclick="switchTab('top')" data-tab="top"><span class="icon">T</span> Top Users & May</div>
       </div>
 
       <div class="sidebar-group">
-        <div class="sidebar-group-title">👥 NGƯỜI DÙNG</div>
-        <div class="sidebar-item" onclick="switchTab('users')" data-tab="users">
-          <span class="icon">👥</span> Quản Lý Người Dùng
-        </div>
-        <div class="sidebar-item" onclick="switchTab('licenses')" data-tab="licenses">
-          <span class="icon">🔑</span> Quản Lý License
-        </div>
+        <div class="sidebar-group-title">NGUOI DUNG</div>
+        <div class="sidebar-item" onclick="switchTab('users')" data-tab="users"><span class="icon">U</span> Quan Ly Nguoi Dung</div>
+        <div class="sidebar-item" onclick="switchTab('licenses')" data-tab="licenses"><span class="icon">K</span> Quan Ly License</div>
       </div>
 
-      <div class="sidebar-group">
-        <div class="sidebar-group-title">🔒 BẢO MẬT</div>
-        <div class="sidebar-item" onclick="switchTab('auditLogs')" data-tab="auditLogs">
-          <span class="icon">🔐</span> Log Xác Thực
-        </div>
-        <div class="sidebar-item" onclick="switchTab('autoBlock')" data-tab="autoBlock">
-          <span class="icon">🛡️</span> Giám Sát Bảo Mật
-        </div>
+      <div class="sidebar-group" data-owner-only="true">
+        <div class="sidebar-group-title">BAO MAT</div>
+        <div class="sidebar-item" onclick="switchTab('auditLogs')" data-tab="auditLogs"><span class="icon">L</span> Log Xac Thuc</div>
+        <div class="sidebar-item" onclick="switchTab('autoBlock')" data-tab="autoBlock"><span class="icon">S</span> Giam Sat Bao Mat</div>
       </div>
 
-      <div class="sidebar-group">
-        <div class="sidebar-group-title">📝 NHẬT KÝ</div>
-        <div class="sidebar-item" onclick="switchTab('activity')" data-tab="activity">
-          <span class="icon">📝</span> Log Admin
-        </div>
+      <div class="sidebar-group" data-owner-only="true">
+        <div class="sidebar-group-title">NHAT KY</div>
+        <div class="sidebar-item" onclick="switchTab('activity')" data-tab="activity"><span class="icon">A</span> Log Admin</div>
+        <div class="sidebar-item" onclick="switchTab('admins')" data-tab="admins"><span class="icon">M</span> Quan Ly Admin</div>
       </div>
 
-      <div class="sidebar-footer">
-        <div class="sidebar-group-title">⚙️ HỆ THỐNG</div>
-        <div class="sidebar-item" onclick="switchTab('versionPolicy')" data-tab="versionPolicy">
-          <span class="icon">📦</span> Phiên Bản
-        </div>
-        <div class="sidebar-item" onclick="switchTab('settings')" data-tab="settings">
-          <span class="icon">⚙️</span> Cài Đặt
-        </div>
+      <div class="sidebar-footer" data-owner-only="true">
+        <div class="sidebar-group-title">HE THONG</div>
+        <div class="sidebar-item" onclick="switchTab('versionPolicy')" data-tab="versionPolicy"><span class="icon">V</span> Phien Ban</div>
+        <div class="sidebar-item" onclick="switchTab('settings')" data-tab="settings"><span class="icon">C</span> Cai Dat</div>
       </div>
     </nav>
 
@@ -249,98 +243,101 @@ export function serveDashboard(): Response {
     <div id="eventsTab" class="tab-content active">
     <div class="controls">
       <select id="severityFilter">
-        <option value="">Tất cả Mức Độ</option>
-        <option value="critical">Nghiêm Trọng</option>
+        <option value="">Tất cả mức độ</option>
+        <option value="critical">Nghiêm trọng</option>
         <option value="high">Cao</option>
-        <option value="medium">Trung Bình</option>
+        <option value="medium">Trung bình</option>
         <option value="low">Thấp</option>
       </select>
       <select id="eventTypeFilter">
-        <option value="">Tất cả Loại Sự Kiện</option>
+        <option value="">Tất cả loại sự kiện</option>
       </select>
       <input type="number" id="hoursFilter" value="24" min="1" max="168" placeholder="Giờ">
-      <button onclick="refreshData()">🔄 Làm Mới</button>
-      <button onclick="autoRefresh()">⏱️ Tự Động: <span id="autoRefreshStatus">TẮT</span></button>
-      <button onclick="exportEvents('csv')" style="background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);">📥 Xuất CSV</button>
-      <button onclick="exportEvents('json')" style="background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);">📥 Xuất JSON</button>
+      <button onclick="refreshData()">Làm mới</button>
+      <button onclick="autoRefresh()">Tự động: <span id="autoRefreshStatus">TẮT</span></button>
+      <button onclick="exportEvents('csv')" style="background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);">Xuất CSV</button>
+      <button onclick="exportEvents('json')" style="background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);">Xuất JSON</button>
     </div>
     <div id="errorContainer"></div>
     <div class="stats-grid">
       <div class="stat-card total">
-        <h3>📊 Tổng Sự Kiện</h3>
+        <h3>Tổng sự kiện</h3>
         <div class="value" id="totalEvents">-</div>
         <div class="label" id="totalEventsLabel">trong 24 giờ qua</div>
       </div>
       <div class="stat-card critical">
-        <h3>🔴 Nghiêm Trọng</h3>
+        <h3>Nghiêm trọng</h3>
         <div class="value" id="criticalCount">-</div>
         <div class="label">cần xử lý ngay</div>
       </div>
       <div class="stat-card high">
-        <h3>🟠 Cao</h3>
+        <h3>Cao</h3>
         <div class="value" id="highCount">-</div>
         <div class="label">ưu tiên xử lý</div>
       </div>
       <div class="stat-card medium">
-        <h3>🟡 Trung Bình</h3>
+        <h3>Trung bình</h3>
         <div class="value" id="mediumCount">-</div>
         <div class="label">theo dõi</div>
       </div>
       <div class="stat-card low">
-        <h3>🟢 Thấp</h3>
+        <h3>Thấp</h3>
         <div class="value" id="lowCount">-</div>
         <div class="label">thông tin</div>
       </div>
     </div>
     <div class="chart-container">
-      <h2>📈 Phân Tích Theo Loại Sự Kiện</h2>
-      <canvas id="typeChart" style="max-height: 300px;"></canvas>
+        <h2>Phân tích theo loại sự kiện</h2>
+        <div id="typeChartEmpty" class="chart-empty hidden">Không có dữ liệu trong khoảng thời gian đã chọn</div>
+        <canvas id="typeChart" style="max-height: 300px;"></canvas>
     </div>
     <div class="chart-container">
-      <h2>🥧 Phân Tích Theo Mức Độ</h2>
+      <h2>Phân tích theo mức độ</h2>
+      <div id="severityChartEmpty" class="chart-empty hidden">Không có dữ liệu trong khoảng thời gian đã chọn</div>
       <canvas id="severityChart" style="max-height: 300px;"></canvas>
     </div>
     <div class="chart-container">
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-        <h2 style="margin: 0;">📊 Xu Hướng Theo Thời Gian</h2>
+        <h2 style="margin: 0;">Xu hướng theo thời gian</h2>
         <div style="display: flex; gap: 10px; align-items: center;">
           <select id="timelineGroupBy" onchange="loadTimeline()" style="padding: 8px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #e2e8f0; font-size: 12px;">
-            <option value="hour">Theo Giờ</option>
-            <option value="day" selected>Theo Ngày</option>
-            <option value="week">Theo Tuần</option>
+            <option value="hour">Theo giờ</option>
+            <option value="day" selected>Theo ngày</option>
+            <option value="week">Theo tuần</option>
           </select>
         </div>
       </div>
       <div id="timelineTrend" style="margin-bottom: 15px; padding: 12px; background: #0f172a; border-radius: 8px; border: 1px solid #334155;">
         <div style="display: flex; gap: 20px; align-items: center;">
           <div>
-            <div style="font-size: 12px; color: #94a3b8; margin-bottom: 4px;">Xu Hướng</div>
+            <div style="font-size: 12px; color: #94a3b8; margin-bottom: 4px;">Xu hướng</div>
             <div id="timelineTrendValue" style="font-size: 18px; font-weight: 600; color: #0ea5e9;">-</div>
           </div>
           <div>
-            <div style="font-size: 12px; color: #94a3b8; margin-bottom: 4px;">Kỳ Hiện Tại</div>
+            <div style="font-size: 12px; color: #94a3b8; margin-bottom: 4px;">Kỳ hiện tại</div>
             <div id="timelineCurrentCount" style="font-size: 18px; font-weight: 600; color: #22c55e;">-</div>
           </div>
           <div>
-            <div style="font-size: 12px; color: #94a3b8; margin-bottom: 4px;">Kỳ Trước</div>
+            <div style="font-size: 12px; color: #94a3b8; margin-bottom: 4px;">Kỳ trước</div>
             <div id="timelinePreviousCount" style="font-size: 18px; font-weight: 600; color: #64748b;">-</div>
           </div>
         </div>
       </div>
+      <div id="timelineChartEmpty" class="chart-empty hidden">Không có dữ liệu xu hướng trong khoảng thời gian đã chọn</div>
       <canvas id="timelineChart" style="max-height: 400px;"></canvas>
     </div>
     <div class="events-table">
       <table>
         <thead>
           <tr>
-            <th>Thời Gian</th>
-            <th>Loại Sự Kiện</th>
-            <th>Mức Độ</th>
-            <th>Thông Điệp</th>
-            <th>Mã Máy</th>
-            <th>Người Dùng</th>
-            <th>Phiên Bản</th>
-            <th>Chi Tiết</th>
+            <th>Thời gian</th>
+            <th>Loại sự kiện</th>
+            <th>Mức độ</th>
+            <th>Thông điệp</th>
+            <th>Mã máy</th>
+            <th>Người dùng</th>
+            <th>Phiên bản</th>
+            <th>Chi tiết</th>
           </tr>
         </thead>
         <tbody id="eventsTableBody">
@@ -411,24 +408,24 @@ export function serveDashboard(): Response {
     <div id="topTab" class="tab-content">
       <div class="controls">
         <input type="number" id="topHoursFilter" value="24" min="1" max="168" placeholder="Giờ">
-        <button onclick="loadTopData()">🔄 Làm Mới</button>
+        <button onclick="loadTopData()">Làm mới</button>
       </div>
       <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 30px;">
         <div class="chart-container">
-          <h2>🔝 Top Máy Có Nhiều Sự Kiện</h2>
+          <h2>Máy có nhiều sự kiện nhất</h2>
           <div id="topMachinesList" class="loading">Đang tải...</div>
         </div>
         <div class="chart-container">
-          <h2>🔝 Top Người Dùng Có Nhiều Sự Kiện</h2>
+          <h2>Người dùng có nhiều sự kiện nhất</h2>
           <div id="topUsernamesList" class="loading">Đang tải...</div>
         </div>
       </div>
       <div class="chart-container" style="margin-top: 20px;">
-        <h2>⏱️ Top Máy Có Thời Gian Sử Dụng App Nhiều Nhất</h2>
+        <h2>Máy sử dụng app nhiều nhất</h2>
         <div id="topMachinesByUsageList" class="loading">Đang tải...</div>
       </div>
       <div class="chart-container" style="margin-top: 20px;">
-        <h2>🎬 Top Người Dùng Xuất Video Nhiều Nhất</h2>
+        <h2>Người dùng xuất video nhiều nhất</h2>
         <div id="topUsersVideoExportsList" class="loading">Đang tải...</div>
       </div>
     </div>
@@ -558,6 +555,38 @@ export function serveDashboard(): Response {
           </thead>
           <tbody id="licensesTableBody">
             <tr><td colspan="8" class="loading">Đang tải dữ liệu...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div id="adminsTab" class="tab-content">
+      <div class="chart-container">
+        <h2>Tao Admin Moi</h2>
+        <div class="field-row" style="gap: 8px; align-items: center; flex-wrap: wrap;">
+          <input type="email" id="newAdminEmail" placeholder="email@gmail.com" style="flex: 1; min-width: 220px;">
+          <input type="password" id="newAdminPassword" placeholder="Mat khau admin moi" style="flex: 1; min-width: 220px;">
+          <button type="button" class="action-btn btn-approve" onclick="createAdminAccount()">Tao Admin</button>
+        </div>
+        <div id="createAdminStatus" class="error hidden" style="margin-top: 10px;"></div>
+        <p style="font-size: 12px; color: #94a3b8; margin-top: 8px;">Tai khoan do owner tao se duoc kich hoat ngay, khong can cho duyet.</p>
+      </div>
+      <div class="controls">
+        <button onclick="loadAdmins()">Lam Moi</button>
+      </div>
+      <div class="events-table">
+        <table>
+          <thead>
+            <tr>
+              <th>Email</th>
+              <th>Role</th>
+              <th>Trang Thai</th>
+              <th>Ngay Tao</th>
+              <th>Lan Dang Nhap Cuoi</th>
+              <th>Thao Tac</th>
+            </tr>
+          </thead>
+          <tbody id="adminsTableBody">
+            <tr><td colspan="6" class="loading">Dang tai...</td></tr>
           </tbody>
         </table>
       </div>
@@ -785,6 +814,7 @@ export function serveDashboard(): Response {
             <input type="password" id="detailMatKhau" readonly style="flex: 1; padding: 10px 14px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #e2e8f0;">
             <button type="button" class="icon-btn" onclick="togglePasswordVisibility('detailMatKhau', this)">👁️</button>
             <button type="button" class="icon-btn" onclick="copyDetailPassword()">Copy</button>
+            <button type="button" class="icon-btn" onclick="currentDetailUser && resetUserPassword(currentDetailUser.id, currentDetailUser.tai_khoan)">Reset</button>
           </div>
           <div id="detailMatKhauHint" style="font-size: 12px; color: #94a3b8; margin-top: 6px; display: none;"></div>
         </div>
@@ -848,7 +878,8 @@ export function serveDashboard(): Response {
   </div> <!-- /.app-layout #dashboard -->
   <script>
     const API_BASE = window.location.origin
-    let ADMIN_TOKEN = localStorage.getItem('admin_token') || ''
+    let ADMIN_TOKEN = localStorage.getItem('admin_session_token') || localStorage.getItem('admin_token') || ''
+    let CURRENT_ADMIN = null
     let typeChart = null, severityChart = null, timelineChart = null, autoRefreshInterval = null
     let currentDetailUser = null
     // FIX: Store passwords in JS Map instead of DOM data-attributes to prevent DOM-snooping
@@ -868,6 +899,12 @@ export function serveDashboard(): Response {
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#39;')
+    }
+
+    function shortId(value, max = 24) {
+      const text = String(value || '')
+      if (!text) return '-'
+      return text.length > max ? text.slice(0, max) + '...' : text
     }
 
     // FIX XSS: Escape string for safe embedding inside JS single-quoted strings in onclick attrs.
@@ -1082,6 +1119,8 @@ export function serveDashboard(): Response {
     }
     
     function switchTab(tabName) {
+      const ownerOnlyTabs = ['events', 'top', 'auditLogs', 'autoBlock', 'activity', 'admins', 'versionPolicy', 'settings']
+      if (!isOwner() && ownerOnlyTabs.includes(tabName)) tabName = 'users'
       // Update sidebar active state
       document.querySelectorAll('.sidebar-item').forEach(s => s.classList.remove('active'))
       var clicked = document.querySelector('.sidebar-item[data-tab="' + tabName + '"]')
@@ -1093,6 +1132,7 @@ export function serveDashboard(): Response {
 
       if (tabName === 'events') {
         document.getElementById('eventsTab').classList.add('active')
+        refreshData()
       } else if (tabName === 'users') {
         document.getElementById('usersTab').classList.add('active')
         loadUsers()
@@ -1102,6 +1142,9 @@ export function serveDashboard(): Response {
       } else if (tabName === 'activity') {
         document.getElementById('activityTab').classList.add('active')
         loadActivityLog()
+      } else if (tabName === 'admins') {
+        document.getElementById('adminsTab').classList.add('active')
+        loadAdmins()
       } else if (tabName === 'auditLogs') {
         document.getElementById('auditLogsTab').classList.add('active')
         currentAuditLogsPage = 1
@@ -1145,23 +1188,23 @@ export function serveDashboard(): Response {
         const machinesList = document.getElementById('topMachinesList')
         if (machinesResult.ok && machinesResult.machines && machinesResult.machines.length > 0) {
           machinesList.innerHTML = \`
-            <table style="width: 100%; border-collapse: collapse;">
-              <thead><tr style="border-bottom: 1px solid #334155;">
-                <th style="padding: 8px; text-align: left; font-size: 12px; color: #94a3b8;">Mã Máy</th>
-                <th style="padding: 8px; text-align: right; font-size: 12px; color: #94a3b8;">Sự Kiện</th>
-                <th style="padding: 8px; text-align: center; font-size: 12px; color: #94a3b8;">Mức Độ</th>
+            <table class="data-table">
+              <thead><tr>
+                <th>Mã máy</th>
+                <th class="number">Sự kiện</th>
+                <th class="center">Mức độ cao nhất</th>
               </tr></thead>
               <tbody>\${machinesResult.machines.map(function(m) { return \`
-                <tr style="border-bottom: 1px solid #334155;">
-                  <td style="padding: 10px;"><code style="font-size: 11px;">\${escapeHtml(m.machine_id.substring(0, 20))}...</code></td>
-                  <td style="padding: 10px; text-align: right; font-weight: 600; color: #0ea5e9;">\${formatNumber(m.event_count)}</td>
-                  <td style="padding: 10px; text-align: center;"><span class="badge badge-\${escapeHtml(m.max_severity)}">\${severityLabels[m.max_severity] || escapeHtml(m.max_severity)}</span></td>
+                <tr>
+                  <td><code style="font-size: 11px;">\${escapeHtml(shortId(m.machine_id, 24))}</code></td>
+                  <td class="number" style="font-weight: 600; color: #0ea5e9;">\${formatNumber(m.event_count)}</td>
+                  <td class="center"><span class="badge badge-\${escapeHtml(m.max_severity)}">\${severityLabels[m.max_severity] || escapeHtml(m.max_severity)}</span></td>
                 </tr>\` }).join('')}</tbody>
             </table>\`
         } else {
-          machinesList.innerHTML = '<div class="empty-state">Không có dữ liệu</div>'
+          machinesList.innerHTML = '<div class="empty-state">Không có dữ liệu trong khoảng thời gian đã chọn</div>'
         }
-      } catch (e) { console.error('Top machines error:', e); document.getElementById('topMachinesList').innerHTML = '<div class="error">Lỗi tải dữ liệu máy</div>' }
+      } catch (e) { console.error('Top machines error:', e); document.getElementById('topMachinesList').innerHTML = '<div class="error">Không tải được dữ liệu máy</div>' }
 
       // Load top usernames — independent try/catch
       try {
@@ -1169,23 +1212,23 @@ export function serveDashboard(): Response {
         const usernamesList = document.getElementById('topUsernamesList')
         if (usernamesResult.ok && usernamesResult.usernames && usernamesResult.usernames.length > 0) {
           usernamesList.innerHTML = \`
-            <table style="width: 100%; border-collapse: collapse;">
-              <thead><tr style="border-bottom: 1px solid #334155;">
-                <th style="padding: 8px; text-align: left; font-size: 12px; color: #94a3b8;">Người Dùng</th>
-                <th style="padding: 8px; text-align: right; font-size: 12px; color: #94a3b8;">Sự Kiện</th>
-                <th style="padding: 8px; text-align: center; font-size: 12px; color: #94a3b8;">Mức Độ</th>
+            <table class="data-table">
+              <thead><tr>
+                <th>Người dùng</th>
+                <th class="number">Sự kiện</th>
+                <th class="center">Mức độ cao nhất</th>
               </tr></thead>
               <tbody>\${usernamesResult.usernames.map(function(u) { return \`
-                <tr style="border-bottom: 1px solid #334155;">
-                  <td style="padding: 10px;"><strong>\${escapeHtml(u.username)}</strong></td>
-                  <td style="padding: 10px; text-align: right; font-weight: 600; color: #0ea5e9;">\${formatNumber(u.event_count)}</td>
-                  <td style="padding: 10px; text-align: center;"><span class="badge badge-\${escapeHtml(u.max_severity)}">\${severityLabels[u.max_severity] || escapeHtml(u.max_severity)}</span></td>
+                <tr>
+                  <td><strong>\${escapeHtml(u.username)}</strong></td>
+                  <td class="number" style="font-weight: 600; color: #0ea5e9;">\${formatNumber(u.event_count)}</td>
+                  <td class="center"><span class="badge badge-\${escapeHtml(u.max_severity)}">\${severityLabels[u.max_severity] || escapeHtml(u.max_severity)}</span></td>
                 </tr>\` }).join('')}</tbody>
             </table>\`
         } else {
-          usernamesList.innerHTML = '<div class="empty-state">Không có dữ liệu</div>'
+          usernamesList.innerHTML = '<div class="empty-state">Không có người dùng trong khoảng thời gian đã chọn</div>'
         }
-      } catch (e) { console.error('Top usernames error:', e); document.getElementById('topUsernamesList').innerHTML = '<div class="error">Lỗi tải dữ liệu người dùng</div>' }
+      } catch (e) { console.error('Top usernames error:', e); document.getElementById('topUsernamesList').innerHTML = '<div class="error">Không tải được dữ liệu người dùng</div>' }
 
       // Load top machines by usage — independent try/catch
       try {
@@ -1193,13 +1236,13 @@ export function serveDashboard(): Response {
         const usageList = document.getElementById('topMachinesByUsageList')
         if (usageResult.ok && usageResult.machines && usageResult.machines.length > 0) {
           usageList.innerHTML = \`
-            <table style="width: 100%; border-collapse: collapse;">
-              <thead><tr style="border-bottom: 1px solid #334155;">
-                <th style="padding: 8px; text-align: left; font-size: 12px; color: #94a3b8;">Mã Máy</th>
-                <th style="padding: 8px; text-align: left; font-size: 12px; color: #94a3b8;">Người Dùng</th>
-                <th style="padding: 8px; text-align: right; font-size: 12px; color: #94a3b8;">Số Lần Truy Cập</th>
-                <th style="padding: 8px; text-align: center; font-size: 12px; color: #94a3b8;">Thời Gian Hoạt Động</th>
-                <th style="padding: 8px; text-align: center; font-size: 12px; color: #94a3b8;">Lần Cuối</th>
+            <table class="data-table">
+              <thead><tr>
+                <th>Mã máy</th>
+                <th>Người dùng</th>
+                <th class="number">Số lần truy cập</th>
+                <th class="center">Thời gian hoạt động</th>
+                <th class="center">Lần cuối</th>
               </tr></thead>
               <tbody>\${usageResult.machines.map(function(m) {
                 var activeDays = Math.floor(m.active_duration_ms / (1000 * 60 * 60 * 24))
@@ -1210,18 +1253,18 @@ export function serveDashboard(): Response {
                 if (activeHours > 0) activeDuration += activeHours + ' giờ '
                 if (activeMinutes > 0 || activeDuration === '') activeDuration += activeMinutes + ' phút'
                 return \`
-                <tr style="border-bottom: 1px solid #334155;">
-                  <td style="padding: 10px;"><code style="font-size: 11px;">\${escapeHtml(m.machine_id.substring(0, 24))}...</code></td>
-                  <td style="padding: 10px;"><strong>\${escapeHtml(m.username || '-')}</strong></td>
-                  <td style="padding: 10px; text-align: right; font-weight: 600; color: #0ea5e9;">\${formatNumber(m.request_count)}</td>
-                  <td style="padding: 10px; text-align: center; color: #94a3b8; font-size: 12px;">\${activeDuration.trim()}</td>
-                  <td style="padding: 10px; text-align: center; color: #94a3b8; font-size: 11px;">\${formatDateTime(m.last_seen)}</td>
+                <tr>
+                  <td><code style="font-size: 11px;">\${escapeHtml(shortId(m.machine_id, 28))}</code></td>
+                  <td><strong>\${escapeHtml(m.username || '-')}</strong></td>
+                  <td class="number" style="font-weight: 600; color: #0ea5e9;">\${formatNumber(m.request_count)}</td>
+                  <td class="center" style="color: #94a3b8; font-size: 12px;">\${activeDuration.trim()}</td>
+                  <td class="center" style="color: #94a3b8; font-size: 11px;">\${formatDateTime(m.last_seen)}</td>
                 </tr>\` }).join('')}</tbody>
             </table>\`
         } else {
-          usageList.innerHTML = '<div class="empty-state">Không có dữ liệu</div>'
+          usageList.innerHTML = '<div class="empty-state">Chưa có dữ liệu sử dụng app</div>'
         }
-      } catch (e) { console.error('Top usage error:', e); document.getElementById('topMachinesByUsageList').innerHTML = '<div class="error">Lỗi tải dữ liệu sử dụng</div>' }
+      } catch (e) { console.error('Top usage error:', e); document.getElementById('topMachinesByUsageList').innerHTML = '<div class="error">Không tải được dữ liệu sử dụng</div>' }
 
       // Load top users video exports — independent try/catch
       try {
@@ -1230,28 +1273,28 @@ export function serveDashboard(): Response {
         if (videoExportsList) {
           if (videoExportsResult.ok && videoExportsResult.users && videoExportsResult.users.length > 0) {
             videoExportsList.innerHTML = \`
-              <table style="width: 100%; border-collapse: collapse;">
-                <thead><tr style="border-bottom: 1px solid #334155;">
-                  <th style="padding: 8px; text-align: left; font-size: 12px; color: #94a3b8;">Người Dùng</th>
-                  <th style="padding: 8px; text-align: right; font-size: 12px; color: #94a3b8;">Tổng Video</th>
-                  <th style="padding: 8px; text-align: right; font-size: 12px; color: #94a3b8;">Thành Công</th>
-                  <th style="padding: 8px; text-align: right; font-size: 12px; color: #94a3b8;">Thất Bại</th>
-                  <th style="padding: 8px; text-align: center; font-size: 12px; color: #94a3b8;">Lần Cuối</th>
+              <table class="data-table">
+                <thead><tr>
+                  <th>Người dùng</th>
+                  <th class="number">Tổng video</th>
+                  <th class="number">Thành công</th>
+                  <th class="number">Thất bại</th>
+                  <th class="center">Lần cuối</th>
                 </tr></thead>
                 <tbody>\${videoExportsResult.users.map(function(u) { return \`
-                  <tr style="border-bottom: 1px solid #334155;">
-                    <td style="padding: 10px;"><strong>\${escapeHtml(u.username)}</strong></td>
-                    <td style="padding: 10px; text-align: right; font-weight: 600; color: #0ea5e9;">\${formatNumber(u.total_exports)}</td>
-                    <td style="padding: 10px; text-align: right; font-weight: 600; color: #22c55e;">✓ \${formatNumber(u.success_count)}</td>
-                    <td style="padding: 10px; text-align: right; font-weight: 600; color: #ef4444;">✗ \${formatNumber(u.failed_count)}</td>
-                    <td style="padding: 10px; text-align: center; color: #94a3b8; font-size: 11px;">\${u.last_export_time ? formatDateTime(u.last_export_time) : '-'}</td>
+                  <tr>
+                    <td><strong>\${escapeHtml(u.username)}</strong></td>
+                    <td class="number" style="font-weight: 600; color: #0ea5e9;">\${formatNumber(u.total_exports)}</td>
+                    <td class="number" style="font-weight: 600; color: #22c55e;">\${formatNumber(u.success_count)}</td>
+                    <td class="number" style="font-weight: 600; color: #ef4444;">\${formatNumber(u.failed_count)}</td>
+                    <td class="center" style="color: #94a3b8; font-size: 11px;">\${u.last_export_time ? formatDateTime(u.last_export_time) : '-'}</td>
                   </tr>\` }).join('')}</tbody>
               </table>\`
           } else {
             videoExportsList.innerHTML = '<div class="empty-state">Chưa có dữ liệu xuất video</div>'
           }
         }
-      } catch (e) { console.error('Top video exports error:', e); var vel = document.getElementById('topUsersVideoExportsList'); if (vel) vel.innerHTML = '<div class="error">Lỗi tải dữ liệu video</div>' }
+      } catch (e) { console.error('Top video exports error:', e); var vel = document.getElementById('topUsersVideoExportsList'); if (vel) vel.innerHTML = '<div class="error">Không tải được dữ liệu video</div>' }
     }
     
     // Load users
@@ -1268,7 +1311,7 @@ export function serveDashboard(): Response {
         })
         
         if (response.status === 401) {
-          localStorage.removeItem('admin_token')
+          localStorage.removeItem('admin_session_token'); localStorage.removeItem('admin_token')
           ADMIN_TOKEN = ''
           document.getElementById('authOverlay').classList.remove('hidden')
           document.getElementById('dashboard').classList.add('hidden')
@@ -1354,6 +1397,7 @@ export function serveDashboard(): Response {
 
           const ddId = \`dd1-\${user.id}\`
           let menuItems = \`<button class="action-dropdown-item" onclick="openEditModal('\${user.id}')">✏️ Sửa</button>\`
+          menuItems += \`<button class="action-dropdown-item" onclick="resetUserPassword('\${user.id}', '\${jsTaiKhoan}')">Reset mật khẩu</button>\`
           if (user.trang_thai === 'CHO_DUYET') {
             menuItems += \`<button class="action-dropdown-item" onclick="updateUserStatus('\${user.id}', 'CHO_PHEP')">✅ Duyệt</button>\`
             menuItems += \`<button class="action-dropdown-item" onclick="updateUserStatus('\${user.id}', 'CHAN')">🚫 Chặn</button>\`
@@ -1445,7 +1489,7 @@ export function serveDashboard(): Response {
         })
         
         if (response.status === 401) {
-          localStorage.removeItem('admin_token')
+          localStorage.removeItem('admin_session_token'); localStorage.removeItem('admin_token')
           ADMIN_TOKEN = ''
           document.getElementById('authOverlay').classList.remove('hidden')
           document.getElementById('dashboard').classList.add('hidden')
@@ -1569,9 +1613,9 @@ export function serveDashboard(): Response {
       if (!input) return
       const isHidden = input.type === 'password'
       input.type = isHidden ? 'text' : 'password'
-      if (btn) btn.textContent = isHidden ? '🙈' : '👁️'
+      if (btn) btn.textContent = isHidden ? 'Hide' : 'Show'
     }
-    
+
     // Tab Cài đặt: điền token vào ô "Admin Token (mở lại khi quên)"
     function loadSettingsTokenDisplay() {
       const si = document.getElementById('settingsTokenInput')
@@ -1642,7 +1686,7 @@ export function serveDashboard(): Response {
           const val = user.mat_khau || ''
           if (val.indexOf(':') >= 0 && val.length > 20) {
             hintEl.style.display = 'block'
-            hintEl.textContent = 'Mật khẩu đang lưu dạng hash (tài khoản cũ). Dùng "Chỉnh sửa" → nhập mật khẩu mới → Lưu để lưu plaintext và xem được.'
+            hintEl.textContent = 'Mật khẩu đang lưu dạng hash nên không thể xem lại. Bấm Reset để tạo mật khẩu tạm thời mới.'
           } else {
             hintEl.style.display = 'none'
             hintEl.textContent = ''
@@ -1721,7 +1765,7 @@ export function serveDashboard(): Response {
         })
         if (res.status === 401 || res.status === 403) {
           ADMIN_TOKEN = ''
-          localStorage.removeItem('admin_token')
+          localStorage.removeItem('admin_session_token'); localStorage.removeItem('admin_token')
           document.getElementById('dashboard').classList.add('hidden')
           document.getElementById('authOverlay').classList.remove('hidden')
           throw new Error('Phiên đăng nhập hết hạn')
@@ -1761,6 +1805,32 @@ export function serveDashboard(): Response {
       copyTextSafely(currentDetailUser.mat_khau || '', 'Mật khẩu')
     }
 
+    async function resetUserPassword(userId, taiKhoan) {
+      if (!confirm(\`Reset mat khau cho tai khoan "\${taiKhoan}"? Token dang nhap cu se bi thu hoi.\`)) return
+
+      try {
+        const result = await fetchWithAuth(\`\${API_BASE}/api/admin/users/\${userId}/reset-password\`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({})
+        })
+
+        if (!result.ok) throw new Error(result.error || 'Reset mat khau that bai')
+
+        const temporaryPassword = result.temporary_password || ''
+        if (temporaryPassword) {
+          try { await navigator.clipboard.writeText(temporaryPassword) } catch {}
+          prompt('Mat khau tam thoi da tao. Copy va gui cho user:', temporaryPassword)
+        } else {
+          alert('Da reset mat khau, nhung server khong tra ve mat khau tam thoi.')
+        }
+
+        await loadUsers()
+      } catch (error) {
+        showError(error.message)
+      }
+    }
+
     // V2: Unlock key
     async function unlockKey(taiKhoan) {
       if (!confirm(\`Bạn chắc chắn muốn mở khóa key cho tài khoản "\${taiKhoan}"?\`)) return
@@ -1774,7 +1844,7 @@ export function serveDashboard(): Response {
           body: JSON.stringify({ tai_khoan: taiKhoan })
         })
         if (response.status === 401) {
-          localStorage.removeItem('admin_token')
+          localStorage.removeItem('admin_session_token'); localStorage.removeItem('admin_token')
           ADMIN_TOKEN = ''
           document.getElementById('authOverlay').classList.remove('hidden')
           document.getElementById('dashboard').classList.add('hidden')
@@ -1802,7 +1872,7 @@ export function serveDashboard(): Response {
           body: JSON.stringify({ tai_khoan: taiKhoan })
         })
         if (response.status === 401) {
-          localStorage.removeItem('admin_token')
+          localStorage.removeItem('admin_session_token'); localStorage.removeItem('admin_token')
           ADMIN_TOKEN = ''
           document.getElementById('authOverlay').classList.remove('hidden')
           document.getElementById('dashboard').classList.add('hidden')
@@ -1837,7 +1907,7 @@ export function serveDashboard(): Response {
           })
         })
         if (response.status === 401) {
-          localStorage.removeItem('admin_token')
+          localStorage.removeItem('admin_session_token'); localStorage.removeItem('admin_token')
           ADMIN_TOKEN = ''
           document.getElementById('authOverlay').classList.remove('hidden')
           document.getElementById('dashboard').classList.add('hidden')
@@ -1902,7 +1972,7 @@ export function serveDashboard(): Response {
         })
         
         if (response.status === 401) {
-          localStorage.removeItem('admin_token')
+          localStorage.removeItem('admin_session_token'); localStorage.removeItem('admin_token')
           ADMIN_TOKEN = ''
           document.getElementById('authOverlay').classList.remove('hidden')
           document.getElementById('dashboard').classList.add('hidden')
@@ -1929,10 +1999,17 @@ export function serveDashboard(): Response {
     
     // Setup login button and enter key
     const loginButton = document.getElementById('loginButton')
+    const emailInput = document.getElementById('emailInput')
     const tokenInput = document.getElementById('tokenInput')
     
     if (loginButton) {
       loginButton.addEventListener('click', saveToken)
+    }
+
+    if (emailInput) {
+      emailInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') saveToken()
+      })
     }
     
     if (tokenInput) {
@@ -1941,55 +2018,71 @@ export function serveDashboard(): Response {
       })
     }
     
-    // Check if token exists
-    if (ADMIN_TOKEN) {
+    async function loadCurrentAdmin() {
+      if (!ADMIN_TOKEN) return null
+      try {
+        const res = await fetchWithAuth(\`\${API_BASE}/api/admin/auth/me\`)
+        CURRENT_ADMIN = res.admin || null
+        return CURRENT_ADMIN
+      } catch {
+        CURRENT_ADMIN = null
+        return null
+      }
+    }
+
+    function isOwner() {
+      return CURRENT_ADMIN && CURRENT_ADMIN.role === 'owner'
+    }
+
+    function applyRoleUI() {
+      const owner = isOwner()
+      document.querySelectorAll('[data-owner-only="true"]').forEach(el => {
+        el.style.display = owner ? '' : 'none'
+      })
       document.getElementById('authOverlay').classList.add('hidden')
       document.getElementById('dashboard').classList.remove('hidden')
-      try {
-        refreshData()
-      } catch (error) {
-        console.error('Error loading dashboard:', error)
-      }
+      switchTab(owner ? 'events' : 'users')
+    }
+
+    if (ADMIN_TOKEN) {
+      loadCurrentAdmin().then(admin => {
+        if (admin) applyRoleUI()
+      })
     }
     
     async function saveToken() {
-      const token = document.getElementById('tokenInput').value.trim()
-      if (!token) {
-        document.getElementById('authError').textContent = 'Vui lòng nhập Admin Token'
+      const email = document.getElementById('emailInput').value.trim().toLowerCase()
+      const password = document.getElementById('tokenInput').value
+      if (!email || !password) {
+        document.getElementById('authError').textContent = 'Vui long nhap email va mat khau'
         document.getElementById('authError').classList.remove('hidden')
         return
       }
-      
-      // Test token trước khi lưu
+
       try {
-        const testResponse = await fetch(\`\${API_BASE}/api/admin/test-token\`, {
-          headers: { 'Authorization': \`Bearer \${token}\` }
+        const response = await fetch(\`\${API_BASE}/api/admin/auth/login\`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password })
         })
-        const testResult = await testResponse.json()
-        
-        if (!testResult.ok) {
-          document.getElementById('authError').textContent = 'Token không hợp lệ: ' + (testResult.message || 'Vui lòng kiểm tra lại')
+        const result = await response.json().catch(() => ({}))
+        if (!response.ok || !result.ok || !result.token) {
+          document.getElementById('authError').textContent = result.error || 'Dang nhap that bai'
           document.getElementById('authError').classList.remove('hidden')
           return
         }
+
+        ADMIN_TOKEN = result.token
+        CURRENT_ADMIN = result.admin || null
+        localStorage.setItem('admin_session_token', result.token)
+        localStorage.removeItem('admin_token')
+        document.getElementById('authOverlay').classList.add('hidden')
+        document.getElementById('dashboard').classList.remove('hidden')
+        applyRoleUI()
       } catch (error) {
-        console.error('Error testing token:', error)
-        document.getElementById('authError').textContent = 'Lỗi khi kiểm tra token: ' + error.message
+        console.error('Error logging in:', error)
+        document.getElementById('authError').textContent = 'Loi khi dang nhap: ' + error.message
         document.getElementById('authError').classList.remove('hidden')
-        return
-      }
-      
-      ADMIN_TOKEN = token
-      localStorage.setItem('admin_token', token)
-      document.getElementById('authOverlay').classList.add('hidden')
-      document.getElementById('dashboard').classList.remove('hidden')
-      
-      // Load data với error handling
-      try {
-        await refreshData()
-      } catch (error) {
-        console.error('Error loading dashboard data:', error)
-        showError('Đã đăng nhập thành công nhưng có lỗi khi tải dữ liệu: ' + error.message)
       }
     }
     
@@ -2002,16 +2095,18 @@ export function serveDashboard(): Response {
           ...(options.headers || {})
         } 
       })
+      let payload = null
+      try { payload = await response.json() } catch {}
       if (response.status === 401) {
-        localStorage.removeItem('admin_token')
+        localStorage.removeItem('admin_session_token'); localStorage.removeItem('admin_token')
         ADMIN_TOKEN = ''
         document.getElementById('authOverlay').classList.remove('hidden')
         document.getElementById('dashboard').classList.add('hidden')
         document.getElementById('tokenInput').value = ''
         throw new Error('Token không hợp lệ. Vui lòng đăng nhập lại.')
       }
-      if (!response.ok) throw new Error(\`Lỗi HTTP \${response.status}: \${response.statusText}\`)
-      return response.json()
+      if (!response.ok) throw new Error(payload?.error || \`Loi HTTP \${response.status}: \${response.statusText}\`)
+      return payload
     }
     
     function showError(message) {
@@ -2063,11 +2158,26 @@ export function serveDashboard(): Response {
     }
     
     function updateTypeChart(byType) {
-      const ctx = document.getElementById('typeChart').getContext('2d')
+      const canvas = document.getElementById('typeChart')
+      const empty = document.getElementById('typeChartEmpty')
       if (typeChart) typeChart.destroy()
+      const entries = Object.entries(byType || {}).filter(([, value]) => Number(value) > 0)
+      if (!entries.length || typeof Chart === 'undefined') {
+        canvas.style.display = 'none'
+        if (empty) {
+          empty.textContent = typeof Chart === 'undefined'
+            ? 'Không tải được thư viện biểu đồ. Vui lòng tải lại trang.'
+            : 'Không có dữ liệu trong khoảng thời gian đã chọn'
+          empty.classList.remove('hidden')
+        }
+        return
+      }
+      canvas.style.display = ''
+      if (empty) empty.classList.add('hidden')
+      const ctx = canvas.getContext('2d')
       
-      const labels = Object.keys(byType).map(key => eventTypeLabels[key] || key)
-      const data = Object.values(byType)
+      const labels = entries.map(([key]) => eventTypeLabels[key] || key)
+      const data = entries.map(([, value]) => value)
       
       typeChart = new Chart(ctx, {
         type: 'bar',
@@ -2108,8 +2218,23 @@ export function serveDashboard(): Response {
     }
     
     function updateSeverityChart(bySeverity) {
-      const ctx = document.getElementById('severityChart').getContext('2d')
+      const canvas = document.getElementById('severityChart')
+      const empty = document.getElementById('severityChartEmpty')
       if (severityChart) severityChart.destroy()
+      const entries = Object.entries(bySeverity || {}).filter(([, value]) => Number(value) > 0)
+      if (!entries.length || typeof Chart === 'undefined') {
+        canvas.style.display = 'none'
+        if (empty) {
+          empty.textContent = typeof Chart === 'undefined'
+            ? 'Không tải được thư viện biểu đồ. Vui lòng tải lại trang.'
+            : 'Không có dữ liệu trong khoảng thời gian đã chọn'
+          empty.classList.remove('hidden')
+        }
+        return
+      }
+      canvas.style.display = ''
+      if (empty) empty.classList.add('hidden')
+      const ctx = canvas.getContext('2d')
       
       const colors = { 
         critical: '#ef4444', 
@@ -2118,9 +2243,9 @@ export function serveDashboard(): Response {
         low: '#22c55e' 
       }
       
-      const labels = Object.keys(bySeverity).map(key => severityLabels[key] || key)
-      const data = Object.values(bySeverity)
-      const bgColors = Object.keys(bySeverity).map(s => colors[s] || '#64748b')
+      const labels = entries.map(([key]) => severityLabels[key] || key)
+      const data = entries.map(([, value]) => value)
+      const bgColors = entries.map(([s]) => colors[s] || '#64748b')
       
       severityChart = new Chart(ctx, {
         type: 'doughnut',
@@ -2201,8 +2326,22 @@ export function serveDashboard(): Response {
     }
     
     function updateTimelineChart(timeline, groupBy) {
-      const ctx = document.getElementById('timelineChart').getContext('2d')
+      const canvas = document.getElementById('timelineChart')
+      const empty = document.getElementById('timelineChartEmpty')
       if (timelineChart) timelineChart.destroy()
+      if (!timeline?.length || typeof Chart === 'undefined') {
+        canvas.style.display = 'none'
+        if (empty) {
+          empty.textContent = typeof Chart === 'undefined'
+            ? 'Không tải được thư viện biểu đồ. Vui lòng tải lại trang.'
+            : 'Không có dữ liệu xu hướng trong khoảng thời gian đã chọn'
+          empty.classList.remove('hidden')
+        }
+        return
+      }
+      canvas.style.display = ''
+      if (empty) empty.classList.add('hidden')
+      const ctx = canvas.getContext('2d')
       
       const labels = timeline.map(t => {
         if (groupBy === 'hour') {
@@ -2229,7 +2368,7 @@ export function serveDashboard(): Response {
               tension: 0.4
             },
             {
-              label: 'Nghiêm Trọng',
+              label: 'Nghiêm trọng',
               data: timeline.map(t => t.critical_count),
               borderColor: '#ef4444',
               backgroundColor: 'rgba(239, 68, 68, 0.1)',
@@ -2247,7 +2386,7 @@ export function serveDashboard(): Response {
               tension: 0.4
             },
             {
-              label: 'Trung Bình',
+              label: 'Trung bình',
               data: timeline.map(t => t.medium_count),
               borderColor: '#eab308',
               backgroundColor: 'rgba(234, 179, 8, 0.1)',
@@ -2352,6 +2491,10 @@ export function serveDashboard(): Response {
     async function refreshData() { 
       if (!ADMIN_TOKEN) return
       clearError()
+      if (!isOwner()) {
+        await loadUsers()
+        return
+      }
       try {
         await Promise.all([
           loadStats().catch(err => { console.error('Error loading stats:', err); return null }),
@@ -2506,7 +2649,7 @@ export function serveDashboard(): Response {
         })
         
         if (response.status === 401) {
-          localStorage.removeItem('admin_token')
+          localStorage.removeItem('admin_session_token'); localStorage.removeItem('admin_token')
           ADMIN_TOKEN = ''
           document.getElementById('authOverlay').classList.remove('hidden')
           document.getElementById('dashboard').classList.add('hidden')
@@ -2542,7 +2685,7 @@ export function serveDashboard(): Response {
         })
         
         if (response.status === 401) {
-          localStorage.removeItem('admin_token')
+          localStorage.removeItem('admin_session_token'); localStorage.removeItem('admin_token')
           ADMIN_TOKEN = ''
           document.getElementById('authOverlay').classList.remove('hidden')
           document.getElementById('dashboard').classList.add('hidden')
@@ -2637,7 +2780,7 @@ export function serveDashboard(): Response {
         })
         
         if (response.status === 401) {
-          localStorage.removeItem('admin_token')
+          localStorage.removeItem('admin_session_token'); localStorage.removeItem('admin_token')
           ADMIN_TOKEN = ''
           document.getElementById('authOverlay').classList.remove('hidden')
           document.getElementById('dashboard').classList.add('hidden')
@@ -2723,7 +2866,7 @@ export function serveDashboard(): Response {
         })
         
         if (response.status === 401) {
-          localStorage.removeItem('admin_token')
+          localStorage.removeItem('admin_session_token'); localStorage.removeItem('admin_token')
           ADMIN_TOKEN = ''
           document.getElementById('authOverlay').classList.remove('hidden')
           document.getElementById('dashboard').classList.add('hidden')
@@ -2775,6 +2918,7 @@ export function serveDashboard(): Response {
 
           const ddId = \`dd2-\${user.id}\`
           let menuItems = \`<button class="action-dropdown-item" onclick="openEditModal('\${user.id}')">✏️ Sửa</button>\`
+          menuItems += \`<button class="action-dropdown-item" onclick="resetUserPassword('\${user.id}', '\${jsTaiKhoan}')">Reset mật khẩu</button>\`
           if (user.trang_thai === 'CHO_DUYET') {
             menuItems += \`<button class="action-dropdown-item" onclick="updateUserStatus('\${user.id}', 'CHO_PHEP')">✅ Duyệt</button>\`
             menuItems += \`<button class="action-dropdown-item" onclick="updateUserStatus('\${user.id}', 'CHAN')">🚫 Chặn</button>\`
@@ -2889,6 +3033,101 @@ export function serveDashboard(): Response {
         showError(error.message)
       }
     }
+
+    async function loadAdmins() {
+      try {
+        const result = await fetchWithAuth(\`\${API_BASE}/api/admin/admins\`)
+        if (!result.ok) throw new Error(result.error || 'Khong tai duoc danh sach admin')
+        const tbody = document.getElementById('adminsTableBody')
+        const admins = result.admins || []
+        if (!admins.length) {
+          tbody.innerHTML = '<tr><td colspan="6" class="empty-state">Chua co admin nao</td></tr>'
+          return
+        }
+        tbody.innerHTML = admins.map(admin => {
+          const created = admin.created_at ? formatDateTime(admin.created_at) : '-'
+          const lastLogin = admin.last_login_at ? formatDateTime(admin.last_login_at) : '-'
+          const actions = admin.role === 'owner'
+            ? '-'
+            : \`
+              \${admin.status === 'pending' ? \`<button class="action-btn btn-approve" onclick="adminAction('\${admin.id}', 'approve')">Duyet</button>\` : ''}
+              \${admin.status === 'disabled' ? \`<button class="action-btn btn-unblock" onclick="adminAction('\${admin.id}', 'enable')">Mo Khoa</button>\` : \`<button class="action-btn btn-block" onclick="adminAction('\${admin.id}', 'disable')">Khoa</button>\`}
+              <button class="action-btn btn-block" onclick="adminAction('\${admin.id}', 'delete')">Xoa</button>
+            \`
+          return \`
+            <tr>
+              <td><strong>\${escapeHtml(admin.email)}</strong></td>
+              <td>\${escapeHtml(admin.role)}</td>
+              <td><span class="status-badge">\${escapeHtml(admin.status)}</span></td>
+              <td>\${created}</td>
+              <td>\${lastLogin}</td>
+              <td>\${actions}</td>
+            </tr>
+          \`
+        }).join('')
+      } catch (error) {
+        showError(error.message)
+      }
+    }
+
+    async function adminAction(id, action) {
+      if (!confirm('Xac nhan thao tac admin nay?')) return
+      try {
+        const result = await fetchWithAuth(\`\${API_BASE}/api/admin/admins/\${id}/\${action}\`, { method: 'POST' })
+        if (!result.ok) throw new Error(result.error || 'Thao tac that bai')
+        await loadAdmins()
+      } catch (error) {
+        showError(error.message)
+      }
+    }
+
+    async function createAdminAccount() {
+      const emailInput = document.getElementById('newAdminEmail')
+      const passwordInput = document.getElementById('newAdminPassword')
+      const statusEl = document.getElementById('createAdminStatus')
+      const email = emailInput.value.trim().toLowerCase()
+      const password = passwordInput.value
+      if (statusEl) {
+        statusEl.classList.add('hidden')
+        statusEl.style.color = ''
+        statusEl.textContent = ''
+      }
+      if (!email || !password) {
+        if (statusEl) {
+          statusEl.textContent = 'Vui long nhap email va mat khau admin'
+          statusEl.classList.remove('hidden')
+        } else showError('Vui long nhap email va mat khau admin')
+        return
+      }
+      if (password.length < 8) {
+        if (statusEl) {
+          statusEl.textContent = 'Mat khau admin toi thieu 8 ky tu'
+          statusEl.classList.remove('hidden')
+        } else showError('Mat khau admin toi thieu 8 ky tu')
+        return
+      }
+      try {
+        const result = await fetchWithAuth(\`\${API_BASE}/api/admin/admins\`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ email, password })
+        })
+        if (!result.ok) throw new Error(result.error || 'Khong tao duoc admin')
+        emailInput.value = ''
+        passwordInput.value = ''
+        if (statusEl) {
+          statusEl.textContent = 'Da tao admin thanh cong'
+          statusEl.style.color = '#22c55e'
+          statusEl.classList.remove('hidden')
+        }
+        await loadAdmins()
+      } catch (error) {
+        if (statusEl) {
+          statusEl.textContent = error.message || 'Khong tao duoc admin'
+          statusEl.classList.remove('hidden')
+        } else showError(error.message)
+      }
+    }
     
     // License Management
     async function loadLicenses() {
@@ -2965,7 +3204,7 @@ export function serveDashboard(): Response {
           }
         })
         if (response.status === 401) {
-          localStorage.removeItem('admin_token')
+          localStorage.removeItem('admin_session_token'); localStorage.removeItem('admin_token')
           ADMIN_TOKEN = ''
           document.getElementById('authOverlay').classList.remove('hidden')
           document.getElementById('dashboard').classList.add('hidden')
@@ -2991,7 +3230,7 @@ export function serveDashboard(): Response {
           }
         })
         if (response.status === 401) {
-          localStorage.removeItem('admin_token')
+          localStorage.removeItem('admin_session_token'); localStorage.removeItem('admin_token')
           ADMIN_TOKEN = ''
           document.getElementById('authOverlay').classList.remove('hidden')
           document.getElementById('dashboard').classList.add('hidden')
@@ -3154,7 +3393,7 @@ export function serveDashboard(): Response {
         })
         
         if (response.status === 401) {
-          localStorage.removeItem('admin_token')
+          localStorage.removeItem('admin_session_token'); localStorage.removeItem('admin_token')
           ADMIN_TOKEN = ''
           document.getElementById('authOverlay').classList.remove('hidden')
           document.getElementById('dashboard').classList.add('hidden')
@@ -3183,7 +3422,6 @@ export function serveDashboard(): Response {
       }
     }
     
-    if (ADMIN_TOKEN) refreshData()
   </script>
 </body>
 </html>`

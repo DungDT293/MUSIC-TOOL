@@ -69,6 +69,17 @@ type AutopilotUiLogEntry = {
   verbosity?: 'normal' | 'verbose'
 }
 
+function getAutopilotStepLabel(step: AutopilotRunProgress['currentStep']): string {
+  switch (step) {
+    case 1: return 'Bước 1: chuẩn bị/quét nhạc'
+    case 2: return 'Bước 2: tạo playlist/xuất audio'
+    case 3: return 'Bước 3: chọn video'
+    case 4: return 'Bước 4: xuất video hoàn chỉnh'
+    case 5: return 'Bước 5: kiểm tra/kết thúc'
+    default: return 'Chưa xác định bước'
+  }
+}
+
 function getAutopilotLogDedupKey(log: AutopilotUiLogEntry): string {
   if (typeof log.seq === 'number') {
     return `seq:${log.seq}`
@@ -1672,7 +1683,9 @@ function AutopilotControlSection({
           <span style={{ fontSize: '12px', color: '#e5e7eb' }}>{runProgress.message}</span>
         )}
         {runProgress.error && (
-          <span style={{ fontSize: '12px', color: '#f87171', fontWeight: 'bold' }}>{runProgress.error}</span>
+          <span style={{ fontSize: '12px', color: '#f87171', fontWeight: 'bold', whiteSpace: 'pre-wrap' }}>
+            {getAutopilotStepLabel(runProgress.currentStep)} — {runProgress.error}
+          </span>
         )}
       </div>
 
@@ -2206,12 +2219,13 @@ function AutopilotPageLegacy() {
         isStartingRef.current = false
         console.log('[Autopilot] Response from backend:', res)
         if (!res?.ok) {
+          const detail = res?.error || 'Không chạy được Autopilot.'
           // eslint-disable-next-line no-alert
-          alert(res?.error || 'Không chạy được Autopilot.')
+          alert(detail)
           setRunProgress((prev) => ({
             ...prev,
             status: 'error',
-            error: res?.error || 'Không chạy được Autopilot.',
+            error: detail,
           }))
         } else {
           console.log('[Autopilot] Started successfully')
@@ -2219,13 +2233,14 @@ function AutopilotPageLegacy() {
       })
       .catch((err: any) => {
         isStartingRef.current = false
-        console.error('[Autopilot] start error:', err)
+        const detail = err?.message || err?.error || String(err) || 'Lỗi không xác định khi chạy Autopilot.'
+        console.error('[Autopilot] start error:', detail, err)
         // eslint-disable-next-line no-alert
-        alert(err?.message || 'Lỗi không xác định khi chạy Autopilot.')
+        alert(detail)
         setRunProgress((prev) => ({
           ...prev,
           status: 'error',
-          error: err?.message || 'Lỗi khi khởi động Autopilot.',
+          error: `${getAutopilotStepLabel(prev.currentStep)} — ${detail}`,
         }))
       })
   }

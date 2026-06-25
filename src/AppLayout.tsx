@@ -1,5 +1,4 @@
 import { ReactNode, useState, useEffect } from 'react'
-import { useLocation } from 'react-router-dom'
 import Sidebar from './components/Sidebar'
 import TopBarStats from './components/TopBarStats'
 
@@ -8,9 +7,6 @@ interface AppLayoutProps {
 }
 
 function AppLayout({ children }: AppLayoutProps) {
-  const location = useLocation()
-  const isVisualizerPage = location.pathname === '/music/song-nhac'
-  
   // Load sidebar collapsed state from localStorage
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => {
     const saved = localStorage.getItem('sidebarCollapsed')
@@ -30,8 +26,8 @@ function AppLayout({ children }: AppLayoutProps) {
     <div style={{ display: 'flex', height: '100vh', overflow: 'hidden', backgroundColor: '#1e1e1e', position: 'relative' }}>
       <Sidebar isCollapsed={isSidebarCollapsed} onToggle={toggleSidebar} />
       <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden', position: 'relative', zIndex: 0 }}>
-        {!isVisualizerPage && <TopBarStats />}
-        <main style={{ flex: 1, overflow: isVisualizerPage ? 'hidden' : 'auto', padding: isVisualizerPage ? '0' : '20px', backgroundColor: '#1e1e1e', position: 'relative', zIndex: 0 }}>
+        <TopBarStats />
+        <main style={{ flex: 1, overflow: 'auto', padding: '20px', backgroundColor: '#1e1e1e', position: 'relative', zIndex: 0 }}>
           {/* Toggle button khi sidebar bị ẩn */}
           {isSidebarCollapsed && (
             <button

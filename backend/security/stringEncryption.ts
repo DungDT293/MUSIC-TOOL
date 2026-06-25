@@ -5,6 +5,7 @@
  */
 
 import crypto from 'node:crypto'
+import { LEGACY_LICENSE_SERVER_BASE } from '../licenseServerConfig'
 
 // Key derivation từ một constant (có thể thay đổi)
 const STRING_ENCRYPTION_KEY = crypto
@@ -54,8 +55,8 @@ export function decryptString(encrypted: string): string {
  */
 const ENCRYPTED_STRINGS: Record<string, string> = {
   // API URLs (public, không nhạy cảm)
-  AUTH_BASE: encryptString('https://license-server.dungdong333.workers.dev'),
-  LICENSE_BASE: encryptString('https://license-server.dungdong333.workers.dev'),
+  AUTH_BASE: encryptString(LEGACY_LICENSE_SERVER_BASE),
+  LICENSE_BASE: encryptString(LEGACY_LICENSE_SERVER_BASE),
 }
 
 /**

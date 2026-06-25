@@ -37,8 +37,13 @@ interface NormalizeVideoRequest {
   inputFiles: string[]
   outputDir: string
   useGpu: boolean
+  requestId?: string
   targetResolution?: string
   targetFps?: string
+  concatSafe?: boolean
+  skipExisting?: boolean
+  writeManifest?: boolean
+  trustInputs?: boolean
 }
 
 interface NormalizeVideoResult {
@@ -48,6 +53,9 @@ interface NormalizeVideoResult {
   error?: string
   processed: number
   failed: number
+  skipped?: number
+  usedGpu?: boolean
+  manifestPath?: string
 }
 
 type VideoItem = {
@@ -63,6 +71,10 @@ function NormalizeVideoTab() {
   const [useGpu, setUseGpu] = useState<boolean>(true) // Default: sử dụng GPU
   const [targetResolution, setTargetResolution] = useState<string>('1920x1080')
   const [targetFps, setTargetFps] = useState<string>('30')
+  const [concatSafe, setConcatSafe] = useState<boolean>(true)
+  const [skipExisting, setSkipExisting] = useState<boolean>(true)
+  const [writeManifest, setWriteManifest] = useState<boolean>(true)
+  const [trustInputs, setTrustInputs] = useState<boolean>(true)
 
   const [isProcessing, setIsProcessing] = useState<boolean>(false)
   const [currentRequestId, setCurrentRequestId] = useState<string | null>(null)
@@ -299,6 +311,10 @@ function NormalizeVideoTab() {
         useGpu,
         targetResolution,
         targetFps,
+        concatSafe,
+        skipExisting,
+        writeManifest,
+        trustInputs,
         requestId, // Truyền requestId vào backend
       }
 
@@ -593,6 +609,96 @@ function NormalizeVideoTab() {
             </div>
           </div>
         </label>
+
+        <div style={{ marginTop: '16px', display: 'grid', gap: '12px' }}>
+          <label style={{ display: 'flex', alignItems: 'flex-start', cursor: 'pointer', fontSize: '14px' }}>
+            <input
+              type="checkbox"
+              checked={concatSafe}
+              onChange={(e) => setConcatSafe(e.target.checked)}
+              disabled={isProcessing}
+              style={{
+                marginRight: '12px',
+                marginTop: '2px',
+                width: '18px',
+                height: '18px',
+                cursor: isProcessing ? 'not-allowed' : 'pointer',
+              }}
+            />
+            <div>
+              <div style={{ fontWeight: '500', marginBottom: '4px' }}>Kho clip ghép nhanh (concat-safe)</div>
+              <div style={{ fontSize: '12px', color: '#999' }}>
+                Ép CFR, H.264/yuv420p, timebase 90000 và GOP đều để ghép copy-stream ổn định hơn.
+              </div>
+            </div>
+          </label>
+
+          <label style={{ display: 'flex', alignItems: 'flex-start', cursor: 'pointer', fontSize: '14px' }}>
+            <input
+              type="checkbox"
+              checked={skipExisting}
+              onChange={(e) => setSkipExisting(e.target.checked)}
+              disabled={isProcessing}
+              style={{
+                marginRight: '12px',
+                marginTop: '2px',
+                width: '18px',
+                height: '18px',
+                cursor: isProcessing ? 'not-allowed' : 'pointer',
+              }}
+            />
+            <div>
+              <div style={{ fontWeight: '500', marginBottom: '4px' }}>Bỏ qua file đã chuẩn hóa</div>
+              <div style={{ fontSize: '12px', color: '#999' }}>
+                Dùng để resume kho lớn, không encode lại file output cùng profile đã tồn tại.
+              </div>
+            </div>
+          </label>
+
+          <label style={{ display: 'flex', alignItems: 'flex-start', cursor: 'pointer', fontSize: '14px' }}>
+            <input
+              type="checkbox"
+              checked={trustInputs}
+              onChange={(e) => setTrustInputs(e.target.checked)}
+              disabled={isProcessing}
+              style={{
+                marginRight: '12px',
+                marginTop: '2px',
+                width: '18px',
+                height: '18px',
+                cursor: isProcessing ? 'not-allowed' : 'pointer',
+              }}
+            />
+            <div>
+              <div style={{ fontWeight: '500', marginBottom: '4px' }}>Không probe toàn bộ trước khi chạy</div>
+              <div style={{ fontSize: '12px', color: '#999' }}>
+                Nhanh hơn cho 20k clip; file lỗi sẽ bị đánh dấu lỗi trong lúc encode.
+              </div>
+            </div>
+          </label>
+
+          <label style={{ display: 'flex', alignItems: 'flex-start', cursor: 'pointer', fontSize: '14px' }}>
+            <input
+              type="checkbox"
+              checked={writeManifest}
+              onChange={(e) => setWriteManifest(e.target.checked)}
+              disabled={isProcessing}
+              style={{
+                marginRight: '12px',
+                marginTop: '2px',
+                width: '18px',
+                height: '18px',
+                cursor: isProcessing ? 'not-allowed' : 'pointer',
+              }}
+            />
+            <div>
+              <div style={{ fontWeight: '500', marginBottom: '4px' }}>Ghi manifest cho kho nguyên liệu</div>
+              <div style={{ fontSize: '12px', color: '#999' }}>
+                Tạo clip_pool_manifest.json để các bước ghép sau có thể nhận diện cùng profile.
+              </div>
+            </div>
+          </label>
+        </div>
       </div>
 
       {/* Progress */}
@@ -631,6 +737,16 @@ function NormalizeVideoTab() {
           {successData.outputPaths.length > 0 && (
             <div style={{ marginTop: '8px', fontSize: '12px', color: '#c8e6c9' }}>
               File đã xuất: {successData.outputPaths.length} file
+            </div>
+          )}
+          {!!successData.skipped && (
+            <div style={{ marginTop: '8px', fontSize: '12px', color: '#c8e6c9' }}>
+              Đã bỏ qua do có sẵn: {successData.skipped} file
+            </div>
+          )}
+          {successData.manifestPath && (
+            <div style={{ marginTop: '8px', fontSize: '12px', color: '#c8e6c9' }}>
+              Manifest: {successData.manifestPath}
             </div>
           )}
           <button

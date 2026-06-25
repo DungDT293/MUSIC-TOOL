@@ -190,6 +190,8 @@ export interface ScanMusicResult {
   tracks: ScannedTrack[]
   summary: ScanSummary
   scannedAt?: number
+  /** Các file audio KHÔNG phải chuẩn AAC (.m4a / .aac). Cần chuẩn hóa. */
+  nonAacFiles?: string[]
 }
 
 export interface PlaylistTrack extends ScannedTrack {
@@ -820,6 +822,7 @@ export interface IPCAPI {
   selectAudioFile: () => Promise<string | null>
   selectAudioFilesMulti: () => Promise<string[] | null>
   selectImageFile: () => Promise<string | null>
+  selectImageFilesMulti: () => Promise<string[] | null>
   dialog: {
     openFile: (options: { title?: string; filters?: { name: string; extensions: string[] }[]; properties?: ('openFile' | 'multiSelections' | 'openDirectory')[] }) => Promise<{ canceled: boolean; filePaths: string[] }>
     saveVideoFile: (defaultFileName?: string) => Promise<{ canceled: boolean; filePath: string | null }>
@@ -874,6 +877,10 @@ export interface IPCAPI {
     requestId?: string
     targetResolution?: string
     targetFps?: string
+    concatSafe?: boolean
+    skipExisting?: boolean
+    writeManifest?: boolean
+    trustInputs?: boolean
   }) => Promise<{
     requestId: string
     outputPaths: string[]
@@ -881,7 +888,9 @@ export interface IPCAPI {
     error?: string
     processed: number
     failed: number
+    skipped?: number
     usedGpu: boolean
+    manifestPath?: string
   }>
   // videoNormalizeVideo: alias đã xóa — dùng videoNormalize thay thế
   videoGetActiveNormalizeJobId: () => Promise<string | null>
@@ -897,6 +906,34 @@ export interface IPCAPI {
   ) => () => void
   // toFileUrl is sync in preload (pathToFileURL is sync) — union type to avoid breaking callers that use await
   toFileUrl: (filePath: string) => string | Promise<string>
+  barsSpectrumPreview: (opts: {
+    bgPath: string
+    bgKind: 'image' | 'video'
+    audioPath: string
+    audioVisualizer: {
+      enabled: boolean
+      preset: 'bars-spectrum' | 'line-waveform' | 'mirror-waveform' | 'neon-waveform'
+      position?: 'top' | 'center' | 'bottom'
+      widthPercent?: number
+      heightPercent?: number
+      marginBottomPx?: number
+      primaryColor?: string
+      secondaryColor?: string
+      opacity?: number
+      barCount?: number
+      sensitivity?: number
+    }
+  }) => Promise<{ ok: boolean; previewPath?: string; error?: string }>
+  chromaKeyPreview: (opts: {
+    bgVideoPath: string
+    overlayVideoPath: string
+    bgType: 'green' | 'black'
+    keyColor: string
+    similarity: number
+    blend: number
+    position: 'center' | 'bottom'
+    scale: number
+  }) => Promise<{ ok: boolean; previewPath?: string; error?: string }>
   videoFinalExport: {
     start: (payload: FinalExportRequestPayload) => void
     cancel: (requestId: string) => Promise<{ success: boolean; error?: string }>
@@ -1011,6 +1048,9 @@ export interface IPCAPI {
         concurrency?: number
         audioOnly?: boolean
         audioFormat?: 'mp3' | 'wav'
+        cookiesFile?: string
+        cookiesFromBrowser?: 'auto' | 'chrome' | 'firefox' | 'edge' | 'opera' | 'safari' | 'brave' | 'chromium' | 'vivaldi'
+        minDurationSeconds?: number
       }
     }) => Promise<{
       success: boolean
@@ -1024,6 +1064,12 @@ export interface IPCAPI {
     removeProgressListener: () => void
     removeBatchProgressListener: () => void
     updateYtDlp?: () => Promise<any>
+    // Cookie management
+    cookieImport?: (filePath?: string) => Promise<{ success: boolean; cookieFile?: any; error?: string }>
+    cookieList?: () => Promise<{ success: boolean; cookieFiles: any[]; error?: string }>
+    cookieTest?: (platform: string) => Promise<{ success: boolean; result?: any; error?: string }>
+    cookieRemove?: (id: string) => Promise<{ success: boolean; error?: string }>
+    cookieHas?: (platform: string) => Promise<{ success: boolean; hasCookies: boolean }>
     onAutoUpdated?: (handler: (info: any) => void) => () => void
     onAgeWarning?: (handler: (info: any) => void) => () => void
   }
@@ -1032,25 +1078,6 @@ export interface IPCAPI {
     get: (jobId: string) => Promise<JobInfo | null>
     cancel: (jobId: string) => Promise<{ success: boolean }>
     onUpdate: (handler: (job: JobInfo) => void) => () => void
-  }
-  songNhac: {
-    readAudioFile: (filePath: string) => Promise<{ ok: boolean; buffer?: Buffer; error?: string }>
-    decodeAudioForTimeline: (filePath: string) => Promise<{ ok: boolean; info?: any; error?: string }>
-    listAudioInFolder: (folderPath: string) => Promise<{ name: string; path: string }[]>
-    exportVideo: (config: { width: number; height: number; fps: number; durationSec: number; audioFileUrl?: string; outputPath?: string; forceCpuEncoder?: boolean }) => Promise<{ ok: boolean; outputPath?: string; code?: number; error?: string }>
-    cancelExport: (jobId?: string) => Promise<{ ok: boolean }>
-    onExportStarted: (callback: (payload: any) => void) => () => void
-    onExportProgress: (callback: (data: any) => void) => () => void
-    onExportCancel: (callback: () => void) => () => void
-    onExportConfig: (callback: (config: any) => void) => () => void
-    sendExportReady: () => void
-    sendExportConfigAck: (config: any) => void
-    sendExportFrame: (frameData: { jobId: string; buffer: ArrayBuffer }) => void
-    sendExportProgress: (progress: any) => void
-    sendExportDone: (result?: any) => void
-    sendExportEnd?: (jobId: string) => void
-    getPcmSamples?: (jobId: string, timeSec: number) => Promise<Float32Array>
-    getAudioDuration?: (filePath: string) => Promise<{ ok: boolean; duration?: number; error?: string }>
   }
   readFileAsBase64?: (filePath: string) => Promise<{ ok: boolean; base64?: string; mime?: string; error?: string }>
   // General IPC helpers (preload exposes api.on() only)
@@ -1106,7 +1133,7 @@ export interface YouTubeDownloadVideoRequest {
   audioFormat?: 'mp3' | 'wav'
   useCookies?: boolean
   cookiesFile?: string
-  cookiesFromBrowser?: 'chrome' | 'firefox' | 'edge' | 'opera' | 'safari'
+  cookiesFromBrowser?: 'auto' | 'chrome' | 'firefox' | 'edge' | 'opera' | 'safari' | 'brave' | 'chromium' | 'vivaldi'
 }
 
 export interface YouTubeDownloadProgress {

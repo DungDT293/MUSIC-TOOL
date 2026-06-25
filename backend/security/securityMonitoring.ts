@@ -6,6 +6,7 @@
 import { version as APP_VERSION } from '../../package.json'
 
 import { getMachineHash } from '../license/machineId'
+import { getLicenseServerBase } from '../licenseServerConfig'
 
 export type SecurityEventType =
   | 'SIGNATURE_INVALID'
@@ -70,7 +71,7 @@ export async function reportSecurityEvent(event: SecurityEvent): Promise<void> {
     }
 
     // Gửi lên server (endpoint mới)
-    const response = await fetch('https://license-server.dungdong333.workers.dev/api/security/report', {
+    const response = await fetch(`${getLicenseServerBase()}/api/security/report`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -351,5 +352,4 @@ export function initSecurityMonitoring(): void {
     }
   }, 5 * 60 * 1000) // 5 phút
 }
-
 

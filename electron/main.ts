@@ -24,6 +24,7 @@ import { getMachineHash } from '../backend/license/machineId'
 import { checkAndCleanCacheOnUpdate, cleanupStaleScratchDirs } from '../backend/utils/cacheCleanup'
 import { initTamperDetection, checkTampering } from '../backend/security/tamperDetection'
 import { initSecurityMonitoring } from '../backend/security/securityMonitoring'
+import { getAuthServerBase } from '../backend/licenseServerConfig'
 import { cleanupYouTubeHandlers } from './youtube/youtubeHandlers'
 import * as windowManager from './windowManager'
 import { createWindow, loadErrorPage } from './windowManager'
@@ -31,7 +32,6 @@ import {
   registerAllHandlers,
   refreshLicenseState,
   refreshDiskInfoAndBroadcast,
-  activeSongNhacExports,
 } from './handlers/index'
 
 // Helper để lấy mainWindow instance mới nhất (live binding từ windowManager module)
@@ -119,7 +119,7 @@ function compareSemver(a: string, b: string): -1 | 0 | 1 {
 async function checkVersionGate(): Promise<VersionGateResult> {
   try {
     const appVersion = app.getVersion()
-    const serverUrl = process.env.AUTH_BASE || 'https://license-server.dungdong333.workers.dev'
+    const serverUrl = getAuthServerBase()
     const url = `${serverUrl}/api/version-policy`
 
     console.log(`[VersionGate] Checking policy at ${url} for v${appVersion}`)
@@ -469,12 +469,6 @@ app.on('before-quit', async (e) => {
     // to become unkillable if the export hangs. The critical guard is in
     // app:installUpdate where we CAN reject the action.
   }
-
-  // Kill active Song Nhạc FFmpeg exports
-  for (const [, proc] of activeSongNhacExports) {
-    try { if (!proc.killed) proc.kill('SIGTERM') } catch (_) {}
-  }
-  activeSongNhacExports.clear()
 
   // Cancel autopilot
   try {

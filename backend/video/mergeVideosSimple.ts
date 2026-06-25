@@ -1153,7 +1153,7 @@ export async function mergeVideosSimple(
       fs.mkdirSync(req.outputDir, { recursive: true })
     }
 
-    // STEP 1: Kiểm tra dung lượng ổ đĩa cho outputDir (CHẶN nếu không đủ)
+    // STEP 1: Kiểm tra dung lượng ổ đĩa cho outputDir — PLAN A: CHỈ CẢNH BÁO, KHÔNG CHẶN
     try {
       console.log('[mergeVideosSimple] Checking disk space...')
       const diskInfo = await getDiskSpace(req.outputDir)
@@ -1164,16 +1164,18 @@ export async function mergeVideosSimple(
         ).toFixed(2)} GB)`
       )
 
-      // Giảm ngưỡng từ 4GB xuống 1GB để tránh false positive
       const spaceCheck = checkMinimumSpace(diskInfo.free, 1)
-      if (!spaceCheck.enough) {
-        throw new Error('Không đủ dung lượng ổ đĩa để merge video')
+      if (!spaceCheck.enough && !diskInfo.unknown) {
+        // CHỈ CẢNH BÁO: getDiskSpace đã đo đúng bằng fs.statfs; nếu thật sự đầy
+        // FFmpeg sẽ báo ENOSPC. Không chặn user.
+        console.warn(
+          `[mergeVideosSimple] ⚠️ Dung lượng ổ ${diskInfo.drive} có thể không đủ ` +
+          `(còn ${formatBytes(diskInfo.free)}) — vẫn tiếp tục merge.`
+        )
       } else {
         console.log('[mergeVideosSimple] ✓ Disk space OK')
       }
     } catch (diskErr: any) {
-      // Re-throw lỗi disk space check thực sự (không đủ dung lượng)
-      if (diskErr?.message?.includes('Không đủ dung lượng')) throw diskErr
       // Nếu không kiểm tra được dung lượng, chỉ log warning, không chặn
       console.warn(
         `[mergeVideosSimple] ⚠️ Không thể kiểm tra dung lượng ổ đĩa:`,

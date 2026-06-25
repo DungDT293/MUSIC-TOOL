@@ -4,13 +4,14 @@
 
 import { json } from '../utils/json'
 import type { Env } from '../env'
+import { verifyAdminRequest } from '../admin-auth'
 import { getIdentifierFromRequest } from '../../backend/security/rateLimiter'
 import { validatePayload } from '../../backend/utils/validatePayload'
 import { ServerAdminUpdateSchema } from '../../shared/ipcSchemas'
 
 export async function handleAdminUpdate(request: Request, env: Env): Promise<Response> {
   const adminToken = request.headers.get('x-admin-token')
-  if (!adminToken || adminToken !== env.ADMIN_TOKEN) {
+  if ((!adminToken || adminToken !== env.ADMIN_TOKEN) && !(await verifyAdminRequest(request, env))) {
     return json({ error: 'Admin token invalid' }, 401)
   }
 

@@ -21,6 +21,7 @@ import { isValidAbsolutePath } from '../authState'
 import { confirmResourcesForVideoJob } from './systemHandlers'
 
 const VIDEO_PROGRESS_CHANNEL = 'video:progress'
+const AUDIO_VISUALIZER_PRESETS = new Set(['bars-spectrum', 'line-waveform', 'mirror-waveform', 'neon-waveform'])
 
 let activeMergeRequestId: string | null = null
 let activeMuteRequestId: string | null = null
@@ -29,6 +30,20 @@ let activeNormalizeRequestId: string | null = null
 export function getActiveMergeRequestId() { return activeMergeRequestId }
 export function getActiveMuteRequestId() { return activeMuteRequestId }
 export function getActiveNormalizeRequestId() { return activeNormalizeRequestId }
+
+function validateAudioVisualizerPreviewOptions(options: any): string | null {
+  if (!options || typeof options !== 'object') return 'audioVisualizer is required'
+  if (options.enabled !== true) return 'audioVisualizer.enabled must be true'
+  if (!AUDIO_VISUALIZER_PRESETS.has(options.preset)) return `audioVisualizer.preset không hợp lệ: ${String(options.preset)}`
+  for (const key of ['widthPercent', 'heightPercent', 'marginBottomPx', 'opacity', 'barCount', 'sensitivity']) {
+    if (options[key] !== undefined && typeof options[key] !== 'number') return `audioVisualizer.${key} phải là number`
+  }
+  for (const key of ['primaryColor', 'secondaryColor']) {
+    if (options[key] !== undefined && typeof options[key] !== 'string') return `audioVisualizer.${key} phải là string`
+  }
+  if (options.position !== undefined && !['top', 'center', 'bottom'].includes(options.position)) return `audioVisualizer.position không hợp lệ: ${String(options.position)}`
+  return null
+}
 
 export function registerVideoHandlers() {
   ipcMain.handle('video:probeFile', async (_event, filePath: string) => {
@@ -394,6 +409,66 @@ export function registerVideoHandlers() {
     } catch (err: any) {
       console.error('[IPC] video:pool-pick-lru error', err)
       return { ok: false, error: err?.message, filePaths: [] }
+    }
+  })
+
+  // ── Bars Spectrum Preview ───────────────────────────────────────────────
+  ipcMain.handle('video:barsSpectrumPreview', async (_event, opts: {
+    bgPath: string
+    bgKind: 'image' | 'video'
+    audioPath: string
+    audioVisualizer: {
+      enabled: boolean
+      preset: 'bars-spectrum' | 'line-waveform' | 'mirror-waveform' | 'neon-waveform'
+      position?: 'top' | 'center' | 'bottom'
+      widthPercent?: number
+      heightPercent?: number
+      marginBottomPx?: number
+      primaryColor?: string
+      secondaryColor?: string
+      opacity?: number
+      barCount?: number
+      sensitivity?: number
+    }
+  }) => {
+    try {
+      if (!isValidAbsolutePath(opts.bgPath) || !isValidAbsolutePath(opts.audioPath)) {
+        return { ok: false, error: 'Invalid file path' }
+      }
+      const visualizerError = validateAudioVisualizerPreviewOptions(opts.audioVisualizer)
+      if (visualizerError) {
+        return { ok: false, error: `Tùy chọn sóng nhạc không hợp lệ: ${visualizerError}` }
+      }
+      const { generateBarsSpectrumPreview } = await import('../../backend/video/finalExport')
+      const previewPath = await generateBarsSpectrumPreview(opts)
+      return { ok: true, previewPath }
+    } catch (err: any) {
+      console.error('[IPC] video:barsSpectrumPreview error', err)
+      return { ok: false, error: err?.message || 'Preview failed' }
+    }
+  })
+
+  // ── Chroma Key Preview ──────────────────────────────────────────────────
+  ipcMain.handle('video:chromaKeyPreview', async (_event, opts: {
+    bgVideoPath: string
+    overlayVideoPath: string
+    bgType: 'green' | 'black'
+    keyColor: string
+    similarity: number
+    blend: number
+    position: 'center' | 'bottom'
+    scale: number
+  }) => {
+    try {
+      if (!isValidAbsolutePath(opts.bgVideoPath) || !isValidAbsolutePath(opts.overlayVideoPath)) {
+        return { ok: false, error: 'Invalid file path' }
+      }
+      const { generateChromaKeyPreview } = await import('../../backend/video/finalExport')
+      const previewPath = await generateChromaKeyPreview(opts)
+      return { ok: true, previewPath }
+    } catch (err: any) {
+      console.error('[IPC] video:chromaKeyPreview error', err)
+      return { ok: false, error: err?.message || 'Preview failed' }
     }
   })
 }

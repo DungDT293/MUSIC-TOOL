@@ -7,7 +7,7 @@ import { ipcMain, BrowserWindow, type WebContents } from 'electron'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { randomUUID } from 'crypto'
-import { exportFinalVideo, scanAudioSource, scanVideoSource } from '../../backend/video/finalExport'
+import { exportFinalVideo, scanAudioSource, scanVideoSource, scanImageSource } from '../../backend/video/finalExport'
 import { videoJobManager } from '../../backend/video/videoJobManager'
 import { jobQueue } from '../../backend/jobQueue/jobQueue'
 import {
@@ -22,6 +22,8 @@ import {
 } from '../../shared/videoFinalExportChannels'
 import { getOrInitAuthState, isValidAbsolutePath } from '../authState'
 import { confirmResourcesForVideoJob } from './systemHandlers'
+import { getLicenseServerBase } from '../../backend/licenseServerConfig'
+import { FinalExportRequestPayloadSchema } from '../../shared/ipcSchemas'
 
 const finalExportJobHandles = new Map<string, { cancel: () => Promise<void> }>()
 
@@ -67,7 +69,7 @@ async function trackVideoExport(
       export_format: exportFormat,
     }
 
-    const LICENSE_SERVER = process.env.LICENSE_SERVER_BASE || 'https://license-server.dungdong333.workers.dev'
+    const LICENSE_SERVER = getLicenseServerBase()
     const response = await fetch(`${LICENSE_SERVER}/api/video/export`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -102,10 +104,32 @@ export function registerVideoFinalExportHandlers(getMainWindow: () => BrowserWin
     catch (err: any) { throw new Error(err?.message || 'Scan video source failed') }
   })
 
-  ipcMain.on(VIDEO_FINAL_EXPORT_REQUEST, (_event, payload: FinalExportRequestPayload) => {
+  ipcMain.handle('video:final-export:scan-image', async (_event, payload) => {
+    if (payload?.path && !isValidAbsolutePath(payload.path)) {
+      throw new Error('Invalid image source path')
+    }
+    try { return await scanImageSource(payload) }
+    catch (err: any) { throw new Error(err?.message || 'Scan image source failed') }
+  })
+
+  ipcMain.on(VIDEO_FINAL_EXPORT_REQUEST, (_event, rawPayload: FinalExportRequestPayload) => {
     void (async () => {
+      const parseResult = FinalExportRequestPayloadSchema.safeParse(rawPayload)
+      const payload = (parseResult.success ? parseResult.data : rawPayload) as FinalExportRequestPayload
       const requestId = payload.requestId || randomUUID()
       try {
+        if (!parseResult.success) {
+          const detail = parseResult.error.issues.map((issue) => `${issue.path.join('.') || 'payload'}: ${issue.message}`).join('; ')
+          const mainWindow = getMainWindow()
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            sendIfAlive(mainWindow.webContents, VIDEO_FINAL_EXPORT_ERROR, {
+              requestId,
+              error: `Payload xuất video không hợp lệ: ${detail}`,
+              message: `Payload xuất video không hợp lệ: ${detail}`,
+            } satisfies FinalExportErrorPayload)
+          }
+          return
+        }
         const mainWindow = getMainWindow()
         if (!mainWindow || mainWindow.isDestroyed()) {
           console.error('[IPC] Main window not available for final export')

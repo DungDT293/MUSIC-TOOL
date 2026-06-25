@@ -1,12 +1,38 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { 
-  YouTubeQuality, 
-  YouTubeVideoInfo, 
-  YouTubeDownloadProgress, 
+import {
+  YouTubeQuality,
+  YouTubeVideoInfo,
+  YouTubeDownloadProgress,
   YouTubeBatchDownloadProgress,
   YouTubeDownloadVideoRequest
 } from '../../types/ipc';
 import './YouTubeDownloaderTab.css';
+
+const URL_CANDIDATE_REGEX = /(?:https?:\/\/|www\.)[^\s<>"'`]+/gi;
+const TRAILING_URL_PUNCTUATION = /[)\]}.,;:!?]+$/;
+
+function normalizeUrlCandidate(raw: string): string {
+  let value = raw
+    .trim()
+    .replace(/&amp;/gi, '&')
+    .replace(/^[([{]+/, '')
+    .replace(TRAILING_URL_PUNCTUATION, '');
+
+  if (value.startsWith('www.')) {
+    value = `https://${value}`;
+  }
+
+  return value;
+}
+
+function extractUrlsFromText(text: string): string[] {
+  const urls = new Set<string>();
+  for (const match of text.matchAll(URL_CANDIDATE_REGEX)) {
+    const url = normalizeUrlCandidate(match[0]);
+    if (url) urls.add(url);
+  }
+  return Array.from(urls);
+}
 
 export function YouTubeDownloaderTab() {
   // ============================================
@@ -40,6 +66,13 @@ export function YouTubeDownloaderTab() {
   const [cookiesFilePath, setCookiesFilePath] = useState<string | null>(null);
   const [cookiesBrowser, setCookiesBrowser] = useState<string>('auto');
 
+  // ── Cookie Manager State ──
+  const [showCookieManager, setShowCookieManager] = useState(false);
+  const [cookieFiles, setCookieFiles] = useState<any[]>([]);
+  const [cookieTestResults, setCookieTestResults] = useState<Record<string, any>>({});
+  const [isTestingCookie, setIsTestingCookie] = useState<string | null>(null);
+  const [isImportingCookie, setIsImportingCookie] = useState(false);
+
   const [isDownloading, setIsDownloading] = useState(false);
   const [isLoadingInfo, setIsLoadingInfo] = useState(false);
   const [isEstimating, setIsEstimating] = useState(false);
@@ -70,6 +103,7 @@ export function YouTubeDownloaderTab() {
     status: 'pending' | 'running' | 'done' | 'error';
     error?: string;
     outputFile?: string;
+    outputFiles?: string[];
   }
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [queueRunning, setQueueRunning] = useState(false);
@@ -181,7 +215,8 @@ export function YouTubeDownloaderTab() {
       // Sử dụng Clipboard API
       const text = await navigator.clipboard.readText();
       if (text) {
-        setUrl(text);
+        const extracted = extractUrlsFromText(text);
+        setUrl(extracted[0] || text.trim());
         // The useEffect on [url] will trigger validateUrl automatically
         // No need for explicit setTimeout call (which would use stale closure)
       }
@@ -309,7 +344,7 @@ export function YouTubeDownloaderTab() {
           audioOnly,
           audioFormat,
           cookiesFile: useCookiesFromBrowser && cookiesBrowser === 'file' ? cookiesFilePath || undefined : undefined,
-          cookiesBrowser: useCookiesFromBrowser && cookiesBrowser !== 'file' ? cookiesBrowser : undefined,
+          cookiesFromBrowser: useCookiesFromBrowser && cookiesBrowser !== 'file' ? cookiesBrowser as any : undefined,
         };
 
         const result = await window.api.youtube.downloadVideo(request);
@@ -338,7 +373,7 @@ export function YouTubeDownloaderTab() {
             audioOnly,
             audioFormat,
             cookiesFile: useCookiesFromBrowser && cookiesBrowser === 'file' ? cookiesFilePath || undefined : undefined,
-            cookiesBrowser: useCookiesFromBrowser && cookiesBrowser !== 'file' ? cookiesBrowser : undefined,
+            cookiesFromBrowser: useCookiesFromBrowser && cookiesBrowser !== 'file' ? cookiesBrowser as any : undefined,
             minDurationSeconds: minDuration ? minDuration * 60 : undefined,
           }
         });
@@ -386,15 +421,20 @@ export function YouTubeDownloaderTab() {
 
   // ── Queue handlers ────────────────────────────────────────────────────────
   const handleAddToQueue = () => {
-    const lines = queueUrlInput.split('\n').map(l => l.trim()).filter(Boolean);
-    if (lines.length === 0) return;
-    const newItems: QueueItem[] = lines.map(u => ({
+    const existingUrls = new Set(queue.map(item => item.url));
+    const urls = extractUrlsFromText(queueUrlInput).filter(itemUrl => !existingUrls.has(itemUrl));
+    if (urls.length === 0) {
+      setError('Không tìm thấy URL hợp lệ trong nội dung đã nhập.');
+      return;
+    }
+    const newItems: QueueItem[] = urls.map(u => ({
       id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
       url: u,
       status: 'pending',
     }));
     setQueue(prev => [...prev, ...newItems]);
     setQueueUrlInput('');
+    setError(null);
   };
 
   const handleRemoveFromQueue = (id: string) => {
@@ -405,41 +445,103 @@ export function YouTubeDownloaderTab() {
     if (queueRunning) return;
     if (!outputDir) { setError('Vui lòng chọn thư mục lưu trước khi chạy queue!'); return; }
     setQueueRunning(true);
+    setIsDownloading(true);
     setError(null);
+    setProgress(null);
+    setBatchProgress(null);
+    setDownloadResult(null);
 
     const items = queueRef.current;
-    for (let i = 0; i < items.length; i++) {
-      const item = items[i];
-      if (item.status !== 'pending') continue;
+    try {
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (item.status !== 'pending') continue;
 
-      setQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'running' } : q));
+        setQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'running', error: undefined } : q));
 
-      try {
-        const request: YouTubeDownloadVideoRequest = {
-          url: item.url,
-          outputDir,
-          quality,
-          downloadSubtitles,
-          downloadThumbnail,
-          audioOnly,
-          audioFormat,
-        };
-        const result = await window.api.youtube.downloadVideo(request);
-        if (result.success) {
-          setQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'done', outputFile: result.outputFile } : q));
-        } else {
-          setQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'error', error: result.error || 'Failed' } : q));
+        try {
+          const validation = await window.api.youtube.validateUrl(item.url);
+          if (!validation.success || !validation.isValid) {
+            throw new Error(validation.error || 'URL không hợp lệ');
+          }
+
+          const cookiesFromBrowser = useCookiesFromBrowser && cookiesBrowser !== 'file' ? cookiesBrowser as any : undefined;
+
+          if (validation.type === 'channel' || validation.type === 'playlist') {
+            const result = await window.api.youtube.downloadChannel({
+              url: item.url,
+              outputDir,
+              quality,
+              options: {
+                downloadSubtitles,
+                downloadThumbnail,
+                limit: channelLimit,
+                continueOnError,
+                concurrent: false,
+                audioOnly,
+                audioFormat,
+                cookiesFromBrowser,
+                minDurationSeconds: minDuration ? minDuration * 60 : undefined,
+              },
+            });
+
+            if (result.success) {
+              setQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'done', outputFiles: result.downloaded || [] } : q));
+            } else {
+              setQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'error', error: result.error || 'Failed' } : q));
+            }
+          } else {
+            const request: YouTubeDownloadVideoRequest = {
+              url: item.url,
+              outputDir,
+              quality,
+              downloadSubtitles,
+              downloadThumbnail,
+              audioOnly,
+              audioFormat,
+              cookiesFromBrowser,
+            };
+            const result = await window.api.youtube.downloadVideo(request);
+            if (result.success) {
+              setQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'done', outputFile: result.outputFile } : q));
+            } else {
+              setQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'error', error: result.error || 'Failed' } : q));
+            }
+          }
+        } catch (err: any) {
+          setQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'error', error: err?.message || 'Unknown error' } : q));
+          if (!continueOnError) break;
         }
-      } catch (err: any) {
-        setQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'error', error: err?.message || 'Unknown error' } : q));
       }
+    } finally {
+      setQueueRunning(false);
+      setIsDownloading(false);
     }
-    setQueueRunning(false);
   };
 
   const handleClearQueue = () => {
-    setQueue(prev => prev.filter(q => q.status === 'running'));
+    setQueue(prev => prev.filter(q => q.status !== 'done'));
   };
+
+  const handleRetryQueueErrors = () => {
+    setQueue(prev => prev.map(q => q.status === 'error' ? { ...q, status: 'pending', error: undefined } : q));
+  };
+
+  const renderOutputFolderPicker = (disabled = false) => (
+    <div className="setting-item">
+      <label>Thư mục lưu:</label>
+      <div className="folder-select">
+        <button onClick={handleSelectOutputDir} disabled={disabled}>
+          Chọn thư mục
+        </button>
+        {outputDir ? (
+          <span className="path">{outputDir}</span>
+        ) : (
+          <span className="path missing">Chưa chọn thư mục lưu</span>
+        )}
+      </div>
+    </div>
+  );
   
   // ============================================
   // Helper functions
@@ -534,11 +636,79 @@ export function YouTubeDownloaderTab() {
     }
   };
 
+  // ── Cookie Management Handlers ──
+  const loadCookieFiles = async () => {
+    try {
+      const res = await window.api?.youtube?.cookieList?.();
+      if (res?.success) {
+        setCookieFiles(res.cookieFiles || []);
+      }
+    } catch (e) {
+      console.error('Failed to load cookie files:', e);
+    }
+  };
+
+  // Load cookie files on mount
+  useEffect(() => {
+    loadCookieFiles();
+  }, []);
+
+  const handleImportCookies = async () => {
+    setIsImportingCookie(true);
+    try {
+      const res = await window.api?.youtube?.cookieImport?.();
+      if (res?.success && res.cookieFile) {
+        await loadCookieFiles();
+      } else if (res?.error && res.error !== 'Cancelled') {
+        setError(`Lỗi import cookies: ${res.error}`);
+      }
+    } catch (err: any) {
+      setError(`Lỗi import cookies: ${err?.message}`);
+    } finally {
+      setIsImportingCookie(false);
+    }
+  };
+
+  const handleTestCookie = async (platform: string) => {
+    setIsTestingCookie(platform);
+    try {
+      const res = await window.api?.youtube?.cookieTest?.(platform);
+      if (res?.success && res.result) {
+        setCookieTestResults(prev => ({ ...prev, [platform]: res.result }));
+      }
+    } catch (err: any) {
+      setCookieTestResults(prev => ({
+        ...prev,
+        [platform]: { success: false, message: `Lỗi: ${err?.message}` },
+      }));
+    } finally {
+      setIsTestingCookie(null);
+    }
+  };
+
+  const handleRemoveCookie = async (id: string) => {
+    try {
+      await window.api?.youtube?.cookieRemove?.(id);
+      await loadCookieFiles();
+      // Clear test result for removed platform
+      const removed = cookieFiles.find(cf => cf.id === id);
+      if (removed) {
+        setCookieTestResults(prev => {
+          const copy = { ...prev };
+          delete copy[removed.platform];
+          return copy;
+        });
+      }
+    } catch (err: any) {
+      setError(`Lỗi xóa cookies: ${err?.message}`);
+    }
+  };
+
   return (
     <div className="youtube-downloader-tab">
       <h2>7. YouTube Downloader</h2>
       <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '8px' }}>
-        <p style={{ margin: 0 }}>Download videos hoặc toàn bộ channel từ YouTube</p>
+        <p style={{ margin: 0 }}>Download videos hoặc toàn bộ channel từ YouTube, Facebook, TikTok...</p>
         <button
           type="button"
           onClick={handleUpdateYtDlp}
@@ -565,17 +735,216 @@ export function YouTubeDownloaderTab() {
           </span>
         )}
       </div>
-      
+
+      {/* Cookie Manager Section */}
+      <div className="section" style={{ marginBottom: '16px' }}>
+        <div
+          style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}
+          onClick={() => setShowCookieManager(!showCookieManager)}
+        >
+          <span style={{ fontSize: '14px' }}>{showCookieManager ? '▼' : '▶'}</span>
+          <h3 style={{ margin: 0 }}>Quản lý Cookies (Facebook, TikTok, Instagram...)</h3>
+          {cookieFiles.length > 0 && (
+            <span style={{
+              fontSize: '11px',
+              backgroundColor: '#065f46',
+              color: '#6ee7b7',
+              padding: '2px 8px',
+              borderRadius: '10px',
+            }}>
+              {cookieFiles.length} nền tảng
+            </span>
+          )}
+        </div>
+
+        {showCookieManager && (
+          <div style={{ marginTop: '12px' }}>
+            {/* Hướng dẫn */}
+            <div style={{
+              backgroundColor: '#1e293b',
+              border: '1px solid #334155',
+              borderRadius: '8px',
+              padding: '12px 16px',
+              marginBottom: '12px',
+              fontSize: '12px',
+              lineHeight: '1.8',
+            }}>
+              <div style={{ fontWeight: 'bold', color: '#93c5fd', marginBottom: '6px', fontSize: '13px' }}>
+                Hướng dẫn lấy cookies để tải video từ Facebook, TikTok, Instagram...
+              </div>
+              <ol style={{ margin: 0, paddingLeft: '20px', color: '#d1d5db' }}>
+                <li>
+                  Cài extension{' '}
+                  <span
+                    style={{ color: '#60a5fa', cursor: 'pointer', textDecoration: 'underline' }}
+                    onClick={() => {
+                      const url = 'https://chromewebstore.google.com/detail/j2team-cookies/okpidcojinmlaakglciglbpcpajaibco';
+                      window.open?.(url) || (window as any).api?.openPath?.(url);
+                    }}
+                  >
+                    J2Team Cookies
+                  </span>{' '}
+                  trên Chrome/Edge
+                </li>
+                <li>Đăng nhập vào trang web cần tải video (ví dụ: facebook.com, tiktok.com...)</li>
+                <li>Click vào icon J2Team Cookies trên thanh công cụ trình duyệt</li>
+                <li>Bấm <strong style={{ color: '#fbbf24' }}>Export</strong> để lưu file cookies JSON</li>
+                <li>Bấm nút <strong style={{ color: '#4ade80' }}>Import Cookies</strong> bên dưới và chọn file vừa lưu</li>
+                <li>Bấm <strong style={{ color: '#60a5fa' }}>Test</strong> để kiểm tra cookies còn hiệu lực</li>
+              </ol>
+              <div style={{ marginTop: '8px', color: '#9ca3af', fontSize: '11px' }}>
+                Mỗi nền tảng cần 1 file cookie riêng. Bạn có thể import nhiều file cho nhiều nền tảng khác nhau.
+              </div>
+            </div>
+
+            {/* Import button */}
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '12px', flexWrap: 'wrap' }}>
+              <button
+                onClick={handleImportCookies}
+                disabled={isImportingCookie}
+                className="btn-primary"
+                style={{ fontSize: '12px', padding: '8px 16px' }}
+              >
+                {isImportingCookie ? 'Đang import...' : 'Import Cookies (chọn file JSON)'}
+              </button>
+            </div>
+
+            {/* Cookie files list */}
+            {cookieFiles.length === 0 ? (
+              <div style={{
+                color: '#6b7280',
+                fontSize: '12px',
+                padding: '16px',
+                textAlign: 'center',
+                border: '1px dashed #374151',
+                borderRadius: '6px',
+              }}>
+                Chưa có cookies nào. Hãy import file cookies JSON từ J2Team Cookies extension.
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {cookieFiles.map((cf: any) => {
+                  const testResult = cookieTestResults[cf.platform];
+                  const isTesting = isTestingCookie === cf.platform;
+
+                  return (
+                    <div
+                      key={cf.id}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '10px',
+                        padding: '10px 14px',
+                        backgroundColor: '#1a1a2e',
+                        border: '1px solid #374151',
+                        borderRadius: '8px',
+                      }}
+                    >
+                      {/* Platform icon */}
+                      <span style={{ fontSize: '18px' }}>
+                        {cf.platform === 'facebook' ? '📘' :
+                         cf.platform === 'tiktok' ? '🎵' :
+                         cf.platform === 'instagram' ? '📷' :
+                         cf.platform === 'youtube' ? '▶️' : '🌐'}
+                      </span>
+
+                      {/* Info */}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontWeight: 'bold', fontSize: '13px', color: '#e5e7eb' }}>
+                          {cf.platform.charAt(0).toUpperCase() + cf.platform.slice(1)}
+                        </div>
+                        <div style={{ fontSize: '11px', color: '#9ca3af' }}>
+                          {cf.cookieCount} cookies
+                          {cf.lastTestedAt && ` • Test: ${new Date(cf.lastTestedAt).toLocaleString('vi-VN')}`}
+                        </div>
+                      </div>
+
+                      {/* Test result badge */}
+                      {testResult && (
+                        <span style={{
+                          fontSize: '11px',
+                          padding: '2px 8px',
+                          borderRadius: '10px',
+                          backgroundColor: testResult.success ? '#065f46' : '#7f1d1d',
+                          color: testResult.success ? '#6ee7b7' : '#fca5a5',
+                          whiteSpace: 'nowrap',
+                        }}>
+                          {testResult.success ? 'Hoạt động' : 'Hết hạn'}
+                        </span>
+                      )}
+
+                      {/* Test button */}
+                      <button
+                        onClick={() => handleTestCookie(cf.platform)}
+                        disabled={isTesting}
+                        style={{
+                          fontSize: '11px',
+                          padding: '4px 10px',
+                          borderRadius: '4px',
+                          border: '1px solid #4b5563',
+                          backgroundColor: '#1e3a5f',
+                          color: '#93c5fd',
+                          cursor: isTesting ? 'not-allowed' : 'pointer',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {isTesting ? '...' : 'Test'}
+                      </button>
+
+                      {/* Remove button */}
+                      <button
+                        onClick={() => handleRemoveCookie(cf.id)}
+                        style={{
+                          fontSize: '11px',
+                          padding: '4px 8px',
+                          borderRadius: '4px',
+                          border: '1px solid #7f1d1d',
+                          backgroundColor: '#450a0a',
+                          color: '#fca5a5',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Xóa
+                      </button>
+                    </div>
+                  );
+                })}
+
+                {/* Test result message */}
+                {Object.entries(cookieTestResults).map(([platform, result]: [string, any]) => (
+                  result?.message && (
+                    <div key={`test-${platform}`} style={{
+                      fontSize: '11px',
+                      padding: '6px 12px',
+                      borderRadius: '6px',
+                      backgroundColor: result.success ? '#052e16' : '#450a0a',
+                      color: result.success ? '#86efac' : '#fca5a5',
+                      border: `1px solid ${result.success ? '#166534' : '#7f1d1d'}`,
+                    }}>
+                      <strong>{platform}:</strong> {result.message}
+                    </div>
+                  )
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
       {/* Step 1: URL Input */}
       <div className="section">
-        <h3>1. Nhập URL YouTube</h3>
+        <h3>1. Nhập URL (YouTube, Facebook, TikTok, SoundCloud...)</h3>
         
         <div className="url-input-group">
           <input
             type="text"
             value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            placeholder="https://www.youtube.com/watch?v=... hoặc channel URL"
+            onChange={(e) => {
+              const value = e.target.value;
+              const extracted = extractUrlsFromText(value);
+              setUrl(extracted.length > 0 ? extracted[0] : value);
+            }}
+            placeholder="https://youtube.com/watch?v=... | facebook.com/reel/... | tiktok.com/..."
             className="url-input"
             disabled={isDownloading}
           />
@@ -634,7 +1003,7 @@ export function YouTubeDownloaderTab() {
       {channelInfo && renderChannelInfo()}
       
       {/* Settings */}
-      {(videoInfo || channelInfo) && renderSettings()}
+      {(videoInfo || channelInfo || queue.length > 0 || queueUrlInput.trim()) && renderSettings()}
       
       {/* Download Button */}
       {(videoInfo || channelInfo) && outputDir && renderDownloadButton()}
@@ -655,11 +1024,19 @@ export function YouTubeDownloaderTab() {
           Nhập nhiều URL (mỗi dòng một URL), sau đó nhấn "Thêm vào Queue" rồi "Chạy Queue".
         </p>
 
+        {renderOutputFolderPicker(queueRunning || isDownloading)}
+
+        {useCookiesFromBrowser && cookiesBrowser === 'file' && (
+          <p style={{ fontSize: '11px', color: '#fbbf24', marginTop: '-6px' }}>
+            Queue nhiều nền tảng sẽ không dùng một file cookies.txt chung. Hãy import cookies theo từng nền tảng trong Cookie Manager để tự match đúng URL.
+          </p>
+        )}
+
         {/* Input */}
         <textarea
           value={queueUrlInput}
           onChange={e => setQueueUrlInput(e.target.value)}
-          placeholder={'https://www.youtube.com/watch?v=...\nhttps://soundcloud.com/...\nhttps://www.tiktok.com/...'}
+          placeholder={'https://www.youtube.com/watch?v=...\nhttps://soundcloud.com/...\nhttps://www.tiktok.com/...\nhttps://www.facebook.com/reel/...'}
           disabled={queueRunning}
           rows={4}
           style={{
@@ -678,9 +1055,13 @@ export function YouTubeDownloaderTab() {
             style={{ fontSize: '12px', padding: '6px 12px' }}>
             {queueRunning ? 'Đang chạy...' : 'Chạy Queue'}
           </button>
-          <button className="btn-secondary" onClick={handleClearQueue} disabled={queueRunning || queue.length === 0}
+          <button className="btn-secondary" onClick={handleClearQueue} disabled={queueRunning || queue.filter(q => q.status === 'done').length === 0}
             style={{ fontSize: '12px', padding: '6px 12px' }}>
             Xóa hoàn thành
+          </button>
+          <button className="btn-secondary" onClick={handleRetryQueueErrors} disabled={queueRunning || queue.filter(q => q.status === 'error').length === 0}
+            style={{ fontSize: '12px', padding: '6px 12px' }}>
+            Thử lại lỗi
           </button>
           {!outputDir && (
             <span style={{ fontSize: '12px', color: '#f87171', alignSelf: 'center' }}>
@@ -889,10 +1270,10 @@ export function YouTubeDownloaderTab() {
         <div className="setting-item">
           <label>Thư mục lưu:</label>
           <div className="folder-select">
-            <button onClick={handleSelectOutputDir} disabled={isDownloading}>
+            <button onClick={handleSelectOutputDir} disabled={isDownloading || queueRunning}>
               Chọn thư mục
             </button>
-            {outputDir && <span className="path">{outputDir}</span>}
+            {outputDir ? <span className="path">{outputDir}</span> : <span className="path missing">Chưa chọn thư mục lưu</span>}
           </div>
         </div>
         
@@ -1033,8 +1414,6 @@ export function YouTubeDownloaderTab() {
               <option value="brave">Brave</option>
               <option value="vivaldi">Vivaldi</option>
               <option value="chromium">Chromium</option>
-              <option value="opera_gx">Opera GX</option>
-              <option value="whale">Naver Whale</option>
               <option value="safari">Safari (macOS)</option>
               <option value="file">Chọn file cookies.txt</option>
             </select>
@@ -1328,20 +1707,3 @@ export function YouTubeDownloaderTab() {
 }
 
 export default YouTubeDownloaderTab;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

@@ -4,6 +4,7 @@
 
 import { json } from '../utils/json'
 import type { Env } from '../env'
+import { hashPassword } from '../utils/password'
 import { requireRateLimit, getIdentifierFromRequest, RateLimitPresets } from '../../backend/security/rateLimiter'
 
 export async function handleRegister(request: Request, env: Env, parsedBody?: any): Promise<Response> {
@@ -30,8 +31,10 @@ export async function handleRegister(request: Request, env: Env, parsedBody?: an
 
     const id = crypto.randomUUID()
     const now = Date.now()
+    const passwordHash = await hashPassword(mat_khau)
+    const storedPassword = `${passwordHash.hash}:${passwordHash.salt}`
 
-    // Lưu mật khẩu plaintext (theo yêu cầu: không mã hóa mật khẩu user đã đặt)
+    // Store only a password hash; existing plaintext rows are still verified by legacy fallback.
     // V2: Tự động tạo key khi đăng ký (không trả về client)
     const keyKichHoat = crypto.randomUUID()
 
@@ -45,7 +48,7 @@ export async function handleRegister(request: Request, env: Env, parsedBody?: an
         )
          VALUES (?1, ?2, ?3, ?4, ?5, 'PENDING', 0, 'CHO_DUYET', ?6, ?7)`
       )
-        .bind(id, tai_khoan, mat_khau, ma_may, keyKichHoat, now, version || null)
+        .bind(id, tai_khoan, storedPassword, ma_may, keyKichHoat, now, version || null)
         .run()
     } catch (dbErr: any) {
       const msg = String(dbErr?.message || dbErr)
@@ -64,7 +67,7 @@ export async function handleRegister(request: Request, env: Env, parsedBody?: an
             )
              VALUES (?1, ?2, ?3, ?4, ?5, 'CHO_DUYET', ?6, ?7)`
           )
-            .bind(id, tai_khoan, mat_khau, ma_may, keyKichHoat, now, version || null)
+            .bind(id, tai_khoan, storedPassword, ma_may, keyKichHoat, now, version || null)
             .run()
         } catch (fallbackErr: any) {
           const fm = String(fallbackErr?.message || fallbackErr)

@@ -134,14 +134,23 @@ export async function verifyRequestSignature(
     // 4. Check nonce reuse (chống replay) — FIX H3: ALWAYS enforce, DB or in-memory fallback
     const nonceKey = `${machineId}:${nonce}:${timestampNum}`
     if (env.DB) {
-      const usedNonce = await env.DB.prepare(
-        'SELECT 1 FROM used_nonces WHERE nonce_key = ? AND expires_at > ?'
-      )
-        .bind(nonceKey, now)
-        .first()
+      try {
+        const usedNonce = await env.DB.prepare(
+          'SELECT 1 FROM used_nonces WHERE nonce_key = ? AND expires_at > ?'
+        )
+          .bind(nonceKey, now)
+          .first()
 
-      if (usedNonce) {
-        return { valid: false, error: 'Nonce already used (replay attack)' }
+        if (usedNonce) {
+          return { valid: false, error: 'Nonce already used (replay attack)' }
+        }
+      } catch (err) {
+        console.warn('[Security Verification] used_nonces unavailable, using in-memory nonce check:', err)
+        inMemoryNonceCleanup(now)
+        const existingExpiry = inMemoryNonces.get(nonceKey)
+        if (existingExpiry !== undefined && existingExpiry > now) {
+          return { valid: false, error: 'Nonce already used (replay attack - in-memory check)' }
+        }
       }
     } else {
       // FIX H3: In-memory fallback — nonces are still checked even without D1
@@ -167,11 +176,19 @@ export async function verifyRequestSignature(
 
     // 6. Mark nonce as used — FIX H3: ALWAYS record, DB or in-memory fallback
     if (env.DB) {
-      await env.DB.prepare(
-        'INSERT INTO used_nonces (nonce_key, machine_id, expires_at) VALUES (?, ?, ?)'
-      )
-        .bind(nonceKey, machineId, now + NONCE_EXPIRY_MS)
-        .run()
+      try {
+        await env.DB.prepare(
+          'INSERT INTO used_nonces (nonce_key, machine_id, expires_at) VALUES (?, ?, ?)'
+        )
+          .bind(nonceKey, machineId, now + NONCE_EXPIRY_MS)
+          .run()
+      } catch (err) {
+        console.warn('[Security Verification] failed to persist nonce, using in-memory nonce store:', err)
+        if (inMemoryNonces.size >= IN_MEMORY_NONCE_MAX_SIZE) {
+          inMemoryNonceCleanup(now)
+        }
+        inMemoryNonces.set(nonceKey, now + NONCE_EXPIRY_MS)
+      }
     } else {
       // FIX H3: In-memory fallback — enforce size limit to prevent OOM
       if (inMemoryNonces.size >= IN_MEMORY_NONCE_MAX_SIZE) {

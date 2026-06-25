@@ -150,7 +150,12 @@ export const FinalExportRequestPayloadSchema = z.object({
     z.object({ type: z.literal('folder'), path: z.string().min(1) }),
     z.object({ type: z.literal('file'), path: z.string().min(1) }),
     z.object({ type: z.literal('files'), path: z.string().optional(), paths: z.array(z.string().min(1)).min(1) }),
-  ]),
+  ]).optional(),
+  imageSource: z.union([
+    z.object({ type: z.literal('folder'), path: z.string().min(1) }),
+    z.object({ type: z.literal('file'), path: z.string().min(1) }),
+    z.object({ type: z.literal('files'), path: z.string().optional(), paths: z.array(z.string().min(1)).min(1) }),
+  ]).optional(),
   outputFolder: z.string().min(1),
   outputFilename: z.string().min(1),
   shuffle: z.boolean().optional(),
@@ -168,17 +173,21 @@ export const FinalExportRequestPayloadSchema = z.object({
   }).passthrough().optional(),
   useGpuEncoding: z.enum(['gpu', 'cpu', 'auto']).optional(),
   qualityPreset: z.enum(['ultra-fast', 'fast', 'balanced', 'high-quality']).optional(),
+  audioVisualizer: z.object({
+    enabled: z.boolean(),
+    preset: z.enum(['bars-spectrum', 'line-waveform', 'mirror-waveform', 'neon-waveform']),
+    position: z.enum(['top', 'center', 'bottom']).optional(),
+    widthPercent: z.number().optional(),
+    heightPercent: z.number().optional(),
+    marginBottomPx: z.number().optional(),
+    primaryColor: z.string().optional(),
+    secondaryColor: z.string().optional(),
+    opacity: z.number().optional(),
+    barCount: z.number().optional(),
+    sensitivity: z.number().optional(),
+  }).optional(),
   deleteSourceFiles: z.boolean().optional(),
-  // DATA-01 fix: canvasScene is a structured scene object
-  canvasScene: z.object({
-    width: z.number().optional(),
-    height: z.number().optional(),
-    layers: z.array(z.object({
-      id: z.string().optional(),
-      type: z.string().optional(),
-    }).passthrough()).optional(),
-  }).passthrough().optional(),
-})
+}).passthrough()
 
 // ========== Autopilot Schemas ==========
 

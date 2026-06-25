@@ -2,7 +2,6 @@ import { HashRouter } from 'react-router-dom'
 import { useEffect, useState, useCallback } from 'react'
 import AppLayout from './AppLayout'
 import Router from './router'
-import ExportRunner from './features/song-nhac/export/ExportRunner'
 import type { LicenseState, AuthState, VersionPolicy, VersionGateResult } from './types/ipc'
 import AuthPage from './pages/Auth/AuthPage'
 import { initAntiDebug, checkAntiDebug } from './security/antiDebug'
@@ -298,11 +297,6 @@ function App() {
       mounted = false
     }
   }, [])
-
-  // Offscreen export window: chỉ render ExportRunner, không auth/layout
-  if (typeof window !== 'undefined' && window.location.hash === '#export') {
-    return <ExportRunner />
-  }
 
   // Hiển thị lỗi load nếu có
   if (loadError) {

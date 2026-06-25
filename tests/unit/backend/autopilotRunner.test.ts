@@ -1,9 +1,66 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import os from 'node:os'
+import path from 'node:path'
+import fsp from 'node:fs/promises'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   __autopilotTestUtils,
   getRecentAutopilotLogs,
+  validateAutopilotStartConfig,
   validateDateCode,
 } from '../../../backend/autopilot/autopilotRunner'
+
+const tempDirs: string[] = []
+
+async function makeAutopilotConfig(autoCreateDailySubfolder: boolean) {
+  const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'autopilot-runner-'))
+  tempDirs.push(tempRoot)
+
+  const audioDir = path.join(tempRoot, 'audio')
+  const videoDir = path.join(tempRoot, 'video')
+  const finalDir = path.join(tempRoot, 'final')
+  const priorityDir = path.join(tempRoot, 'priority')
+
+  await Promise.all([
+    fsp.mkdir(audioDir, { recursive: true }),
+    fsp.mkdir(videoDir, { recursive: true }),
+    fsp.mkdir(finalDir, { recursive: true }),
+    fsp.mkdir(priorityDir, { recursive: true }),
+  ])
+
+  return {
+    dayPlans: [
+      {
+        id: 'day-1',
+        dateCode: '0101',
+        playlistCount: 1,
+        minutesPerPlaylist: 30,
+        presetId: 'custom' as const,
+        overrides: {
+          useCustomTitles: true,
+          customTitles: ['video 1'],
+        },
+      },
+      {
+        id: 'day-2',
+        dateCode: '0201',
+        playlistCount: 1,
+        minutesPerPlaylist: 30,
+        presetId: 'custom' as const,
+        overrides: {
+          useCustomTitles: true,
+          customTitles: ['video 1'],
+        },
+      },
+    ],
+    folders: {
+      rootAudio: audioDir,
+      rootVideo: videoDir,
+      rootFinal: finalDir,
+      priorityMusicFolder: priorityDir,
+      autoCreateDailySubfolder,
+    },
+  }
+}
 
 describe('autopilotRunner.validateDateCode', () => {
   it('accepts leap day even when current year is not leap year', () => {
@@ -66,5 +123,31 @@ describe('autopilotRunner.getRecentAutopilotLogs', () => {
       { seq: 1, message: 'normal-log', verbosity: 'normal' },
       { seq: 2, message: 'verbose-log', verbosity: 'verbose' },
     ])
+  })
+})
+
+describe('autopilotRunner.validateAutopilotStartConfig', () => {
+  afterEach(async () => {
+    await Promise.all(
+      tempDirs.splice(0).map((dir) =>
+        fsp.rm(dir, { recursive: true, force: true }),
+      ),
+    )
+  })
+
+  it('rejects projected output collisions across days when daily subfolders are disabled', async () => {
+    const config = await makeAutopilotConfig(false)
+
+    await expect(validateAutopilotStartConfig(config as any)).rejects.toThrow(
+      'autoCreateDailySubfolder',
+    )
+  })
+
+  it('allows repeated titles when each day writes into its own subfolder', async () => {
+    const config = await makeAutopilotConfig(true)
+
+    await expect(validateAutopilotStartConfig(config as any)).resolves.toMatchObject({
+      validPlans: expect.any(Array),
+    })
   })
 })

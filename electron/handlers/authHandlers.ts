@@ -34,6 +34,7 @@ import {
 } from '../../backend/app/appSettings'
 import { hasActiveExport, setHasActiveExport } from '../main'
 import { getAutoUpdater } from '../autoUpdaterSingleton'
+import { getAuthServerBase } from '../../backend/licenseServerConfig'
 
 // Chia sẻ licenseState với main.ts
 let licenseState: LicenseState = { status: 'checking', machineHash: '' }
@@ -173,7 +174,8 @@ export function registerAuthHandlers() {
       const isSuccess = res.ok === true || res.status === 'CHO_PHEP' || res.status === 'allowed'
       const isPending = res.status === 'PENDING' || res.status === 'pending'
       const isBlocked = res.status === 'BI_CHAN' || res.status === 'blocked'
-        || res.action === 'BLOCKED'
+        || res.status === 'revoked' || res.status === 'locked' || res.status === 'expired'
+        || res.action === 'BLOCKED' || res.action === 'REVOKED' || res.action === 'EXPIRED'
       const errorMsg = res.error || res.message
 
       if (isSuccess) {
@@ -292,7 +294,8 @@ export function registerAuthHandlers() {
       const isSuccess = res.ok === true || res.status === 'CHO_PHEP' || res.status === 'allowed'
       const isPending = res.status === 'PENDING' || res.status === 'pending'
       const isBlocked = res.status === 'BI_CHAN' || res.status === 'blocked'
-        || res.action === 'BLOCKED'
+        || res.status === 'revoked' || res.status === 'locked' || res.status === 'expired'
+        || res.action === 'BLOCKED' || res.action === 'REVOKED' || res.action === 'EXPIRED'
       const errorMsg = res.error || res.message
 
       if (isSuccess) {
@@ -327,11 +330,7 @@ export function registerAuthHandlers() {
       } else {
         // Server trả response không mong đợi (ok=false, sai password, v.v.)
         // Nếu đang allowed → giữ nguyên, không phá hủy phiên hợp lệ
-        if (base.status === 'allowed') {
-          console.warn('[auth:refresh] Server returned non-success, keeping allowed state:', errorMsg)
-        } else {
-          setAuthState({ ...base, status: 'error', message: errorMsg || 'Làm mới thất bại.' })
-        }
+        setAuthState({ ...base, status: 'error', message: errorMsg || 'Làm mới thất bại.' })
       }
     } catch (err: any) {
       console.error('[auth:refresh] error', err)
@@ -573,6 +572,7 @@ export function registerAuthHandlers() {
           downloadUrl: stored.downloadUrl,
         })
       } else {
+        clearEncryptedAuthState()
         setAuthState({
           status: 'unregistered',
           username: stored.username ?? base.username,
@@ -757,7 +757,7 @@ export function registerAuthHandlers() {
 
   ipcMain.handle('policy:get', async () => {
     // FIX: Fetch version policy từ server thay vì trả về version app hiện tại
-    const serverUrl = process.env.AUTH_BASE || 'https://license-server.dungdong333.workers.dev'
+    const serverUrl = getAuthServerBase()
     const url = `${serverUrl}/api/version-policy`
     try {
       const controller = new AbortController()

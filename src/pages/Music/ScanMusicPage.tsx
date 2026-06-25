@@ -178,6 +178,33 @@ function ScanMusicPage() {
     }
   }
 
+  /**
+   * Tự động điền danh sách file non-AAC vào phần Chuẩn hóa.
+   * Output folder = subfolder "aac_chuanhoa" bên trong folder cha của file đầu tiên.
+   */
+  const handleAutoFillNonAac = () => {
+    if (!result?.nonAacFiles || result.nonAacFiles.length === 0) return
+
+    // Lấy folder cha từ file đầu tiên để tạo subfolder output
+    const firstFile = result.nonAacFiles[0]
+    // Tách folder cha theo path separator (Windows và Unix)
+    const parts = firstFile.replace(/\\/g, '/').split('/')
+    parts.pop() // bỏ tên file
+    const parentFolder = parts.join('\\') // Windows path
+    const autoOutputFolder = parentFolder + '\\aac_chuanhoa'
+
+    setNormalizeMode('files')
+    setNormalizeFiles(result.nonAacFiles)
+    setOutputFolder(autoOutputFolder)
+    setOutputFormat('aac')
+    setNormalizeResult(null)
+
+    // Scroll xuống phần normalize
+    setTimeout(() => {
+      document.getElementById('normalize-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }, 100)
+  }
+
   const handleNormalizeAudio = async () => {
     if (normalizeMode === 'files' && normalizeFiles.length === 0) {
       setError('Vui lòng chọn ít nhất 1 file audio.')
@@ -374,8 +401,53 @@ function ScanMusicPage() {
         )}
       </div>
 
+      {/* Non-AAC warning banner — hiện khi scan xong và có file chưa chuẩn AAC */}
+      {result && result.nonAacFiles && result.nonAacFiles.length > 0 && (
+        <div
+          style={{
+            margin: '20px 0',
+            padding: '16px 20px',
+            backgroundColor: '#2d2000',
+            border: '1px solid #f0a000',
+            borderRadius: '8px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '16px',
+          }}
+        >
+          <div>
+            <div style={{ fontSize: '15px', fontWeight: 'bold', color: '#f0c040', marginBottom: '4px' }}>
+              ⚠️ Phát hiện {result.nonAacFiles.length} file chưa phải chuẩn AAC
+            </div>
+            <div style={{ fontSize: '13px', color: '#c8a060', lineHeight: '1.5' }}>
+              Các file .mp3, .wav, .flac... cần được chuẩn hóa sang AAC (.m4a) để xuất playlist nhanh hơn (stream copy, không mã hóa lại).
+              File xuất sẽ được lưu vào thư mục con <strong style={{ color: '#f0c040' }}>aac_chuanhoa</strong> bên trong folder gốc, giữ nguyên tên file.
+            </div>
+          </div>
+          <button
+            onClick={handleAutoFillNonAac}
+            style={{
+              padding: '10px 18px',
+              backgroundColor: '#f0a000',
+              color: '#1a1000',
+              border: 'none',
+              borderRadius: '6px',
+              cursor: 'pointer',
+              fontSize: '13px',
+              fontWeight: 'bold',
+              whiteSpace: 'nowrap',
+              flexShrink: 0,
+            }}
+          >
+            Tự động điền &amp; chuẩn hóa
+          </button>
+        </div>
+      )}
+
       {/* Normalize Audio Section */}
       <div
+        id="normalize-section"
         style={{
           marginTop: '40px',
           padding: '20px',

@@ -4,7 +4,6 @@ import ScanMusicPage from './pages/Music/ScanMusicPage'
 import CreatePlaylistPage from './pages/Music/CreatePlaylistPage'
 import PreviewPlaylistPage from './pages/Music/PreviewPlaylistPage'
 import ExportAudioPage from './pages/Music/ExportAudioPage'
-import SongNhacPage from './pages/Music/SongNhacPage'
 import VideoToolsPage from './pages/Video/VideoToolsPage'
 import CutMergeVideoPage from './pages/Video/CutMergeVideoPage'
 import FinalExportTab from './pages/Video/FinalExportTab'
@@ -37,7 +36,6 @@ const KEEP_ALIVE_PAGES: KeepAlivePage[] = [
   { path: '/music/playlist', component: CreatePlaylistPage },
   { path: '/music/preview', component: PreviewPlaylistPage },
   { path: '/music/export', component: ExportAudioPage },
-  { path: '/music/song-nhac', component: SongNhacPage },
   { path: '/video/tools', component: VideoToolsPage },
   { path: '/video/cut-merge', component: CutMergeVideoPage },
   { path: '/video/final-export', component: FinalExportTab },
@@ -89,8 +87,6 @@ function Router() {
       {/* Fallback routes cho các path không match */}
       {!KEEP_ALIVE_PAGES.some(p => p.path === currentPath) && currentPath !== '/' && (
         <Routes>
-          <Route path="/music/visualizer-v2" element={<Navigate to="/music/scan" replace />} />
-          <Route path="/visualizer-v2-demo" element={<Navigate to="/music/scan" replace />} />
           <Route path="*" element={<Navigate to="/music/scan" replace />} />
         </Routes>
       )}

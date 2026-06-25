@@ -52,7 +52,7 @@ function sanitizeFileName(name: string): string {
     .toLowerCase()
 }
 
-type AudioQuality = 'mp3_320' | 'aac_384' | 'wav'
+type AudioQuality = 'mp3_320' | 'aac_384'
 
 function ExportAudioPage() {
   const [playlists, setPlaylists] = useState<PlaylistDefinition[]>([])
@@ -627,9 +627,9 @@ const filteredHistory = useMemo(() => {
           (fileNamePrefix?.trim() || '') + sanitizeFileName(pl.name)
 
         const format =
-          quality === 'mp3_320' ? 'mp3' : quality === 'aac_384' ? 'aac' : 'wav'
+          quality === 'mp3_320' ? 'mp3' : 'aac'
         const bitrateKbps =
-          quality === 'mp3_320' ? 320 : quality === 'aac_384' ? 384 : undefined
+          quality === 'mp3_320' ? 320 : 384
 
         const req: ExportPlaylistRequest = {
           playlistId: pl.id,
@@ -952,10 +952,9 @@ const filteredHistory = useMemo(() => {
           >
             <option value="mp3_320">MP3 (320 kbps)</option>
             <option value="aac_384">AAC (384 kbps, M4A – khuyến nghị YouTube)</option>
-            <option value="wav">WAV (lossless)</option>
           </select>
           <div style={{ marginTop: '4px', fontSize: '12px', color: '#666' }}>
-            MP3: Dung lượng file nhẹ hơn. AAC: Phù hợp với chất lượng video live. WAV: Dành cho file âm thanh chất lượng cao.
+            MP3: Dung lượng nhẹ hơn. AAC (M4A): Phù hợp với YouTube/Spotify, chất lượng cao hơn MP3 cùng bitrate.
           </div>
         </div>
 

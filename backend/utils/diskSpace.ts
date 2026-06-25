@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process'
+import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
@@ -10,6 +11,9 @@ export interface DiskSpaceInfo {
   drive: string
   total: number
   free: number
+  /** true khi KHÔNG đo được dung lượng thật (mọi phương pháp đều fail).
+   *  Caller PHẢI fail-open (không chặn) khi gặp cờ này — tránh chặn nhầm. */
+  unknown?: boolean
 }
 
 export interface SpaceCheckResult {
@@ -18,35 +22,51 @@ export interface SpaceCheckResult {
   enough: boolean
 }
 
+/**
+ * Đo dung lượng ổ chứa `targetPath`.
+ *
+ * Thứ tự ưu tiên:
+ *  1. fs.statfs — chính xác, cross-platform, không phụ thuộc WMIC (Node 18.15+/Electron 20+).
+ *  2. POSIX `df -k` (chỉ non-win fallback).
+ *
+ * KHÔNG dùng os.freemem() làm fallback (đó là RAM, không phải disk — gây cảnh báo sai).
+ * Nếu mọi cách fail → trả về { unknown: true } để caller fail-open thay vì chặn nhầm.
+ */
 export async function getDiskSpace(targetPath: string): Promise<DiskSpaceInfo> {
-  // FIX: Xử lý đúng đường dẫn, bao gồm network drive và UNC path
   let resolved: string
   try {
     resolved = path.resolve(targetPath || os.homedir())
-  } catch (err) {
-    // Nếu không resolve được, dùng home directory
+  } catch {
     resolved = os.homedir()
   }
 
-  if (process.platform === 'win32') {
-    // FIX: Xử lý network drive (\\server\share) và UNC path
-    let drive: string
-    if (resolved.startsWith('\\\\')) {
-      // Network drive: \\server\share -> lấy 2 ký tự đầu (\\)
-      // Nhưng network drive không có drive letter, cần xử lý khác
-      // Tạm thời dùng ổ C: làm fallback
-      drive = 'C:'
-      console.warn(`[diskSpace] Network drive detected (${resolved}), using C: as fallback`)
-    } else {
-      // Local drive: C:\path -> C:
-      drive = resolved.slice(0, 2).toUpperCase()
-      // Validate drive format (phải là X:)
-      if (!/^[A-Z]:$/.test(drive)) {
-        console.warn(`[diskSpace] Invalid drive format: ${drive}, using C: as fallback`)
-        drive = 'C:'
+  const driveLabel =
+    process.platform === 'win32'
+      ? (resolved.startsWith('\\\\') ? resolved : resolved.slice(0, 2).toUpperCase())
+      : resolved
+
+  // ── Phương pháp 1: fs.statfs (chính xác nhất, không cần WMIC) ──
+  // statfs có từ Node 18.15+. Electron 36 chạy Node 20 → luôn có.
+  try {
+    const statfs = (fs.promises as any).statfs as
+      | ((p: string) => Promise<{ bsize: number; blocks: number; bavail: number; bfree: number }>)
+      | undefined
+    if (typeof statfs === 'function') {
+      const st = await statfs(resolved)
+      const blockSize = st.bsize
+      const free = st.bavail * blockSize // bavail = block khả dụng cho user (chuẩn hơn bfree)
+      const total = st.blocks * blockSize
+      if (Number.isFinite(free) && Number.isFinite(total) && free >= 0 && total > 0) {
+        return { drive: driveLabel, free, total }
       }
     }
-    
+  } catch (err) {
+    console.warn('[diskSpace] fs.statfs failed, trying platform fallback:', err)
+  }
+
+  if (process.platform === 'win32') {
+    // ── Fallback Windows: WMIC (có thể đã bị gỡ trên Win10 mới / Win11) ──
+    const drive = /^[A-Z]:$/.test(driveLabel) ? driveLabel : 'C:'
     try {
       const { stdout } = await execFileAsync('wmic', [
         'logicaldisk',
@@ -67,87 +87,17 @@ export async function getDiskSpace(targetPath: string): Promise<DiskSpaceInfo> {
       const total = Number(matches.Size ?? 0)
       if (Number.isFinite(free) && Number.isFinite(total) && free > 0 && total > 0) {
         return { drive, free, total }
-      } else {
-        console.warn(`[diskSpace] Invalid disk space values: free=${free}, total=${total}, trying fallback`)
       }
     } catch (err) {
-      console.warn('[diskSpace] WMIC query failed, trying alternative method:', err)
+      console.warn('[diskSpace] WMIC fallback failed:', err)
     }
-    
-    // FIX: Thử dùng fs.statfs hoặc PowerShell để lấy disk space chính xác hơn
-    try {
-      // Thử dùng PowerShell để lấy disk space
-      const { stdout } = await execFileAsync('powershell', [
-        '-Command',
-        `Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Root -eq '${drive}\\' } | Select-Object -ExpandProperty Used,Free | ForEach-Object { $_.Free }`
-      ])
-      const freeStr = stdout.trim()
-      if (freeStr && !isNaN(Number(freeStr))) {
-        const free = Number(freeStr)
-        // PowerShell trả về bytes, nhưng cần verify
-        if (free > 0) {
-          // Thử lấy total từ WMIC lại
-          try {
-            const { stdout: wmicTotal } = await execFileAsync('wmic', [
-              'logicaldisk',
-              'where',
-              `Caption='${drive}'`,
-              'get',
-              'Size',
-              '/value',
-            ])
-            const totalMatch = wmicTotal.match(/Size=(\d+)/)
-            const total = totalMatch ? Number(totalMatch[1]) : free * 10 // Estimate
-            return { drive, free, total }
-          } catch {
-            return { drive, free, total: free * 10 } // Estimate total
-          }
-        }
-      }
-    } catch (psErr) {
-      console.warn('[diskSpace] PowerShell method failed:', psErr)
-    }
-    
-    // FIX: Fallback cuối cùng - dùng ổ C: nếu drive không hợp lệ
-    if (drive !== 'C:') {
-      console.warn(`[diskSpace] Cannot get space for ${drive}, trying C: as fallback`)
-      try {
-        const { stdout } = await execFileAsync('wmic', [
-          'logicaldisk',
-          'where',
-          `Caption='C:'`,
-          'get',
-          'FreeSpace,Size',
-          '/value',
-        ])
-        const matches = Object.fromEntries(
-          stdout
-            .split('\n')
-            .map((line) => line.trim())
-            .filter(Boolean)
-            .map((line) => line.split('='))
-        )
-        const free = Number(matches.FreeSpace ?? 0)
-        const total = Number(matches.Size ?? 0)
-        if (Number.isFinite(free) && Number.isFinite(total) && free > 0 && total > 0) {
-          console.warn(`[diskSpace] Using C: disk space as fallback for ${drive}`)
-          return { drive: 'C:', free, total }
-        }
-      } catch (fallbackErr) {
-        console.warn('[diskSpace] C: fallback also failed:', fallbackErr)
-      }
-    }
-    
-    // Last resort: return OS memory (không chính xác nhưng ít nhất không crash)
-    console.warn(`[diskSpace] All methods failed, using OS memory as last resort (not accurate)`)
-    return {
-      drive: 'C:',
-      free: os.freemem(),
-      total: os.totalmem(),
-    }
+
+    // Mọi cách fail → đánh dấu unknown (caller fail-open, KHÔNG chặn)
+    console.warn(`[diskSpace] Không đo được dung lượng ổ ${drive}. Trả về unknown (fail-open).`)
+    return { drive, free: Number.POSITIVE_INFINITY, total: 0, unknown: true }
   }
 
-  // POSIX fallback using `df -k`
+  // ── POSIX fallback: df -k ──
   try {
     const { stdout } = await execFileAsync('df', ['-k', resolved])
     const lines = stdout.trim().split('\n')
@@ -156,22 +106,15 @@ export async function getDiskSpace(targetPath: string): Promise<DiskSpaceInfo> {
       const totalKb = Number(parts[1])
       const freeKb = Number(parts[3])
       if (Number.isFinite(totalKb) && Number.isFinite(freeKb)) {
-        return {
-          drive: resolved,
-          total: totalKb * 1024,
-          free: freeKb * 1024,
-        }
+        return { drive: resolved, total: totalKb * 1024, free: freeKb * 1024 }
       }
     }
   } catch (err) {
-    console.warn('[diskSpace] df command failed, falling back to OS metrics:', err)
+    console.warn('[diskSpace] df command failed:', err)
   }
 
-  return {
-    drive: resolved,
-    free: os.freemem(),
-    total: os.totalmem(),
-  }
+  console.warn(`[diskSpace] Không đo được dung lượng ${resolved}. Trả về unknown (fail-open).`)
+  return { drive: resolved, free: Number.POSITIVE_INFINITY, total: 0, unknown: true }
 }
 
 export function checkMinimumSpace(freeBytes: number, minGigabytes: number): SpaceCheckResult {

@@ -264,9 +264,31 @@ async function normalizeSingleFile(
       fs.mkdirSync(outputDir, { recursive: true })
     }
 
-    // Tạo output path
+    // Tạo output path — giữ nguyên tên file gốc, chỉ đổi extension nếu cần
     const inputName = path.basename(inputFile, path.extname(inputFile))
-    const outputFile = path.join(outputDir, `${inputName}_normalized${extension}`)
+    const outputFile = path.join(outputDir, `${inputName}${extension}`)
+
+    // Nếu output trùng với input (cùng folder, cùng extension) → báo lỗi.
+    // User nên chỉ định outputFolder (subfolder) để tránh ghi đè file gốc.
+    if (path.resolve(outputFile) === path.resolve(inputFile)) {
+      return {
+        success: false,
+        error: 'File đầu ra trùng với file đầu vào. Vui lòng chỉ định thư mục xuất khác để tránh ghi đè.',
+      }
+    }
+
+    // Khi output dir trùng input dir nhưng đổi extension (vd track.wav → track.mp3),
+    // có thể tồn tại file `track.mp3` từ nguồn khác — refuse để tránh ghi đè im lặng.
+    if (
+      path.resolve(outputDir) === path.resolve(inputDir) &&
+      extension.toLowerCase() !== path.extname(inputFile).toLowerCase() &&
+      fs.existsSync(outputFile)
+    ) {
+      return {
+        success: false,
+        error: `File đầu ra "${path.basename(outputFile)}" đã tồn tại trong thư mục nguồn. Vui lòng chọn thư mục xuất khác để tránh ghi đè.`,
+      }
+    }
 
     // Backup file gốc nếu cần (luôn backup vào thư mục gốc)
     if (backupOriginal) {

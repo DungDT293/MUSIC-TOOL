@@ -4,6 +4,7 @@ export const VIDEO_FINAL_EXPORT_DONE = 'video:final-export:done'
 export const VIDEO_FINAL_EXPORT_ERROR = 'video:final-export:error'
 export const VIDEO_FINAL_EXPORT_SCAN_AUDIO = 'video:final-export:scan-audio'
 export const VIDEO_FINAL_EXPORT_SCAN_VIDEO = 'video:final-export:scan-video'
+export const VIDEO_FINAL_EXPORT_SCAN_IMAGE = 'video:final-export:scan-image'
 
 // ========================================
 // ✅ V2.2: EXPORT QUALITY PRESETS
@@ -90,26 +91,6 @@ export interface FinalExportSource {
   strictPairing?: boolean
 }
 
-export interface SubtitleOptions {
-  enabled: boolean
-  text: string // Text hiển thị (có thể dùng {filename}, {title}, {artist} để thay thế)
-  autoLyrics?: boolean // Tự động dùng lyrics từ metadata (ID3 tags) nếu có
-  useWhisper?: boolean // Tự động tạo subtitle bằng Whisper nếu không có lyrics trong metadata
-  whisperLanguage?: string // Ngôn ngữ cho Whisper: 'auto' (tự động), 'vi' (Tiếng Việt), 'en' (English), 'zh' (中文), 'ja' (日本語), 'ko' (한국어), 'th' (ไทย), 'fr' (Français), 'de' (Deutsch), 'es' (Español), 'it' (Italiano), 'pt' (Português), 'ru' (Русский), 'ar' (العربية), 'hi' (हिन्दी), v.v. (hỗ trợ ~99 ngôn ngữ)
-  subtitleStyle?: 'simple' | 'karaoke' | 'word-by-word' | 'dynamic' // Style của subtitle: simple (text tĩnh), karaoke (thanh màu chạy), word-by-word (chữ nhảy TikTok), dynamic (Alex Hormozi style)
-  subtitleFormat?: 'srt' | 'ass' // Format file subtitle: srt (đơn giản), ass (hỗ trợ hiệu ứng karaoke)
-  position?: 'top' | 'bottom' | 'center'
-  fontSize?: number
-  fontColor?: string // Hex color (e.g., '#ffffff')
-  subtitleFile?: string // Internal: Path to generated subtitle file (.srt/.ass) - set by backend, not user input
-  highlightColor?: string // Hex color cho karaoke highlight (e.g., '#ffff00')
-  backgroundColor?: string // Hex color (e.g., '#000000')
-  backgroundOpacity?: number // 0-1
-  fontFamily?: string // Font family (e.g., 'Arial', 'Roboto')
-  x?: number // Horizontal position (0-100, percentage)
-  y?: number // Vertical position (0-100, percentage)
-}
-
 // ✅ PHASE 2: Layer overlay system
 export interface OverlayLayer {
   id: string
@@ -132,10 +113,47 @@ export interface OverlayLayer {
   endTime?: number
 }
 
+// ✅ Chroma Key Overlay: Tách phông xanh/đen và đè lên video hoàn chỉnh
+export interface ChromaKeyOverlay {
+  enabled: boolean
+  /** Path đến video có phông xanh/đen cần tách nền */
+  videoPath: string
+  /** Loại nền: 'green' dùng chromakey (YUV), 'black' dùng colorkey (RGB) */
+  bgType: 'green' | 'black'
+  /** Hex color cần tách (e.g. '#00FF00' cho xanh, '#000000' cho đen) */
+  keyColor: string
+  /** Tolerance/similarity: 0.01–1.0 (cao = tách nhiều pixel hơn). Default: 0.15 */
+  similarity: number
+  /** Smoothing/blend: 0.0–1.0 (cao = viền mềm hơn). Default: 0.05 */
+  blend: number
+  /** Vị trí overlay: 'center' = chính giữa, 'bottom' = dưới cùng. Default: 'center' */
+  position: 'center' | 'bottom'
+  /** Scale factor: 0.1–2.0 (1.0 = kích thước gốc). Default: 1.0 */
+  scale: number
+}
+
+export type FinalExportVisualizerPreset = 'bars-spectrum' | 'line-waveform' | 'mirror-waveform' | 'neon-waveform'
+
+export interface FinalExportVisualizerOptions {
+  enabled: boolean
+  preset: FinalExportVisualizerPreset
+  position?: 'top' | 'center' | 'bottom'
+  widthPercent?: number
+  heightPercent?: number
+  marginBottomPx?: number
+  primaryColor?: string
+  secondaryColor?: string
+  opacity?: number
+  barCount?: number
+  sensitivity?: number
+}
+
 export interface FinalExportRequestPayload {
   requestId: string
   audioSource: FinalExportSource
   videoSource: FinalExportSource
+  /** Nguồn ảnh cho slideshow (tùy chọn) – khi có, engine sẽ render ảnh thành clip video tạm trước khi ghép nhạc */
+  imageSource?: FinalExportSource
   /** Nguồn video ưu tiên (tùy chọn) – các clip trong nguồn này sẽ được ưu tiên xuất hiện đầu video trước khi loop các clip khác */
   priorityVideoSource?: FinalExportSource
   outputFolder: string
@@ -152,24 +170,25 @@ export interface FinalExportRequestPayload {
   targetResolution?: string
   /** FPS mục tiêu khi unifyFormat = true, ví dụ '30', '30000/1001' */
   targetFps?: string
-  subtitle?: SubtitleOptions // Subtitle options cho video output
-  
   // ✅ V2.2: Quality preset system
   qualityPreset?: ExportQualityPreset // Default: 'fast' for backward compatibility
   
   // ✅ DEPRECATED (use qualityPreset instead)
   useGpuEncoding?: 'gpu' | 'cpu' | 'auto' // GPU encoding choice: 'gpu' = prefer GPU, 'cpu' = force CPU, 'auto' = auto-detect (default: 'auto')
-  
-  // ✅ PHASE 2: Canvas Export Engine (Option A - Full compositor)
-  // Frontend sends complete scene description for offline rendering
-  // This enables 100% WYSIWYG export matching canvas preview
-  canvasScene?: import('./canvasExportTypes').CanvasExportScene
-  
-  // ⚠️ DEPRECATED (Phase 2 Option B - not recommended)
-  // layers?: OverlayLayer[]
-  // canvasSize?: { width: number; height: number }
-  
+
+  // ✅ Chroma Key Overlay: video phông xanh/đen đè lên video hoàn chỉnh
+  chromaKeyOverlay?: ChromaKeyOverlay
+
+  /** Sóng nhạc/phổ nhạc vẽ lên video khi xuất (Tab 6) */
+  audioVisualizer?: FinalExportVisualizerOptions
+
   deleteSourceFiles?: boolean // Xóa file audio và video sau khi xuất xong (tùy chọn)
+
+  // ✅ Slideshow (pure images + music) parameters
+  perImageDurationSec?: number
+  imageAspectMode?: 'letterbox' | 'crop-fill' | 'blur-background'
+  imageTransition?: string
+  imageKenBurns?: boolean
 }
 
 export interface FinalExportProgressPayload {

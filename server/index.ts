@@ -40,11 +40,11 @@ export default {
       // ============================================
       const publicRoutes = ['/api/security/report', '/dashboard', '/', '/api/video/export', '/api/version-policy', '/api/migrate/v2']
       const isDashboardAPI = pathname.startsWith('/api/admin/')
-      const isPublicAuthRoute = pathname.startsWith('/api/auth/') && !pathname.startsWith('/api/auth/admin/')
+      const isAdminAuthRoute = pathname.startsWith('/api/auth/admin/')
 
       // Parse request body once for routes that need signature verification
       let parsedBody: any = null
-      if (!publicRoutes.includes(pathname) && !isDashboardAPI && !isPublicAuthRoute) {
+      if (!publicRoutes.includes(pathname) && !isDashboardAPI && !isAdminAuthRoute) {
         parsedBody = await request.clone().json().catch(() => ({}))
         const verification = await verifyRequestSignature(request, parsedBody, env)
 

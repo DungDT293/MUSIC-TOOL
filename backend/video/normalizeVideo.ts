@@ -1,12 +1,12 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { randomUUID } from 'crypto'
+import { createHash, randomUUID } from 'crypto'
 import { spawn } from 'child_process'
 import { getFfmpegPaths } from '../ffmpeg/config'
 import { getGpuInfo } from '../utils/gpuDetection'
-import { validateInputFiles } from './videoUtils'
+import { validateInputFiles, type ValidatedInputFile } from './videoUtils'
 import { videoJobManager } from './videoJobManager'
-import { buildNormalizeVfFilter } from './utils/normalizeVf'
+import { buildConcatSafeOutputArgs, buildNormalizeVfFilter, detectEncoderFromArgs } from './utils/normalizeVf'
 
 export interface NormalizeVideoRequest {
   inputFiles: string[]
@@ -15,6 +15,10 @@ export interface NormalizeVideoRequest {
   requestId?: string
   targetResolution?: string  // '1920x1080' | etc.
   targetFps?: string          // '24' | '25' | '30000/1001' | '30' | etc.
+  concatSafe?: boolean        // true = output profile optimized for concat copy
+  skipExisting?: boolean      // true = resume by reusing existing normalized files
+  writeManifest?: boolean     // true = write clip_pool_manifest.json
+  trustInputs?: boolean       // true = skip full ffprobe validation before encode
 }
 
 export interface NormalizeVideoResult {
@@ -24,7 +28,9 @@ export interface NormalizeVideoResult {
   error?: string
   processed: number
   failed: number
+  skipped?: number
   usedGpu: boolean
+  manifestPath?: string
 }
 
 interface NormalizeVideoProgressPayload {
@@ -35,6 +41,34 @@ interface NormalizeVideoProgressPayload {
   percent?: number
   message?: string
   error?: string
+}
+
+interface NormalizeManifestFile {
+  inputPath: string
+  outputPath: string
+  fileName: string
+  skipped: boolean
+  sizeBytes?: number
+}
+
+interface NormalizeManifest {
+  version: 1
+  kind: 'concat-safe-clip-pool'
+  createdAt: string
+  concatSafe: boolean
+  profile: {
+    container: 'mp4'
+    videoCodec: 'h264'
+    pixelFormat: 'yuv420p'
+    resolution: string
+    fps: string
+    videoTrackTimescale: number | null
+    audioCodec: 'aac'
+    audioSampleRate: number
+    audioChannels: number
+    gop: string | null
+  }
+  files: NormalizeManifestFile[]
 }
 
 export async function normalizeVideo(
@@ -67,13 +101,25 @@ export async function normalizeVideo(
     }
 
     // Validate input files (probe nhanh, bỏ qua file lỗi)
-    const { valid, invalid } = await validateInputFiles(inputFiles, 8)
+    const concatSafe = req.concatSafe !== false
+    const skipExisting = req.skipExisting !== false
+    const writeManifest = req.writeManifest !== false
+    const targetResolution = req.targetResolution || '1920x1080'
+    const targetFps = req.targetFps || '30'
+    const profileKey = `${targetResolution}|${targetFps}|concatSafe=${concatSafe}`
+
+    // Large clip pools can skip the up-front ffprobe pass and let FFmpeg reject bad files during encode.
+    const { valid, invalid } = req.trustInputs
+      ? { valid: inputFiles.map((filePath) => ({ path: filePath } as ValidatedInputFile)), invalid: [] }
+      : await validateInputFiles(inputFiles, 8)
 
     const totalFiles = inputFiles.length
     let processed = 0
     let failed = 0
     let validFailed = 0
+    let skipped = 0
     const outputPaths: string[] = []
+    const manifestFiles: NormalizeManifestFile[] = []
     let lastError: string | undefined
     let usedGpu = false
 
@@ -88,10 +134,8 @@ export async function normalizeVideo(
     const { ffmpeg } = getFfmpegPaths()
 
     // Build -vf filter
-    const vfFilter =
-      req.targetResolution && req.targetFps
-        ? buildNormalizeVfFilter(req.targetResolution, req.targetFps)
-        : 'scale=trunc(iw/2)*2:trunc(ih/2)*2,setsar=1,format=yuv420p'
+    const baseVfFilter = buildNormalizeVfFilter(targetResolution, targetFps)
+    const vfFilter = concatSafe ? `${baseVfFilter},setpts=PTS-STARTPTS` : baseVfFilter
 
     // Detect GPU encoder availability (try nvenc first)
     const preferGpu = req.useGpu !== false // default true
@@ -105,9 +149,7 @@ export async function normalizeVideo(
         throw new Error('Đã dừng bởi người dùng')
       }
 
-      const ext = '.mp4' // always output mp4
-      const baseName = path.basename(inputPath, path.extname(inputPath))
-      const outputPath = path.join(outputDir, `${baseName}_normalized${ext}`)
+      const outputPath = buildNormalizedOutputPath(inputPath, outputDir, profileKey)
 
       emitProgress({
         currentFile: path.basename(inputPath),
@@ -116,6 +158,21 @@ export async function normalizeVideo(
         percent: (index / validTotal) * 100,
         message: `Đang chuẩn hóa video ${index + 1}/${validTotal}...`,
       })
+
+      if (skipExisting && isUsableExistingOutput(outputPath)) {
+        processed++
+        skipped++
+        outputPaths.push(outputPath)
+        manifestFiles.push(buildManifestFile(inputPath, outputPath, true))
+        emitProgress({
+          currentFile: path.basename(inputPath),
+          currentIndex: index + 1,
+          totalFiles,
+          percent: ((index + 1) / validTotal) * 100,
+          message: `Da bo qua file da chuan hoa ${index + 1}/${validTotal}`,
+        })
+        continue
+      }
 
       // Try GPU encoding first, fallback to CPU
       const success = await tryEncodeFile(
@@ -126,6 +183,10 @@ export async function normalizeVideo(
         preferGpu,
         gpuInfo,
         requestId,
+        {
+          concatSafe,
+          targetFps,
+        },
         (gpu) => {
           if (gpu) usedGpu = true
         }
@@ -148,6 +209,7 @@ export async function normalizeVideo(
       if (success && fs.existsSync(outputPath)) {
         processed++
         outputPaths.push(outputPath)
+        manifestFiles.push(buildManifestFile(inputPath, outputPath, false))
         emitProgress({
           currentFile: path.basename(inputPath),
           currentIndex: index + 1,
@@ -171,8 +233,33 @@ export async function normalizeVideo(
 
     const elapsedMs = Date.now() - startTime
     console.log(
-      `[normalizeVideo] Completed. processed=${processed}, failed=${failed}, elapsed=${(elapsedMs / 1000).toFixed(1)}s`
+      `[normalizeVideo] Completed. processed=${processed}, skipped=${skipped}, failed=${failed}, elapsed=${(elapsedMs / 1000).toFixed(1)}s`
     )
+
+    let manifestPath: string | undefined
+    if (writeManifest && outputPaths.length > 0) {
+      manifestPath = path.join(outputDir, 'clip_pool_manifest.json')
+      const manifest: NormalizeManifest = {
+        version: 1,
+        kind: 'concat-safe-clip-pool',
+        createdAt: new Date().toISOString(),
+        concatSafe,
+        profile: {
+          container: 'mp4',
+          videoCodec: 'h264',
+          pixelFormat: 'yuv420p',
+          resolution: targetResolution,
+          fps: targetFps,
+          videoTrackTimescale: concatSafe ? 90000 : null,
+          audioCodec: 'aac',
+          audioSampleRate: 48000,
+          audioChannels: 2,
+          gop: concatSafe ? '1s closed/IDR cadence' : null,
+        },
+        files: manifestFiles,
+      }
+      fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf8')
+    }
 
     const success = validFailed === 0 && processed > 0
     return {
@@ -182,7 +269,9 @@ export async function normalizeVideo(
       error: success ? undefined : lastError || 'Một số video chuẩn hóa thất bại',
       processed,
       failed,
+      skipped,
       usedGpu,
+      manifestPath,
     }
   } catch (err: any) {
     const errorMessage = err?.message || String(err)
@@ -201,6 +290,7 @@ export async function normalizeVideo(
       error: errorMessage,
       processed: 0,
       failed: req.inputFiles?.length || 0,
+      skipped: 0,
       usedGpu: false,
     }
   }
@@ -218,6 +308,10 @@ async function tryEncodeFile(
   preferGpu: boolean,
   gpuInfo: Awaited<ReturnType<typeof getGpuInfo>> | null,
   requestId: string,
+  options: {
+    concatSafe: boolean
+    targetFps: string
+  },
   onGpuUsed: (used: boolean) => void
 ): Promise<boolean> {
   const gpuFfmpegPath =
@@ -227,7 +321,7 @@ async function tryEncodeFile(
 
   if (preferGpu && gpuFfmpegPath) {
     // Try GPU (nvenc)
-    const gpuOk = await runFfmpegEncode(gpuFfmpegPath, inputPath, outputPath, vfFilter, 'gpu', requestId)
+    const gpuOk = await runFfmpegEncode(gpuFfmpegPath, inputPath, outputPath, vfFilter, 'gpu', requestId, options)
     if (gpuOk) {
       onGpuUsed(true)
       return true
@@ -242,7 +336,7 @@ async function tryEncodeFile(
       onGpuUsed(false)
       return false
     }
-    const cpuOk = await runFfmpegEncode(ffmpeg, inputPath, outputPath, vfFilter, 'cpu', requestId)
+    const cpuOk = await runFfmpegEncode(ffmpeg, inputPath, outputPath, vfFilter, 'cpu', requestId, options)
     // Cleanup partial output if CPU encode also failed
     if (!cpuOk && fs.existsSync(outputPath)) {
       try { fs.unlinkSync(outputPath) } catch { /* ignore */ }
@@ -258,7 +352,7 @@ async function tryEncodeFile(
   }
 
   // CPU only
-  const ok = await runFfmpegEncode(ffmpeg, inputPath, outputPath, vfFilter, 'cpu', requestId)
+  const ok = await runFfmpegEncode(ffmpeg, inputPath, outputPath, vfFilter, 'cpu', requestId, options)
   onGpuUsed(false)
   return ok
 }
@@ -272,7 +366,11 @@ function runFfmpegEncode(
   outputPath: string,
   vfFilter: string,
   mode: 'gpu' | 'cpu',
-  requestId: string
+  requestId: string,
+  options: {
+    concatSafe: boolean
+    targetFps: string
+  }
 ): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
     let isSettled = false
@@ -286,6 +384,10 @@ function runFfmpegEncode(
       mode === 'gpu'
         ? ['-c:v', 'h264_nvenc', '-preset', 'p4', '-cq', '23', '-pix_fmt', 'yuv420p']
         : ['-c:v', 'libx264', '-preset', 'fast', '-crf', '23', '-pix_fmt', 'yuv420p']
+    const encoderName = detectEncoderFromArgs(encoderArgs)
+    const concatSafeOutputArgs = options.concatSafe
+      ? buildConcatSafeOutputArgs(encoderName, options.targetFps)
+      : []
 
     const args = [
       '-y',
@@ -295,8 +397,10 @@ function runFfmpegEncode(
       '-map', '0:a?',                    // Optional audio (tránh fail khi input không có audio)
       '-vf', vfFilter,
       ...encoderArgs,
+      ...concatSafeOutputArgs,
       '-vsync', 'cfr',                   // Force constant frame rate → tránh VFR stutter
       '-avoid_negative_ts', 'make_zero', // Fix negative timestamps
+      '-map_metadata', '-1',
       '-c:a', 'aac',
       '-b:a', '192k',
       '-ar', '48000',                    // Normalize sample rate
@@ -364,4 +468,44 @@ function runFfmpegEncode(
       safeResolve(false)
     })
   })
+}
+
+function buildNormalizedOutputPath(inputPath: string, outputDir: string, profileKey: string): string {
+  const baseName = sanitizeOutputBaseName(path.basename(inputPath, path.extname(inputPath)))
+  const hash = createHash('sha1')
+    .update(`${path.resolve(inputPath).toLowerCase()}\n${profileKey}`)
+    .digest('hex')
+    .slice(0, 10)
+  return path.join(outputDir, `${baseName}_${hash}_normalized.mp4`)
+}
+
+function sanitizeOutputBaseName(name: string): string {
+  const safe = name.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_').trim()
+  return (safe || 'video').slice(0, 120)
+}
+
+function isUsableExistingOutput(outputPath: string): boolean {
+  try {
+    const stat = fs.statSync(outputPath)
+    return stat.isFile() && stat.size > 64 * 1024
+  } catch {
+    return false
+  }
+}
+
+function buildManifestFile(inputPath: string, outputPath: string, skipped: boolean): NormalizeManifestFile {
+  let sizeBytes: number | undefined
+  try {
+    const stat = fs.statSync(outputPath)
+    if (stat.isFile()) sizeBytes = stat.size
+  } catch {
+    sizeBytes = undefined
+  }
+  return {
+    inputPath,
+    outputPath,
+    fileName: path.basename(outputPath),
+    skipped,
+    sizeBytes,
+  }
 }

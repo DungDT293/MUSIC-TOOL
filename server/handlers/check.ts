@@ -162,18 +162,14 @@ export async function handleCheck(request: Request, env: Env): Promise<Response>
   const normalizedRequestMachineId = (ma_may || '').trim()
 
   if (normalizedStoredMachineId !== normalizedRequestMachineId) {
-    console.warn('[handleCheck] Machine ID changed — updating:', {
+    console.warn('[handleCheck] Machine ID changed - rejecting:', {
       username: tai_khoan,
       old: normalizedStoredMachineId.substring(0, 16) + '...',
       new: normalizedRequestMachineId.substring(0, 16) + '...',
     })
     // Password đúng + tài khoản đã duyệt → cho phép đổi máy, cập nhật machineId mới
     // Ngăn chặn tình trạng user bị lock-out khi VPN/driver/Win11 làm machineId thay đổi
-    await env.DB.prepare(
-      'UPDATE registrations SET ma_may = ?1 WHERE id = ?2'
-    )
-      .bind(normalizedRequestMachineId, row.id)
-      .run()
+    return json({ allow: false, reason: 'Tài khoản này chỉ được dùng trên máy đã đăng ký. Admin cần đổi máy trước.' })
   }
 
   return json({
