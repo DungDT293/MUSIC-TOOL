@@ -7,16 +7,28 @@ vi.mock('../../../backend/ffmpeg/probe', () => ({
   probeFile: vi.fn(),
 }))
 
-vi.mock('../../../backend/music/scanStore', () => ({
-  saveScanResult: vi.fn(),
-}))
-
 import { probeFile } from '../../../backend/ffmpeg/probe'
-import { scanMusicFolders } from '../../../backend/music/scanMusic'
+import { __scanMusicTestUtils, scanMusicFolders } from '../../../backend/music/scanMusic'
 
 const tempDirs: string[] = []
 
 describe('scanMusicFolders', () => {
+  it('normalizes legacy folders into one scan genre', () => {
+    const config = __scanMusicTestUtils.normalizeScanPayload({
+      priorityFolder: 'E:/music/priority',
+      randomFolder: 'E:/music/random',
+    })
+
+    expect(config.genres).toEqual([
+      {
+        id: 'default',
+        name: 'Mặc định',
+        priorityFolders: ['E:/music/priority'],
+        randomFolders: ['E:/music/random'],
+      },
+    ])
+  })
+
   beforeEach(() => {
     vi.clearAllMocks()
   })
@@ -51,6 +63,8 @@ describe('scanMusicFolders', () => {
       {
         priorityFolder: priorityDir,
         randomFolder: null,
+        forceRescan: true,
+        persist: false,
       },
       {
         onProgress: (progress) => {
@@ -90,6 +104,8 @@ describe('scanMusicFolders', () => {
       {
         priorityFolder: priorityDir,
         randomFolder: null,
+        forceRescan: true,
+        persist: false,
       },
       {
         signal: controller.signal,
