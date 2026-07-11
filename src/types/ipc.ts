@@ -166,15 +166,43 @@ export interface DiskInfoSummary {
   updatedAt: number
 }
 
+export type MusicFolderType = 'priority' | 'random'
+
+export interface MusicScanGenre {
+  id: string
+  name: string
+  priorityFolders: string[]
+  randomFolders: string[]
+}
+
+export interface ScanMusicConfig {
+  version: 2
+  genres: MusicScanGenre[]
+}
+
 export interface ScannedTrack {
   id: string
   path: string
   fileName: string
-  folderType: 'priority' | 'random'
+  folderType: MusicFolderType
+  genreId?: string
+  genreName?: string
+  sourceFolder?: string
   duration: number
   size: number
   codec?: string
   bitrate?: number
+}
+
+export interface GenreScanSummary {
+  genreId: string
+  genreName: string
+  priorityCount: number
+  randomCount: number
+  totalCount: number
+  priorityDuration: number
+  randomDuration: number
+  totalDuration: number
 }
 
 export interface ScanSummary {
@@ -184,19 +212,30 @@ export interface ScanSummary {
   priorityDuration: number
   randomDuration: number
   totalDuration: number
+  genres?: GenreScanSummary[]
 }
 
 export interface ScanMusicResult {
   tracks: ScannedTrack[]
   summary: ScanSummary
   scannedAt?: number
+  config?: ScanMusicConfig
+  cacheStatus?: 'scanned' | 'reused' | 'loaded'
   /** Các file audio KHÔNG phải chuẩn AAC (.m4a / .aac). Cần chuẩn hóa. */
   nonAacFiles?: string[]
+}
+
+export interface ScanMusicFoldersPayload {
+  priorityFolder?: string | null
+  randomFolder?: string | null
+  genres?: MusicScanGenre[]
+  forceRescan?: boolean
 }
 
 export interface PlaylistTrack extends ScannedTrack {
   order: number
   cumulativeDuration: number
+  role?: 'ending'
 }
 
 export interface PlaylistDefinition {
@@ -208,6 +247,8 @@ export interface PlaylistDefinition {
   randomDurationSec: number
   priorityCount: number
   randomCount: number
+  endingDurationSec?: number
+  endingCount?: number
   tracks: PlaylistTrack[]
   createdAt: number
 }
@@ -250,6 +291,7 @@ export interface BuildPlaylistsOptions {
   targetDurationMinutes: number
   priorityRatioMin?: number
   priorityRatioMax?: number
+  endingTracks?: ScannedTrack[]
   // Tham số cho crossfade: nếu có, sẽ tính toán target duration để đảm bảo sau crossfade vẫn đạt target
   crossfadeDurationSec?: number // Thời lượng crossfade (giây), nếu có thì sẽ điều chỉnh target duration
 }
@@ -689,6 +731,9 @@ export interface AutopilotFoldersConfig {
   autoCreateDailySubfolder: boolean
   priorityMusicFolder: string
   randomMusicFolder: string
+  priorityVideoFolder?: string
+  endingAudioPaths?: string[]
+  minVideoClipsTarget?: number
 }
 
 export interface AutopilotConfig {
@@ -829,7 +874,7 @@ export interface IPCAPI {
   }
   selectVideoFilesMulti: () => Promise<string[] | null>
   selectManyVideos: () => Promise<string[] | null>
-  scanMusicFolders: (payload: { priorityFolder: string | null; randomFolder: string | null }) => Promise<ScanMusicResult>
+  scanMusicFolders: (payload: ScanMusicFoldersPayload) => Promise<ScanMusicResult>
   getLastScanResult: () => Promise<ScanMusicResult | null>
   createPlaylists: (options: BuildPlaylistsOptions) => Promise<BuildPlaylistsResult>
   listPlaylists: () => Promise<PlaylistDefinition[]>
@@ -944,6 +989,11 @@ export interface IPCAPI {
     scanVideoSource: (payload: {
       requestId: string
       videoSource: FinalExportRequestPayload['videoSource']
+    }) => Promise<FinalExportScanResult>
+    scanImageSource?: (payload: {
+      requestId: string
+      imageSource: FinalExportRequestPayload['imageSource']
+      perImageDurationSec?: number
     }) => Promise<FinalExportScanResult>
     onProgress: (handler: (payload: FinalExportProgressPayload) => void) => () => void
     onDone: (handler: (payload: FinalExportDonePayload) => void) => () => void

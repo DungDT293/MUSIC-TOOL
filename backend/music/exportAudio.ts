@@ -92,6 +92,24 @@ function createConcatListFile(
   return listFile
 }
 
+function recomputePlaylistTracks(tracks: PlaylistDefinition['tracks']): PlaylistDefinition['tracks'] {
+  let cumulativeDuration = 0
+  return tracks.map((track, index) => {
+    cumulativeDuration += track.duration
+    return {
+      ...track,
+      order: index + 1,
+      cumulativeDuration,
+    }
+  })
+}
+
+function getEndingDurationSec(playlist: PlaylistDefinition): number {
+  return playlist.endingDurationSec ?? playlist.tracks
+    .filter(track => track.role === 'ending')
+    .reduce((sum, track) => sum + track.duration, 0)
+}
+
 /**
  * Pre-normalize từng track riêng lẻ bằng FFmpeg loudnorm (EBU R128).
  * Mỗi bài được analyze và normalize RIÊNG → đảm bảo âm lượng đều giữa các bài.
@@ -345,9 +363,12 @@ export async function exportPlaylistToFile(
       req.format === 'aac' ? 256 : req.format === 'mp3' ? 320 : undefined
     const bitrate = req.bitrateKbps ?? defaultBitrate
     
-    // Target duration là thời lượng hiển thị trong UI (người dùng mong đợi)
-    // File xuất ra PHẢI đúng thời lượng này
-    const targetDurationSec = playlist.targetDurationSec || playlist.totalDurationSec
+    // Target duration là thời lượng hiển thị trong UI (người dùng mong đợi).
+    // Nhạc role=ending là yêu cầu nối thêm sau target chính, nên output dài hơn target.
+    const endingDurationSec = getEndingDurationSec(playlist)
+    const targetDurationSec = endingDurationSec > 0
+      ? playlist.totalDurationSec
+      : (playlist.targetDurationSec || playlist.totalDurationSec)
     
     // Tính duration thực tế sẽ xuất ra (sẽ được cập nhật khi có crossfade)
     let totalDurationSec = playlist.totalDurationSec
@@ -552,39 +573,40 @@ export async function exportPlaylistToFile(
           const availableTracks = scanResult.tracks.filter(
             (t) => !usedTrackIds.has(t.id) && t.duration > crossfadeDurationSec,
           )
-          
+
           if (availableTracks.length === 0) {
             console.warn(`[exportAudio] Không còn bài nhạc nào để thêm vào playlist.`)
           } else {
-            // Thêm bài nhạc vào playlist
+            // Thêm bài nhạc vào playlist. Nếu có role=ending, chèn filler TRƯỚC ending để ending vẫn là cuối.
             const tracksToAdd: PlaylistTrack[] = []
             let addedDuration = 0
-            let lastTrackId = playlist.tracks[playlist.tracks.length - 1]?.id || ''
-            
+            const endingStartIndex = playlist.tracks.findIndex(t => t.role === 'ending')
+            const mainTracks = endingStartIndex >= 0 ? playlist.tracks.slice(0, endingStartIndex) : playlist.tracks
+            const endingTracks = endingStartIndex >= 0 ? playlist.tracks.slice(endingStartIndex) : []
+            let lastTrackId = mainTracks[mainTracks.length - 1]?.id || ''
+
             // Shuffle available tracks để thêm ngẫu nhiên (Fisher-Yates)
             const shuffled = [...availableTracks]
             for (let si = shuffled.length - 1; si > 0; si--) {
               const sj = Math.floor(Math.random() * (si + 1));
               [shuffled[si], shuffled[sj]] = [shuffled[sj], shuffled[si]]
             }
-            
+
             for (const track of shuffled) {
               if (tracksToAdd.length >= estimatedTracksNeeded + 10) break // Thêm thêm 10 bài để đảm bảo đủ
-              
+
               // Tránh trùng liên tiếp
               if (track.id === lastTrackId && shuffled.length > 1) continue
-              
-              // Thêm bài vào danh sách
-              const cumulativeDuration = playlist.totalDurationSec + addedDuration + track.duration
+
               tracksToAdd.push({
                 ...track,
-                order: playlist.tracks.length + tracksToAdd.length + 1,
-                cumulativeDuration,
+                order: mainTracks.length + tracksToAdd.length + 1,
+                cumulativeDuration: mainTracks.reduce((s, t) => s + t.duration, 0) + addedDuration + track.duration,
               })
-              
+
               addedDuration += track.duration
               lastTrackId = track.id
-              
+
               // Tính lại estimated duration sau khi thêm bài này
               const newTotalTracks = totalTracks + tracksToAdd.length
               const newCrossfadePoints = newTotalTracks > 1 ? newTotalTracks - 1 : 0
@@ -593,21 +615,22 @@ export async function exportPlaylistToFile(
                 0,
                 newTotalDuration - (crossfadeDurationSec * newCrossfadePoints),
               )
-              
+
               // Nếu đã đủ hoặc vượt target, dừng lại
               if (newEstimatedDuration >= targetDurationSec - 1.0) {
                 break
               }
             }
-            
+
             if (tracksToAdd.length > 0) {
+              const extendedTracks = recomputePlaylistTracks([...mainTracks, ...tracksToAdd, ...endingTracks])
               // Tạo playlist mới với thêm bài nhạc
               const extendedPlaylist: PlaylistDefinition = {
                 ...playlist,
-                tracks: [...playlist.tracks, ...tracksToAdd],
-                totalDurationSec: playlist.totalDurationSec + addedDuration,
+                tracks: extendedTracks,
+                totalDurationSec: extendedTracks.reduce((sum, track) => sum + track.duration, 0),
               }
-              
+
               // Cập nhật lại các giá trị
               const newTotalTracks = extendedPlaylist.tracks.length
               const newCrossfadePoints = newTotalTracks > 1 ? newTotalTracks - 1 : 0

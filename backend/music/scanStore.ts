@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import type { ScanMusicResult } from './scanMusic'
+import type { ScanMusicConfig, ScanMusicResult } from './scanMusic'
 
 const STORE_DIR = path.join(os.homedir(), '.93-media-tool-mix-nhac')
 const STORE_FILE = path.join(STORE_DIR, 'music-scan-result.json')
@@ -12,6 +12,41 @@ function ensureStoreDir() {
   if (!fs.existsSync(STORE_DIR)) {
     fs.mkdirSync(STORE_DIR, { recursive: true })
   }
+}
+
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`
+  if (value && typeof value === 'object') {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, item]) => `${JSON.stringify(key)}:${stableStringify(item)}`)
+      .join(',')}}`
+  }
+  return JSON.stringify(value)
+}
+
+export function scanConfigKey(config?: ScanMusicConfig): string {
+  if (!config) return ''
+  return stableStringify({
+    version: config.version,
+    genres: (config.genres ?? []).map((genre) => ({
+      id: genre.id,
+      name: genre.name,
+      priorityFolders: [...(genre.priorityFolders ?? [])].map((f) => f.trim()).filter(Boolean).sort((a, b) => a.localeCompare(b)),
+      randomFolders: [...(genre.randomFolders ?? [])].map((f) => f.trim()).filter(Boolean).sort((a, b) => a.localeCompare(b)),
+    })).sort((a, b) => a.id.localeCompare(b.id)),
+  })
+}
+
+export function isScanResultUsable(result: ScanMusicResult | null | undefined, config?: ScanMusicConfig): result is ScanMusicResult {
+  if (!result || !Array.isArray(result.tracks)) return false
+  if (config && scanConfigKey(result.config) !== scanConfigKey(config)) return false
+  for (const track of result.tracks) {
+    if (!track?.path || !path.isAbsolute(track.path) || !fs.existsSync(track.path)) {
+      return false
+    }
+  }
+  return true
 }
 
 export function saveScanResult(result: ScanMusicResult): void {
@@ -44,6 +79,18 @@ export function loadScanResult(): ScanMusicResult | null {
     console.warn('[scanStore] Failed to load scan result:', err)
     return null
   }
+}
+
+export function loadUsableScanResult(): ScanMusicResult | null {
+  const result = loadScanResult()
+  if (!isScanResultUsable(result)) return null
+  return { ...result, cacheStatus: 'loaded' }
+}
+
+export function loadReusableScanResult(config: ScanMusicConfig): ScanMusicResult | null {
+  const result = loadScanResult()
+  if (!isScanResultUsable(result, config)) return null
+  return { ...result, cacheStatus: 'reused' }
 }
 
 export function clearScanResult(): void {

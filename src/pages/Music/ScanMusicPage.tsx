@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { ScanMusicResult } from '../../types/ipc'
+import { ScanMusicResult, type MusicScanGenre } from '../../types/ipc'
 
 function formatDuration(seconds: number): string {
   const s = Math.floor(seconds)
@@ -19,11 +19,57 @@ function formatDurationShort(seconds: number): string {
   return `${m}:${sec.toString().padStart(2, '0')}`
 }
 
+const SCAN_RESULT_STORAGE_KEY = 'scanResultV1'
+let scanGenreCounter = 1
+
+function createDefaultGenre(name = 'Mặc định'): MusicScanGenre {
+  return {
+    id: `genre-${Date.now()}-${scanGenreCounter++}`,
+    name,
+    priorityFolders: [],
+    randomFolders: [],
+  }
+}
+
+function splitFolderText(value: string): string[] {
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+}
+
+function mergeFolders(current: string[], selected: string[]): string[] {
+  const seen = new Set<string>()
+  const result: string[] = []
+  for (const folder of [...current, ...selected]) {
+    const trimmed = folder.trim()
+    if (!trimmed) continue
+    const key = trimmed.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    result.push(trimmed)
+  }
+  return result
+}
+
+function cleanupGenres(genres: MusicScanGenre[]): MusicScanGenre[] {
+  return genres.map((genre, index) => ({
+    id: genre.id || `genre-${index + 1}`,
+    name: genre.name.trim() || `Thể loại ${index + 1}`,
+    priorityFolders: mergeFolders([], genre.priorityFolders ?? []),
+    randomFolders: mergeFolders([], genre.randomFolders ?? []),
+  })).filter((genre) => genre.priorityFolders.length > 0 || genre.randomFolders.length > 0)
+}
+
+function genresFromResult(result: ScanMusicResult | null): MusicScanGenre[] {
+  const genres = result?.config?.genres
+  return Array.isArray(genres) && genres.length > 0 ? genres : [createDefaultGenre()]
+}
+
 function ScanMusicPage() {
   console.log('[ScanMusicPage] Component mounted/rendered')
-  
-  const [priorityFolder, setPriorityFolder] = useState<string | null>(null)
-  const [randomFolder, setRandomFolder] = useState<string | null>(null)
+
+  const [genres, setGenres] = useState<MusicScanGenre[]>(() => [createDefaultGenre()])
   const [result, setResult] = useState<ScanMusicResult | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -53,53 +99,95 @@ function ScanMusicPage() {
     errors: Array<{ file: string; error: string }>
     outputFiles: string[]
   } | null>(null)
+  const [normalizeOpen, setNormalizeOpen] = useState(false)
 
   useEffect(() => {
     console.log('[ScanMusicPage] useEffect - component mounted')
+    let disposed = false
+
+    const hydrateSavedScan = async () => {
+      const hasBackendCacheApi = typeof window.api.getLastScanResult === 'function'
+      try {
+        if (hasBackendCacheApi) {
+          const saved = await window.api.getLastScanResult()
+          if (!disposed && saved?.tracks?.length) {
+            setResult(saved)
+            setGenres(genresFromResult(saved))
+            localStorage.setItem(SCAN_RESULT_STORAGE_KEY, JSON.stringify(saved))
+            window.dispatchEvent(new CustomEvent('musicScanCompleted', { detail: saved }))
+          }
+          return
+        }
+      } catch (err) {
+        console.warn('[ScanMusicPage] getLastScanResult failed:', err)
+      }
+
+      try {
+        const raw = localStorage.getItem(SCAN_RESULT_STORAGE_KEY)
+        if (!raw || disposed) return
+        const parsed = JSON.parse(raw) as ScanMusicResult
+        setResult(parsed)
+        setGenres(genresFromResult(parsed))
+      } catch (err) {
+        console.warn('[ScanMusicPage] scanResultV1 parse failed:', err)
+      }
+    }
+
+    hydrateSavedScan()
+
     return () => {
+      disposed = true
       console.log('[ScanMusicPage] useEffect cleanup - component unmounted')
     }
   }, [])
 
-  const handleTestSystemInfo = async () => {
+  const handleAddGenre = () => {
+    setGenres(prev => [...prev, createDefaultGenre(`Thể loại ${prev.length + 1}`)])
+    setError(null)
+  }
+
+  const handleDuplicateGenre = (genre: MusicScanGenre) => {
+    setGenres(prev => [...prev, {
+      ...genre,
+      id: `genre-${Date.now()}-${scanGenreCounter++}`,
+      name: `${genre.name} (copy)`,
+    }])
+    setError(null)
+  }
+
+  const handleRemoveGenre = (id: string) => {
+    setGenres(prev => prev.length <= 1 ? prev : prev.filter(genre => genre.id !== id))
+    setResult(null)
+    setError(null)
+  }
+
+  const handleUpdateGenre = (id: string, patch: Partial<MusicScanGenre>) => {
+    setGenres(prev => prev.map(genre => genre.id === id ? { ...genre, ...patch } : genre))
+    setResult(null)
+    setError(null)
+  }
+
+  const handleSelectGenreFolders = async (id: string, field: 'priorityFolders' | 'randomFolders') => {
     try {
-      const sys = await window.api.getSystemInfo()
-      console.log('SYSTEM INFO:', sys)
-      alert(`CPU: ${sys.cpuModel}\nCores: ${sys.cpuCores}\nRAM: ${sys.ramGB} GB\nGPU: ${sys.gpuModel || 'N/A'}\nFFmpeg: ${sys.ffmpegVersion || 'N/A'}`)
+      const dialogResult = await window.api.dialog?.openFile?.({
+        title: 'Chọn thư mục nhạc',
+        properties: ['openDirectory', 'multiSelections'],
+      })
+      const selected = dialogResult && !dialogResult.canceled ? dialogResult.filePaths : []
+      if (!selected || selected.length === 0) return
+      setGenres(prev => prev.map(genre => genre.id === id
+        ? { ...genre, [field]: mergeFolders(genre[field], selected) }
+        : genre))
+      setResult(null)
+      setError(null)
     } catch (err) {
-      console.error('Failed to get system info:', err)
-      alert('Failed to get system info. Check console for details.')
+      console.error('Failed to select folders:', err)
     }
   }
 
-  const handleSelectPriorityFolder = async () => {
-    try {
-      const path = await window.api.selectFolder()
-      if (path) {
-        setPriorityFolder(path)
-        setResult(null)
-        setError(null)
-      }
-    } catch (err) {
-      console.error('Failed to select folder:', err)
-    }
-  }
-
-  const handleSelectRandomFolder = async () => {
-    try {
-      const path = await window.api.selectFolder()
-      if (path) {
-        setRandomFolder(path)
-        setResult(null)
-        setError(null)
-      }
-    } catch (err) {
-      console.error('Failed to select folder:', err)
-    }
-  }
-
-  const handleScan = async () => {
-    if (!priorityFolder && !randomFolder) {
+  const handleScan = async (forceRescan = false) => {
+    const scanGenres = cleanupGenres(genres)
+    if (scanGenres.length === 0) {
       setError('Vui lòng chọn ít nhất 1 thư mục.')
       return
     }
@@ -109,10 +197,24 @@ function ScanMusicPage() {
     setResult(null)
 
     try {
-      const res = await window.api.scanMusicFolders({ priorityFolder, randomFolder })
+      const firstPriorityFolder = scanGenres.flatMap((genre) => genre.priorityFolders)[0] ?? null
+      const firstRandomFolder = scanGenres.flatMap((genre) => genre.randomFolders)[0] ?? null
+      // Multi-genre scan must go through new backend. Sending legacy folders to old main silently scans only genre 1.
+      const payload = scanGenres.length === 1
+        ? { genres: scanGenres, priorityFolder: firstPriorityFolder, randomFolder: firstRandomFolder, forceRescan }
+        : { genres: scanGenres, forceRescan }
+      const res = await window.api.scanMusicFolders(payload)
+      if (scanGenres.length > 1 && (!res.config?.genres || res.config.genres.length < scanGenres.length)) {
+        setError('Backend dev app chưa reload nên chỉ quét được 1 thể loại. Tắt/mở lại dev app rồi bấm Quét nhạc.')
+        return
+      }
       setResult(res)
+      if (res.config?.genres?.length) setGenres(res.config.genres)
     } catch (e: any) {
-      setError(e?.message || 'Có lỗi xảy ra khi quét nhạc.')
+      const message = e?.message || 'Có lỗi xảy ra khi quét nhạc.'
+      setError(scanGenres.length > 1 && message.includes('No folders provided')
+        ? 'Backend dev app chưa reload nên chưa nhận payload nhiều thể loại. Tắt/mở lại dev app rồi bấm Quét nhạc.'
+        : message)
     } finally {
       setLoading(false)
     }
@@ -121,7 +223,7 @@ function ScanMusicPage() {
   // Lưu kết quả vào localStorage và dispatch custom event
   useEffect(() => {
     if (result) {
-      localStorage.setItem('scanResultV1', JSON.stringify(result))
+      localStorage.setItem(SCAN_RESULT_STORAGE_KEY, JSON.stringify(result))
       
       // Dispatch custom event để Tab 2 biết có scan mới
       window.dispatchEvent(new CustomEvent('musicScanCompleted', { detail: result }))
@@ -199,7 +301,7 @@ function ScanMusicPage() {
     setOutputFormat('aac')
     setNormalizeResult(null)
 
-    // Scroll xuống phần normalize
+    setNormalizeOpen(true)
     setTimeout(() => {
       document.getElementById('normalize-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
     }, 100)
@@ -296,109 +398,122 @@ function ScanMusicPage() {
     }
   }
 
+  const canScan = cleanupGenres(genres).length > 0
+
   return (
     <div style={{ padding: '20px' }}>
-      <h1 style={{ marginBottom: '20px', fontSize: '32px', fontWeight: 'bold' }}>
-        Quét nhạc
-      </h1>
-      <p style={{ color: '#888', fontSize: '16px', lineHeight: '1.6', marginBottom: '30px' }}>
-        Trang này sẽ cho phép chọn folder nhạc ưu tiên và random để quét thư viện.
-      </p>
-
-      {/* Test button (small) */}
-      <div style={{ marginBottom: '30px' }}>
-        <button
-          onClick={handleTestSystemInfo}
-          style={{
-            padding: '6px 12px',
-            backgroundColor: '#555',
-            color: '#fff',
-            border: 'none',
-            borderRadius: '4px',
-            cursor: 'pointer',
-            fontSize: '12px',
-          }}
-        >
-          [TEST] Kiểm tra hệ thống
-        </button>
-      </div>
-
-      {/* Folder selection */}
-      <div style={{ marginBottom: '30px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
-        {/* Priority folder */}
-        <div style={{ padding: '15px', backgroundColor: '#252526', borderRadius: '6px' }}>
-          <h3 style={{ marginBottom: '10px', fontSize: '16px', fontWeight: 'bold' }}>
-            Nhạc ưu tiên
-          </h3>
-          <div style={{ marginBottom: '10px', color: '#ccc', fontSize: '14px' }}>
-            {priorityFolder || 'Chưa chọn'}
-          </div>
-          <button
-            onClick={handleSelectPriorityFolder}
-            disabled={loading}
-            style={{
-              padding: '8px 16px',
-              backgroundColor: '#007acc',
-              color: '#fff',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: loading ? 'not-allowed' : 'pointer',
-              fontSize: '14px',
-            }}
-          >
-            Chọn thư mục
-          </button>
-        </div>
-
-        {/* Random folder */}
-        <div style={{ padding: '15px', backgroundColor: '#252526', borderRadius: '6px' }}>
-          <h3 style={{ marginBottom: '10px', fontSize: '16px', fontWeight: 'bold' }}>
-            Nhạc random
-          </h3>
-          <div style={{ marginBottom: '10px', color: '#ccc', fontSize: '14px' }}>
-            {randomFolder || 'Chưa chọn'}
-          </div>
-          <button
-            onClick={handleSelectRandomFolder}
-            disabled={loading}
-            style={{
-              padding: '8px 16px',
-              backgroundColor: '#007acc',
-              color: '#fff',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: loading ? 'not-allowed' : 'pointer',
-              fontSize: '14px',
-            }}
-          >
-            Chọn thư mục
-          </button>
-        </div>
-      </div>
-
-      {/* Scan button */}
-      <div style={{ marginBottom: '30px' }}>
-        <button
-          onClick={handleScan}
-          disabled={loading || (!priorityFolder && !randomFolder)}
-          style={{
-            padding: '12px 24px',
-            backgroundColor: loading ? '#555' : '#007acc',
-            color: '#fff',
-            border: 'none',
-            borderRadius: '6px',
-            cursor: loading || (!priorityFolder && !randomFolder) ? 'not-allowed' : 'pointer',
-            fontSize: '16px',
-            fontWeight: 'bold',
-          }}
-        >
-          {loading ? 'Đang quét...' : 'Quét nhạc'}
-        </button>
-        {loading && (
-          <p style={{ marginTop: '10px', color: '#888', fontSize: '14px' }}>
-            Đang quét... (có thể mất vài phút nếu thư viện lớn)
+      <div style={{ marginBottom: '16px', display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
+        <div>
+          <h1 style={{ margin: '0 0 6px', fontSize: '28px', fontWeight: 'bold' }}>
+            Quét nhạc
+          </h1>
+          <p style={{ color: '#9ca3af', fontSize: '14px', lineHeight: '1.5', margin: 0 }}>
+            Chọn folder ưu tiên/random theo từng thể loại. Kết quả được lưu lại nếu file còn đúng đường dẫn.
           </p>
-        )}
+        </div>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+          <button
+            onClick={handleAddGenre}
+            disabled={loading}
+            style={{ padding: '9px 14px', backgroundColor: '#2563eb', color: '#fff', border: 'none', borderRadius: '6px', cursor: loading ? 'not-allowed' : 'pointer', fontWeight: 'bold' }}
+          >
+            + Thêm thể loại
+          </button>
+          <button
+            onClick={() => handleScan(false)}
+            disabled={loading || !canScan}
+            style={{
+              padding: '10px 20px',
+              backgroundColor: loading || !canScan ? '#555' : '#007acc',
+              color: '#fff',
+              border: 'none',
+              borderRadius: '6px',
+              cursor: loading || !canScan ? 'not-allowed' : 'pointer',
+              fontSize: '14px',
+              fontWeight: 'bold',
+            }}
+          >
+            {loading ? 'Đang quét...' : 'Quét nhạc'}
+          </button>
+          {result && (
+            <button
+              onClick={() => handleScan(true)}
+              disabled={loading || !canScan}
+              style={{ padding: '10px 14px', backgroundColor: '#1f2937', color: '#e5e7eb', border: '1px solid #4b5563', borderRadius: '6px', cursor: loading || !canScan ? 'not-allowed' : 'pointer', fontSize: '13px', fontWeight: 'bold' }}
+            >
+              Quét lại từ đầu
+            </button>
+          )}
+        </div>
+      </div>
+
+      {loading && (
+        <p style={{ margin: '0 0 12px', color: '#888', fontSize: '13px' }}>
+          Đang quét... có thể mất vài phút nếu thư viện lớn.
+        </p>
+      )}
+
+      <div style={{ marginBottom: '18px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+        {genres.map((genre, index) => (
+          <div key={genre.id} style={{ padding: '12px', backgroundColor: '#252526', borderRadius: '8px', border: '1px solid #333' }}>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '10px' }}>
+              <strong style={{ fontSize: '14px', minWidth: '70px' }}>{index + 1}.</strong>
+              <input
+                value={genre.name}
+                onChange={(e) => handleUpdateGenre(genre.id, { name: e.target.value })}
+                disabled={loading}
+                placeholder="VD: Tomorrowland, Lofi, Party Mix..."
+                style={{ flex: 1, padding: '7px 10px', backgroundColor: '#1e1e1e', color: '#fff', border: '1px solid #444', borderRadius: '4px' }}
+              />
+              <button
+                onClick={() => handleDuplicateGenre(genre)}
+                disabled={loading}
+                style={{ padding: '7px 10px', backgroundColor: '#333', color: '#ddd', border: '1px solid #555', borderRadius: '4px', cursor: loading ? 'not-allowed' : 'pointer' }}
+              >
+                Nhân bản
+              </button>
+              <button
+                onClick={() => handleRemoveGenre(genre.id)}
+                disabled={loading || genres.length <= 1}
+                style={{ padding: '7px 10px', backgroundColor: '#3a1f1f', color: '#ff8888', border: '1px solid #662222', borderRadius: '4px', cursor: loading || genres.length <= 1 ? 'not-allowed' : 'pointer' }}
+              >
+                Xóa
+              </button>
+            </div>
+
+            {([
+              ['priorityFolders', 'Nhạc ưu tiên'],
+              ['randomFolders', 'Nhạc random'],
+            ] as const).map(([field, label]) => (
+              <div key={field} style={{ display: 'grid', gridTemplateColumns: '110px minmax(0, 1fr) auto auto', gap: '8px', alignItems: 'start', marginBottom: '8px' }}>
+                <label style={{ color: '#9ca3af', fontSize: '12px', paddingTop: '8px' }}>{label}</label>
+                <textarea
+                  value={genre[field].join('\n')}
+                  onChange={(e) => handleUpdateGenre(genre.id, { [field]: splitFolderText(e.target.value) } as any)}
+                  disabled={loading}
+                  placeholder="Dán mỗi folder một dòng"
+                  rows={Math.min(4, Math.max(1, genre[field].length || 1))}
+                  title={genre[field].join('\n')}
+                  style={{ minHeight: '34px', padding: '7px 9px', backgroundColor: '#1e1e1e', color: '#fff', border: '1px solid #444', borderRadius: '4px', resize: 'vertical', fontFamily: 'monospace', fontSize: '12px', lineHeight: 1.4 }}
+                />
+                <button
+                  onClick={() => handleSelectGenreFolders(genre.id, field)}
+                  disabled={loading}
+                  style={{ padding: '8px 12px', backgroundColor: '#007acc', color: '#fff', border: 'none', borderRadius: '4px', cursor: loading ? 'not-allowed' : 'pointer' }}
+                >
+                  Chọn
+                </button>
+                <button
+                  onClick={() => handleUpdateGenre(genre.id, { [field]: [] } as any)}
+                  disabled={loading || genre[field].length === 0}
+                  style={{ padding: '8px 10px', backgroundColor: '#3a1f1f', color: '#ff8888', border: '1px solid #662222', borderRadius: '4px', cursor: loading || genre[field].length === 0 ? 'not-allowed' : 'pointer' }}
+                >
+                  Xóa
+                </button>
+              </div>
+            ))}
+          </div>
+        ))}
       </div>
 
       {/* Non-AAC warning banner — hiện khi scan xong và có file chưa chuẩn AAC */}
@@ -446,20 +561,27 @@ function ScanMusicPage() {
       )}
 
       {/* Normalize Audio Section */}
-      <div
+      <details
         id="normalize-section"
+        open={normalizeOpen}
+        onToggle={(e) => setNormalizeOpen(e.currentTarget.open)}
         style={{
-          marginTop: '40px',
-          padding: '20px',
+          marginTop: '18px',
+          padding: '0',
           backgroundColor: '#1e1e1e',
           borderRadius: '8px',
           border: '1px solid #333',
+          overflow: 'hidden',
         }}
       >
-        <h2 style={{ marginBottom: '20px', fontSize: '24px', fontWeight: 'bold' }}>
-          Chuẩn hóa bitrate âm thanh
-        </h2>
-        <p style={{ color: '#888', fontSize: '14px', marginBottom: '20px' }}>
+        <summary style={{ padding: '14px 16px', cursor: 'pointer', fontSize: '16px', fontWeight: 'bold', color: '#e5e7eb', backgroundColor: '#252526' }}>
+          Công cụ phụ: Chuẩn hóa bitrate âm thanh
+          <span style={{ marginLeft: '10px', color: '#9ca3af', fontSize: '12px', fontWeight: 400 }}>
+            Mở khi cần đổi MP3/WAV/FLAC sang AAC.
+          </span>
+        </summary>
+        <div style={{ padding: '18px' }}>
+        <p style={{ color: '#888', fontSize: '14px', margin: '0 0 20px' }}>
           Chuẩn hóa bitrate của các file audio về cùng một giá trị để đảm bảo chất lượng đồng đều.
         </p>
 
@@ -838,7 +960,8 @@ function ScanMusicPage() {
             </div>
           </div>
         )}
-      </div>
+        </div>
+      </details>
 
       {/* Error display */}
       {error && (
@@ -862,62 +985,62 @@ function ScanMusicPage() {
           <h2 style={{ marginBottom: '20px', fontSize: '24px', fontWeight: 'bold' }}>
             Kết quả quét nhạc
           </h2>
+          {(result.cacheStatus === 'reused' || result.cacheStatus === 'loaded') && (
+            <div style={{ marginBottom: '16px', padding: '12px 14px', backgroundColor: '#1f2937', border: '1px solid #4b5563', borderRadius: '6px', color: '#cbd5e1', fontSize: '13px' }}>
+              Đang dùng dữ liệu quét đã lưu. Nếu vừa thêm/xóa/sửa file, bấm <strong>Quét lại từ đầu</strong>.
+            </div>
+          )}
 
           {/* Summary */}
           <div
             style={{
-              padding: '20px',
+              padding: '16px',
               backgroundColor: '#252526',
-              borderRadius: '6px',
-              marginBottom: '30px',
+              borderRadius: '8px',
+              marginBottom: '18px',
             }}
           >
-            <h3 style={{ marginBottom: '15px', fontSize: '18px', fontWeight: 'bold' }}>
+            <h3 style={{ margin: '0 0 12px', fontSize: '18px', fontWeight: 'bold' }}>
               Tóm tắt
             </h3>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '15px' }}>
-              <div>
-                <div style={{ color: '#888', fontSize: '14px', marginBottom: '5px' }}>Số bài</div>
-                <div style={{ fontSize: '16px', fontWeight: 'bold' }}>
-                  <div>Ưu tiên: {result.summary.priorityCount}</div>
-                  <div>Random: {result.summary.randomCount}</div>
-                  <div>Tổng: {result.summary.totalCount}</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '10px' }}>
+              {[
+                ['Tổng', result.summary.totalCount, result.summary.totalDuration, '#93c5fd'],
+                ['Ưu tiên', result.summary.priorityCount, result.summary.priorityDuration, '#fbbf24'],
+                ['Random', result.summary.randomCount, result.summary.randomDuration, '#a78bfa'],
+              ].map(([label, count, duration, color]) => (
+                <div key={label as string} style={{ padding: '12px', backgroundColor: '#1e1e1e', borderRadius: '6px', border: '1px solid #333' }}>
+                  <div style={{ color: '#9ca3af', fontSize: '12px', marginBottom: '4px' }}>{label}</div>
+                  <div style={{ color: color as string, fontSize: '22px', fontWeight: 'bold', lineHeight: 1.2 }}>{count as number} bài</div>
+                  <div style={{ color: '#cbd5e1', fontSize: '13px', marginTop: '3px' }}>{formatDuration(duration as number)}</div>
                 </div>
-              </div>
-              <div>
-                <div style={{ color: '#888', fontSize: '14px', marginBottom: '5px' }}>
-                  Thời lượng
-                </div>
-                <div style={{ fontSize: '16px', fontWeight: 'bold' }}>
-                  <div>Ưu tiên: {formatDuration(result.summary.priorityDuration)}</div>
-                  <div>Random: {formatDuration(result.summary.randomDuration)}</div>
-                  <div>Tổng: {formatDuration(result.summary.totalDuration)}</div>
-                </div>
-              </div>
+              ))}
             </div>
+            {result.summary.genres && result.summary.genres.length > 0 && (
+              <div style={{ marginTop: '14px' }}>
+                <div style={{ color: '#888', fontSize: '13px', marginBottom: '8px' }}>Theo thể loại</div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '10px' }}>
+                  {result.summary.genres.map((genre) => (
+                    <div key={genre.genreId} style={{ padding: '10px', backgroundColor: '#1e1e1e', borderRadius: '4px', border: '1px solid #333' }}>
+                      <div style={{ color: '#fff', fontWeight: 'bold', marginBottom: '4px' }}>{genre.genreName}</div>
+                      <div style={{ color: '#ccc', fontSize: '13px' }}>{genre.totalCount} bài • {formatDuration(genre.totalDuration)}</div>
+                      <div style={{ color: '#888', fontSize: '12px' }}>Ưu tiên {genre.priorityCount} · Random {genre.randomCount}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Track list (first 10) */}
           {result.tracks.length > 0 && (
-            <div>
-              <h3 style={{ marginBottom: '15px', fontSize: '18px', fontWeight: 'bold' }}>
-                Danh sách bài hát (10 bài đầu)
-              </h3>
-              <div
-                style={{
-                  marginBottom: '10px',
-                  color: '#888',
-                  fontSize: '14px',
-                }}
-              >
-                Đang hiển thị {Math.min(result.tracks.length, 10)} / {result.tracks.length} bài
-                đầu tiên
-              </div>
+            <details style={{ backgroundColor: '#252526', borderRadius: '8px', border: '1px solid #333', overflow: 'hidden' }}>
+              <summary style={{ padding: '12px 14px', cursor: 'pointer', fontSize: '15px', fontWeight: 'bold' }}>
+                Danh sách bài hát — {Math.min(result.tracks.length, 10)} / {result.tracks.length} bài đầu tiên
+              </summary>
               <div
                 style={{
                   overflowX: 'auto',
-                  backgroundColor: '#252526',
-                  borderRadius: '6px',
                   padding: '10px',
                 }}
               >
@@ -929,6 +1052,7 @@ function ScanMusicPage() {
                         Tên bài
                       </th>
                       <th style={{ padding: '10px', textAlign: 'left', color: '#888' }}>Loại</th>
+                      <th style={{ padding: '10px', textAlign: 'left', color: '#888' }}>Thể loại</th>
                       <th style={{ padding: '10px', textAlign: 'left', color: '#888' }}>
                         Thời lượng
                       </th>
@@ -944,6 +1068,9 @@ function ScanMusicPage() {
                           {track.folderType === 'priority' ? 'Ưu tiên' : 'Random'}
                         </td>
                         <td style={{ padding: '10px', color: '#ccc' }}>
+                          {track.genreName || 'Mặc định'}
+                        </td>
+                        <td style={{ padding: '10px', color: '#ccc' }}>
                           {formatDurationShort(track.duration)}
                         </td>
                         <td style={{ padding: '10px', color: '#ccc' }}>
@@ -954,7 +1081,7 @@ function ScanMusicPage() {
                   </tbody>
                 </table>
               </div>
-            </div>
+            </details>
           )}
         </div>
       )}

@@ -69,7 +69,7 @@ function compareVersion(a: string, b: string): number {
 
 /**
  * Xóa cache cũ khi nâng cấp version.
- * Giữ nguyên auth/license state để update app không làm mất đăng nhập.
+ * Giữ nguyên auth/license và renderer config để update app không làm mất đăng nhập/cấu hình.
  */
 async function clearOldCache(): Promise<void> {
   try {
@@ -93,13 +93,11 @@ async function clearOldCache(): Promise<void> {
       }
     }
 
-    // Xóa các file cache khác
+    // Xóa session-only cache. Giữ Local Storage/IndexedDB vì renderer lưu cấu hình Autopilot/Batch ở đó.
     const cacheFiles = [
       path.join(userDataPath, 'Cookies'),
       path.join(userDataPath, 'Cookies-journal'),
-      path.join(userDataPath, 'Local Storage'),
       path.join(userDataPath, 'Session Storage'),
-      path.join(userDataPath, 'IndexedDB'),
     ]
 
     for (const file of cacheFiles) {
@@ -117,7 +115,7 @@ async function clearOldCache(): Promise<void> {
       }
     }
 
-    console.log('[cacheCleanup] Preserved auth state during version upgrade')
+    console.log('[cacheCleanup] Preserved auth state and renderer config during version upgrade')
   } catch (error: any) {
     console.error('[cacheCleanup] Failed to clear cache:', error.message)
   }

@@ -70,6 +70,8 @@ export interface VideoClipItem {
 export interface ExportJob {
   jobIndex: number
   audio: AudioSourceItem
+  endingAudios?: AudioSourceItem[]
+  effectiveAudio?: AudioSourceItem
   outputPath: string
   outputFileName: string
   customOutputName?: string // Tên tùy chỉnh từ outputNames array
@@ -82,6 +84,7 @@ export interface ExportPlan {
   totalJobs: number
   totalAudioDurationSec: number
   totalVideoDurationSec: number
+  endingAudioItems?: AudioSourceItem[]
   /** Toàn bộ pool video (không phân loại ưu tiên) */
   videoClips: VideoClipItem[]
   /** Clip video ưu tiên (tùy chọn) – sẽ luôn xuất hiện đầu video trước khi loop các clip còn lại */
@@ -841,7 +844,8 @@ export async function planFinalExport(
   baseOutputFilename: string,
   outputNames?: string[],
   priorityVideoSource?: FinalExportRequestPayload['priorityVideoSource'],
-  imageSource?: FinalExportRequestPayload['imageSource']
+  imageSource?: FinalExportRequestPayload['imageSource'],
+  endingAudio?: FinalExportRequestPayload['endingAudio']
 ): Promise<ExportPlan> {
   // Medium: Validate output folder writable
   try {
@@ -882,6 +886,10 @@ export async function planFinalExport(
     throw new Error('Không có clip video hợp lệ.')
   }
 
+  const endingAudioItems: AudioSourceItem[] = endingAudio?.paths?.length
+    ? await scanAudioSourceForPlan({ type: 'files', path: endingAudio.paths[0] || '', paths: endingAudio.paths })
+    : []
+
   // Tab 6 strict mapping: khi user chọn danh sách video files, phải ghép audio[i] -> video[i].
   // Chỉ áp dụng cho files mode CÓ strictPairing (mặc định true cho Tab 6 manual).
   // Autopilot pool mode gửi strictPairing: false → skip guard, dùng random/LRU pick.
@@ -904,6 +912,7 @@ export async function planFinalExport(
     return {
       jobIndex: index,
       audio,
+      endingAudios: endingAudioItems,
       outputPath: path.join(outputFolder, outputFileName),
       outputFileName,
       customOutputName: customName,
@@ -931,7 +940,8 @@ export async function planFinalExport(
   }
 
   // 4. Calculate totals
-  const totalAudioDurationSec = audioItems.reduce((sum, a) => sum + a.durationSec, 0)
+  const endingDurationPerJobSec = endingAudioItems.reduce((sum, a) => sum + a.durationSec, 0)
+  const totalAudioDurationSec = audioItems.reduce((sum, a) => sum + a.durationSec + endingDurationPerJobSec, 0)
   const totalVideoDurationSec = videoClips.reduce((sum, v) => sum + v.durationSec, 0)
 
   // Note: imageSource is accepted for future slideshow mode; currently plan does not
@@ -942,6 +952,7 @@ export async function planFinalExport(
     totalJobs: jobs.length,
     totalAudioDurationSec,
     totalVideoDurationSec,
+    endingAudioItems,
     videoClips,
     priorityVideoClips,
   }
@@ -958,6 +969,92 @@ async function probeAudioCodec(audioPath: string): Promise<string | null> {
     console.warn('[FinalExport] Failed to probe audio codec:', audioPath, error)
     return null
   }
+}
+
+async function prepareJobAudioWithEnding(
+  job: ExportJob,
+  jobScratchDir: string,
+  requestId: string,
+): Promise<AudioSourceItem> {
+  const endingAudios = job.endingAudios ?? []
+  if (endingAudios.length === 0) {
+    job.effectiveAudio = job.audio
+    return job.audio
+  }
+
+  if (videoJobManager.isCancelled(requestId)) {
+    throw new Error('Đã dừng bởi người dùng')
+  }
+
+  const inputs = [job.audio, ...endingAudios]
+  const outputPath = path.join(jobScratchDir, 'audio_with_ending.m4a')
+  const filter = [
+    ...inputs.map((_, index) => `[${index}:a:0]asetpts=PTS-STARTPTS,aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo[a${index}]`),
+    `${inputs.map((_, index) => `[a${index}]`).join('')}concat=n=${inputs.length}:v=0:a=1[aout]`,
+  ].join(';')
+  const args = [
+    '-hide_banner', '-y', '-loglevel', 'error', '-stats',
+    ...inputs.flatMap((audio) => ['-i', audio.path]),
+    '-filter_complex', filter,
+    '-map', '[aout]',
+    '-vn',
+    '-c:a', 'aac',
+    '-b:a', '192k',
+    '-ar', '48000',
+    '-ac', '2',
+    '-movflags', '+faststart',
+    outputPath,
+  ]
+  const ffmpegPath = getFfmpegExecutable()
+  const childRequestId = `${requestId}-ending-audio-${job.jobIndex}`
+  const totalDurationSec = inputs.reduce((sum, audio) => sum + audio.durationSec, 0)
+
+  await new Promise<void>((resolve, reject) => {
+    let settled = false
+    let stderrTail = ''
+    const safeResolve = () => { if (!settled) { settled = true; resolve() } }
+    const safeReject = (err: Error) => { if (!settled) { settled = true; reject(err) } }
+    const child = spawn(ffmpegPath, args, { windowsHide: true })
+    // Register under parent requestId too, so UI/jobQueue cancel kills this prepare-phase FFmpeg immediately.
+    videoJobManager.registerJob(requestId, child)
+    videoJobManager.registerJob(childRequestId, child)
+    child.stdout?.resume()
+
+    const cleanupChildJob = () => videoJobManager.clearCancelled(childRequestId)
+
+    child.stderr?.on('data', (chunk: Buffer) => {
+      if (videoJobManager.isCancelled(requestId) || videoJobManager.isCancelled(childRequestId)) {
+        if (!child.killed) child.kill(process.platform === 'win32' ? 'SIGKILL' : 'SIGTERM')
+        return
+      }
+      stderrTail += chunk.toString('utf-8')
+      if (stderrTail.length > 12000) stderrTail = stderrTail.slice(-12000)
+    })
+
+    child.on('error', (err) => {
+      cleanupChildJob()
+      safeReject(new Error(`FFmpeg ending audio spawn error: ${err.message}`))
+    })
+    child.on('close', (code) => {
+      cleanupChildJob()
+      if (videoJobManager.isCancelled(requestId) || videoJobManager.isCancelled(childRequestId)) {
+        safeReject(new Error('Đã dừng bởi người dùng'))
+        return
+      }
+      if (code === 0 && fs.existsSync(outputPath)) {
+        safeResolve()
+        return
+      }
+      safeReject(new Error(`Ghép nhạc cuối thất bại (code=${code}). stderr:\n${stderrTail.slice(-1000)}`))
+    })
+  })
+
+  job.effectiveAudio = {
+    path: outputPath,
+    durationSec: totalDurationSec,
+    codecName: 'aac',
+  }
+  return job.effectiveAudio
 }
 
 /**
@@ -1158,23 +1255,27 @@ export async function executeFinalExport(
       const currentJobIndex = jobIndex + 1
       
       console.log(`[Job ${currentJobIndex}/${plan.totalJobs}] ${job.outputFileName}`)
-      
+
+      const jobScratchDir = path.join(tempDir, `job_${String(job.jobIndex + 1).padStart(2, '0')}`)
+      await fsp.mkdir(jobScratchDir, { recursive: true })
+      const effectiveAudio = await prepareJobAudioWithEnding(job, jobScratchDir, requestId)
+
       // Emit progress: prepare-video stage
       emitter.progress({
         requestId,
         stage: 'prepare-video',
         percent: (jobIndex / plan.totalJobs) * 100,
         timeSec: 0,
-        totalDurationSec: job.audio.durationSec,
+        totalDurationSec: effectiveAudio.durationSec,
         currentIndex: currentJobIndex,
         totalOutputs: plan.totalJobs,
         currentAudioPath: job.audio.path,
         currentOutputFilename: job.outputFileName,
         status: `Đang chuẩn bị video ${currentJobIndex}/${plan.totalJobs}`,
       })
-      
+
       // 1. Build video playlist cho job này
-      const targetDurationSec = job.audio.durationSec
+      const targetDurationSec = effectiveAudio.durationSec
       const jobBaseClips = filterOutQuarantinedClips(effectiveBaseClips, quarantinedClipPaths)
       const jobPriorityClips = filterOutQuarantinedClips(effectivePriorityClips, quarantinedClipPaths)
       const jobPriorityPathSet = jobPriorityClips.length > 0 ? new Set(jobPriorityClips.map((clip) => clip.path)) : null
@@ -1324,9 +1425,6 @@ export async function executeFinalExport(
         `[Job ${currentJobIndex}] Video playlist: ${videoPlaylist.length} clips (pool=${jobBaseClips.length}, priority=${jobPriorityClips.length})`
       )
       
-      const jobScratchDir = path.join(tempDir, `job_${String(job.jobIndex + 1).padStart(2, '0')}`)
-      await fsp.mkdir(jobScratchDir, { recursive: true })
-
       // 2. Create concat list file
       const videoListFile = path.join(jobScratchDir, 'video_concat.txt')
       // Thêm 'duration' cho mỗi clip → FFmpeg concat demuxer tính PTS tích lũy chính xác
@@ -1351,7 +1449,7 @@ export async function executeFinalExport(
       }
       
       // 3. Dùng codec đã probe sẵn từ plan phase (FIX PERF-1: tránh spawn ffprobe per job)
-      const audioCodec = job.audio.codecName ?? await probeAudioCodec(job.audio.path)
+      const audioCodec = effectiveAudio.codecName ?? await probeAudioCodec(effectiveAudio.path)
       const codecLower = audioCodec?.toLowerCase() ?? null
       const needAudioEncode = !codecLower || (codecLower !== 'aac' && codecLower !== 'mp3')
       
@@ -1408,10 +1506,10 @@ export async function executeFinalExport(
 
       await runFinalCommand({
         requestId,
-        totalDurationSec: job.audio.durationSec,
+        totalDurationSec: effectiveAudio.durationSec,
         videoListPath: videoListFile,
         tempWorkspaceDir: jobScratchDir,
-        audioPath: job.audio.path,
+        audioPath: effectiveAudio.path,
         outputPath: job.outputPath,
         audioCodec,
         forceReencode,
@@ -1454,13 +1552,13 @@ export async function executeFinalExport(
       }
 
       // 5. Verify output (metadata + decode smoke/deep verify) + optional playback test
-      const shouldRunDeepVerify = forceReencode || needAudioEncode || normalizeAudio || !!normalizeVfFilter || isAudioVisualizerActive(audioVisualizer)
+      const shouldRunDeepVerify = forceReencode || needAudioEncode || normalizeAudio || !!normalizeVfFilter || isAudioVisualizerActive(audioVisualizer) || !!job.endingAudios?.length
       emitter.progress({
         requestId,
         stage: 'finishing',
         percent: ((job.jobIndex + 0.5) / plan.totalJobs) * 100,
-        timeSec: job.audio.durationSec,
-        totalDurationSec: job.audio.durationSec,
+        timeSec: effectiveAudio.durationSec,
+        totalDurationSec: effectiveAudio.durationSec,
         currentIndex: currentJobIndex,
         totalOutputs: plan.totalJobs,
         currentAudioPath: job.audio.path,
@@ -1471,7 +1569,7 @@ export async function executeFinalExport(
       })
 
       const verify = await verifyOutputVideo(job.outputPath, {
-        expectedDurationSec: job.audio.durationSec,
+        expectedDurationSec: effectiveAudio.durationSec,
         toleranceSec: 5,
         decodeWindowSec: getVerifyDecodeWindowSec(shouldRunDeepVerify),
         onLog: (msg) => console.log('[FinalExport][verify]', msg),
@@ -1486,10 +1584,10 @@ export async function executeFinalExport(
       }
 
       if (verify.durationWarning) {
-        const truncatedSec = job.audio.durationSec - verify.durationSec
+        const truncatedSec = effectiveAudio.durationSec - verify.durationSec
         const truncatedNote = truncatedSec > 0 ? `, bị cắt ~${truncatedSec.toFixed(2)}s` : ''
         throw new Error(
-          `Output duration mismatch cho ${job.outputFileName}: expected=${job.audio.durationSec.toFixed(2)}s, actual=${verify.durationSec.toFixed(2)}s, diff=${(verify.durationDiffSec ?? 0).toFixed(2)}s${truncatedNote}`
+          `Output duration mismatch cho ${job.outputFileName}: expected=${effectiveAudio.durationSec.toFixed(2)}s, actual=${verify.durationSec.toFixed(2)}s, diff=${(verify.durationDiffSec ?? 0).toFixed(2)}s${truncatedNote}`
         )
       }
 
@@ -1525,8 +1623,8 @@ export async function executeFinalExport(
             requestId,
             stage: 'finishing',
             percent: ((job.jobIndex + 0.75) / plan.totalJobs) * 100,
-            timeSec: job.audio.durationSec,
-            totalDurationSec: job.audio.durationSec,
+            timeSec: effectiveAudio.durationSec,
+            totalDurationSec: effectiveAudio.durationSec,
             currentIndex: currentJobIndex,
             totalOutputs: plan.totalJobs,
             currentAudioPath: job.audio.path,
@@ -1595,7 +1693,7 @@ export async function executeFinalExport(
           stage: 'finishing',
           percent: ((job.jobIndex + 1) / plan.totalJobs) * 100,
           timeSec: 0,
-          totalDurationSec: job.audio.durationSec,
+          totalDurationSec: job.effectiveAudio?.durationSec ?? job.audio.durationSec,
           currentIndex: job.jobIndex + 1,
           totalOutputs: plan.totalJobs,
           currentAudioPath: job.audio.path,
@@ -1633,7 +1731,7 @@ export async function executeFinalExport(
       outputs: succeededJobs.map(j => ({
         audioFile: j.audio.path,
         videoFile: j.outputPath,
-        durationSec: j.audio.durationSec,
+        durationSec: j.effectiveAudio?.durationSec ?? j.audio.durationSec,
         tracklistFile: tracklistPaths[j.jobIndex],
       })),
       failedJobs: failedJobs.length > 0 ? failedJobs : undefined,
@@ -3760,7 +3858,8 @@ export async function exportFinalVideo(
       request.outputFilename,
       request.outputNames,
       request.priorityVideoSource,
-      request.imageSource
+      request.imageSource,
+      request.endingAudio
     )
 
     // PLAN A: Disk space CHỈ CẢNH BÁO, KHÔNG CHẶN xuất video.

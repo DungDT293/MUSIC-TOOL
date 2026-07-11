@@ -6,6 +6,8 @@ import type {
   GpuFfmpegProfile,
   IPCAPI,
   LicenseState,
+  ScanMusicFoldersPayload,
+  ScanMusicResult,
 } from '../src/types/ipc'
 import {
   VIDEO_FINAL_EXPORT_DONE,
@@ -14,6 +16,7 @@ import {
   VIDEO_FINAL_EXPORT_REQUEST,
   VIDEO_FINAL_EXPORT_SCAN_AUDIO,
   VIDEO_FINAL_EXPORT_SCAN_VIDEO,
+  VIDEO_FINAL_EXPORT_SCAN_IMAGE,
   type FinalExportDonePayload,
   type FinalExportErrorPayload,
   type FinalExportProgressPayload,
@@ -102,9 +105,9 @@ const api: IPCAPI = {
     selectAudioFilesMulti: () => ipcRenderer.invoke('dialog:selectAudioFilesMulti'),
     selectImageFile: () => ipcRenderer.invoke('dialog:selectImageFile'),
     selectImageFilesMulti: () => ipcRenderer.invoke('dialog:selectImageFilesMulti'),
-  scanMusicFolders: (payload: { priorityFolder: string | null; randomFolder: string | null }) =>
-    ipcRenderer.invoke('music:scanFolders', payload),
-  getLastScanResult: () => ipcRenderer.invoke('music:getLastScan'),
+  scanMusicFolders: (payload: ScanMusicFoldersPayload) =>
+    ipcRenderer.invoke('music:scanFolders', payload) as Promise<ScanMusicResult>,
+  getLastScanResult: () => ipcRenderer.invoke('music:getLastScan') as Promise<ScanMusicResult | null>,
   createPlaylists: (payload: any) => ipcRenderer.invoke('music:createPlaylists', payload),
   listPlaylists: () => ipcRenderer.invoke('music:listPlaylists'),
   getMusicPoolStats: (trackIds: string[]) => ipcRenderer.invoke('music:getPoolStats', trackIds),
@@ -179,6 +182,8 @@ const api: IPCAPI = {
       ipcRenderer.invoke(VIDEO_FINAL_EXPORT_SCAN_AUDIO, payload),
     scanVideoSource: (payload: { requestId: string; videoSource: FinalExportRequestPayload['videoSource'] }): Promise<FinalExportScanResult> =>
       ipcRenderer.invoke(VIDEO_FINAL_EXPORT_SCAN_VIDEO, payload),
+    scanImageSource: (payload: { requestId: string; imageSource: FinalExportRequestPayload['imageSource']; perImageDurationSec?: number }): Promise<FinalExportScanResult> =>
+      ipcRenderer.invoke(VIDEO_FINAL_EXPORT_SCAN_IMAGE, payload),
     onProgress: (handler: (payload: FinalExportProgressPayload) => void) => {
       const listener = (_event: IpcRendererEvent, payload: FinalExportProgressPayload) => handler(payload)
       ipcRenderer.on(VIDEO_FINAL_EXPORT_PROGRESS, listener)

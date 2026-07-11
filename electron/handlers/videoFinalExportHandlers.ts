@@ -33,6 +33,13 @@ function sendIfAlive(webContents: WebContents, channel: string, payload: unknown
   return true
 }
 
+function assertValidSourcePaths(source: { path?: string; paths?: string[] } | undefined, label: string): void {
+  if (!source) return
+  const paths = [source.path, ...(source.paths ?? [])].filter((p): p is string => !!p)
+  const invalid = paths.find((p) => !isValidAbsolutePath(p))
+  if (invalid) throw new Error(`Invalid ${label} path: ${invalid}`)
+}
+
 async function trackVideoExport(
   status: 'success' | 'failed',
   errorMessage?: string,
@@ -89,25 +96,19 @@ async function trackVideoExport(
 
 export function registerVideoFinalExportHandlers(getMainWindow: () => BrowserWindow | null) {
   ipcMain.handle('video:final-export:scan-audio', async (_event, payload) => {
-    if (payload?.path && !isValidAbsolutePath(payload.path)) {
-      throw new Error('Invalid audio source path')
-    }
+    assertValidSourcePaths(payload?.audioSource, 'audio source')
     try { return await scanAudioSource(payload) }
     catch (err: any) { throw new Error(err?.message || 'Scan audio source failed') }
   })
 
   ipcMain.handle('video:final-export:scan-video', async (_event, payload) => {
-    if (payload?.path && !isValidAbsolutePath(payload.path)) {
-      throw new Error('Invalid video source path')
-    }
+    assertValidSourcePaths(payload?.videoSource, 'video source')
     try { return await scanVideoSource(payload) }
     catch (err: any) { throw new Error(err?.message || 'Scan video source failed') }
   })
 
   ipcMain.handle('video:final-export:scan-image', async (_event, payload) => {
-    if (payload?.path && !isValidAbsolutePath(payload.path)) {
-      throw new Error('Invalid image source path')
-    }
+    assertValidSourcePaths(payload?.imageSource, 'image source')
     try { return await scanImageSource(payload) }
     catch (err: any) { throw new Error(err?.message || 'Scan image source failed') }
   })
@@ -141,6 +142,25 @@ export function registerVideoFinalExportHandlers(getMainWindow: () => BrowserWin
             requestId,
             error: 'Đường dẫn thư mục xuất video không hợp lệ.',
             message: 'Đường dẫn thư mục xuất video không hợp lệ.',
+          } satisfies FinalExportErrorPayload)
+          return
+        }
+
+        try {
+          assertValidSourcePaths(payload.audioSource, 'audio source')
+          assertValidSourcePaths(payload.videoSource, 'video source')
+          assertValidSourcePaths(payload.imageSource, 'image source')
+          assertValidSourcePaths(payload.priorityVideoSource, 'priority video source')
+          if (payload.chromaKeyOverlay?.videoPath && !isValidAbsolutePath(payload.chromaKeyOverlay.videoPath)) {
+            throw new Error('Invalid chroma key video path')
+          }
+          const invalidEndingPath = payload.endingAudio?.paths?.find((p) => !isValidAbsolutePath(p))
+          if (invalidEndingPath) throw new Error(`Invalid ending audio path: ${invalidEndingPath}`)
+        } catch (pathErr: any) {
+          sendIfAlive(mainWindow.webContents, VIDEO_FINAL_EXPORT_ERROR, {
+            requestId,
+            error: pathErr?.message || 'Đường dẫn nguồn không hợp lệ.',
+            message: pathErr?.message || 'Đường dẫn nguồn không hợp lệ.',
           } satisfies FinalExportErrorPayload)
           return
         }

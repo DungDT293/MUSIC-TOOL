@@ -1,3 +1,4 @@
+import NumericDraftInput from '../../../components/NumericDraftInput'
 import type { LimiterSettings } from '../../../types/ipc'
 
 interface Props {
@@ -45,15 +46,15 @@ export default function LimiterPanel({ value, onChange, disabled }: Props) {
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: '11px', color: '#888', marginBottom: '2px' }}>Attack (ms)</div>
             <div style={{ fontSize: '10px', color: '#555', marginBottom: '4px', lineHeight: '1.3' }}>Tốc độ phản ứng — 1ms là phổ biến</div>
-            <input type="number" min={0.1} max={20} step={0.1} value={value.attackMs}
-              onChange={e => set('attackMs', Number(e.target.value))} disabled={disabled}
+            <NumericDraftInput min={0.1} max={20} step={0.1} value={value.attackMs}
+              onCommit={v => { if (typeof v === 'number') set('attackMs', v) }} disabled={disabled}
               style={{ width: '100%', backgroundColor: '#252526', color: '#ccc', border: '1px solid #444', borderRadius: '3px', padding: '4px 6px', fontSize: '12px' }} />
           </div>
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: '11px', color: '#888', marginBottom: '2px' }}>Release (ms)</div>
             <div style={{ fontSize: '10px', color: '#555', marginBottom: '4px', lineHeight: '1.3' }}>Tốc độ nhả — 50ms là tự nhiên</div>
-            <input type="number" min={10} max={500} step={5} value={value.releaseMs}
-              onChange={e => set('releaseMs', Number(e.target.value))} disabled={disabled}
+            <NumericDraftInput min={10} max={500} step={5} value={value.releaseMs}
+              onCommit={v => { if (typeof v === 'number') set('releaseMs', v) }} disabled={disabled}
               style={{ width: '100%', backgroundColor: '#252526', color: '#ccc', border: '1px solid #444', borderRadius: '3px', padding: '4px 6px', fontSize: '12px' }} />
           </div>
         </div>

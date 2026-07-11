@@ -4,8 +4,9 @@
  */
 
 import { ipcMain } from 'electron'
-import { scanMusicFolders } from '../../backend/music/scanMusic'
-import { loadScanResult } from '../../backend/music/scanStore'
+import { scanMusicFolders, type MusicScanGenre } from '../../backend/music/scanMusic'
+import { loadUsableScanResult } from '../../backend/music/scanStore'
+import { MusicScanFoldersSchema } from '../../shared/ipcSchemas'
 import {
   buildPlaylists,
   savePlaylists,
@@ -38,28 +39,57 @@ import { isValidAbsolutePath } from '../authState'
 export function registerMusicHandlers(getMainWindow: () => Electron.BrowserWindow | null) {
   // Music scan
   ipcMain.handle('music:scanFolders', async (_event, payload) => {
-    // Validate folder paths in payload
-    if (payload?.priorityFolder && !isValidAbsolutePath(payload.priorityFolder)) {
-      throw new Error('Invalid priority folder path')
+    const parsed = MusicScanFoldersSchema.parse(payload)
+
+    const validateFolder = (folder: string, label: string) => {
+      if (folder && !isValidAbsolutePath(folder)) {
+        throw new Error(`Invalid ${label} folder path`)
+      }
     }
-    if (payload?.randomFolder && !isValidAbsolutePath(payload.randomFolder)) {
-      throw new Error('Invalid random folder path')
+
+    validateFolder(parsed.priorityFolder ?? '', 'priority')
+    validateFolder(parsed.randomFolder ?? '', 'random')
+    for (const genre of parsed.genres ?? []) {
+      for (const folder of genre.priorityFolders ?? []) validateFolder(folder, `${genre.name} priority`)
+      for (const folder of genre.randomFolders ?? []) validateFolder(folder, `${genre.name} random`)
     }
-    console.log('[IPC] music:scanFolders', payload)
-    clearPlaylists()
-    console.log('[IPC] Cleared old playlists due to new scan')
-    return scanMusicFolders(payload)
+
+    console.log('[IPC] music:scanFolders', {
+      legacy: Boolean(parsed.priorityFolder || parsed.randomFolder),
+      genres: parsed.genres?.length ?? 0,
+      forceRescan: parsed.forceRescan,
+    })
+
+    const result = await scanMusicFolders({
+      priorityFolder: parsed.priorityFolder,
+      randomFolder: parsed.randomFolder,
+      genres: parsed.genres as MusicScanGenre[] | undefined,
+      forceRescan: parsed.forceRescan,
+    })
+
+    if (result.cacheStatus === 'scanned') {
+      clearPlaylists()
+      console.log('[IPC] Cleared old playlists due to new scan')
+    }
+    return result
   })
 
   // Create playlists
   ipcMain.handle('music:createPlaylists', async (_event, payload: BuildPlaylistsOptions): Promise<BuildPlaylistsResult> => {
+    for (const track of payload.endingTracks ?? []) {
+      if (track?.path && !isValidAbsolutePath(track.path)) {
+        throw new Error('Invalid ending audio path')
+      }
+    }
     console.log('[IPC] music:createPlaylists', {
       tracks: payload.tracks?.length,
       pinned: payload.pinnedTrackIds?.length,
+      ending: payload.endingTracks?.length ?? 0,
       playlistCount: payload.playlistCount,
       targetMinutes: payload.targetDurationMinutes,
     })
-    registerTracks(payload.tracks ?? [])
+    const endingPathSet = new Set((payload.endingTracks ?? []).map(t => t.path?.toLowerCase()).filter(Boolean))
+    registerTracks((payload.tracks ?? []).filter(t => !endingPathSet.has(t.path?.toLowerCase())))
     const result = buildPlaylists(payload)
     savePlaylists(result.playlists)
     return result
@@ -68,7 +98,7 @@ export function registerMusicHandlers(getMainWindow: () => Electron.BrowserWindo
   ipcMain.handle('music:listPlaylists', async () => getPlaylists())
   ipcMain.handle('music:getPoolStats', async (_event, trackIds: string[]) => getMusicPoolStats(trackIds ?? []))
   ipcMain.handle('music:clearPool', async () => { clearMusicPool(); return { success: true } })
-  ipcMain.handle('music:getLastScan', async () => loadScanResult())
+  ipcMain.handle('music:getLastScan', async () => loadUsableScanResult())
 
   // Export history
   ipcMain.handle('music:getExportHistory', async () => {
@@ -220,7 +250,7 @@ export function registerMusicHandlers(getMainWindow: () => Electron.BrowserWindo
       if (result.success) {
         try {
           const pl = getPlaylistById(req.playlistId)
-          if (pl) markTracksUsed(pl.tracks.map(t => t.id))
+          if (pl) markTracksUsed(pl.tracks.filter(t => t.role !== 'ending').map(t => t.id))
         } catch (poolErr) {
           console.warn('[IPC] music:exportPlaylist - markTracksUsed failed (non-fatal):', poolErr)
         }

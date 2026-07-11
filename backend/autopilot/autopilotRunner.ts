@@ -4,7 +4,7 @@ import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { buildPlaylists, clearPlaylists, savePlaylists, type BuildPlaylistsOptions, type PlaylistDefinition } from '../music/playlistEngine'
 import { exportPlaylistToFile, type ExportPlaylistRequest } from '../music/exportAudio'
-import { scanMusicFolders, type ScanMusicResult } from '../music/scanMusic'
+import { scanAudioFilesAsTracks, scanMusicFolders, type ScanMusicResult } from '../music/scanMusic'
 import { type FinalExportJobRequest, type FinalExportEmitter, planFinalExport, executeFinalExport } from '../video/finalExport'
 import { videoJobManager } from '../video/videoJobManager'
 import { getDiskSpace, formatBytes, isEnospcError } from '../utils/diskSpace'
@@ -59,6 +59,8 @@ export interface AutopilotFoldersConfig {
   randomMusicFolder?: string
   /** Thư mục video ưu tiên (tùy chọn) – các clip trong thư mục này sẽ được ưu tiên xuất hiện đầu video khi Final Export */
   priorityVideoFolder?: string
+  /** Nhạc nối thêm cuối mỗi playlist audio. */
+  endingAudioPaths?: string[]
   /** Số clip video tối thiểu cần chọn (mặc định 1000) */
   minVideoClipsTarget?: number
 }
@@ -738,6 +740,8 @@ export async function startAutopilot(
           {
             priorityFolder,
             randomFolder,
+            forceRescan: true,
+            persist: false,
           },
           {
             signal: scanController.signal,
@@ -1972,7 +1976,9 @@ async function runExportVideoWithOptions(
     jobRequest.outputFolder,
     jobRequest.outputFilename,
     jobRequest.outputNames,
-    jobRequest.priorityVideoSource
+    jobRequest.priorityVideoSource,
+    jobRequest.imageSource,
+    jobRequest.endingAudio
   )
   
   // Create emitter
@@ -2128,7 +2134,15 @@ async function runExportVideoWithOptions(
     !!jobRequest.unifyFormat,       // Chuẩn hóa tỉ lệ khung hình + FPS
     jobRequest.targetResolution,
     jobRequest.targetFps,
-    preferredPreTranscodeMode
+    preferredPreTranscodeMode,
+    jobRequest.chromaKeyOverlay,
+    jobRequest.imageSource,
+    jobRequest.perImageDurationSec,
+    jobRequest.imageAspectMode,
+    jobRequest.imageTransition,
+    jobRequest.imageKenBurns,
+    undefined,
+    jobRequest.audioVisualizer,
   )
 
   if (!donePayload) {
@@ -2277,9 +2291,21 @@ async function runAutopilotForDay(
       })()
     : undefined
 
+  const endingAudioPaths = Array.isArray(folders.endingAudioPaths)
+    ? Array.from(new Set(folders.endingAudioPaths.filter(Boolean)))
+    : []
+  const endingTracks = endingAudioPaths.length > 0
+    ? await scanAudioFilesAsTracks(endingAudioPaths, 'random')
+    : []
+  const endingDurationSec = endingTracks.reduce((sum, track) => sum + track.duration, 0)
+  if (endingTracks.length > 0) {
+    emitLog('info', `[Bước 2] Nhạc cuối: ${endingTracks.length} file (${formatDuration(Math.round(endingDurationSec))}) sẽ nối sau mỗi playlist.`)
+  }
+
   const buildOptions: BuildPlaylistsOptions = {
     tracks: scan.tracks,
     pinnedTrackIds: pinnedFromOverrides,
+    endingTracks,
     playlistCount,
     targetDurationMinutes: minutesPerPlaylist,
     priorityRatioMin: 0.65,
@@ -2676,6 +2702,9 @@ async function runAutopilotForDay(
       if (config.runtimeOverrides?.gpuNormalizeReason) {
         step4Lines.push(`  Normalize note: ${config.runtimeOverrides.gpuNormalizeReason}`)
       }
+    }
+    if (jobRequest.endingAudio?.paths.length) {
+      step4Lines.push(`  Nhạc cuối: ${jobRequest.endingAudio.paths.length} file`)
     }
     if (overrides.generateTracklist) {
       step4Lines.push(`  Tracklist: BẬT`)

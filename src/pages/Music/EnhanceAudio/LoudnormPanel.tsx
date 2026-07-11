@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import NumericDraftInput from '../../../components/NumericDraftInput'
 import type { LoudnormSettings } from '../../../types/ipc'
 
 interface Props {
@@ -100,8 +101,8 @@ export default function LoudnormPanel({ value, onChange, currentLufs = -Infinity
             <div style={{ fontSize: '10px', color: '#555', marginBottom: '4px', lineHeight: '1.3' }}>
               Giới hạn đỉnh âm tuyệt đối — tránh méo tiếng khi chuyển đổi định dạng
             </div>
-            <input type="number" min={-3} max={0} step={0.5} value={value.truePeakDbtp}
-              onChange={e => { setPreset('Custom'); set('truePeakDbtp', Number(e.target.value)) }}
+            <NumericDraftInput min={-3} max={0} step={0.5} value={value.truePeakDbtp}
+              onCommit={v => { if (typeof v === 'number') { setPreset('Custom'); set('truePeakDbtp', v) } }}
               style={{ width: '100%', backgroundColor: '#252526', color: '#ccc', border: '1px solid #444', borderRadius: '3px', padding: '4px 6px', fontSize: '12px' }} />
           </div>
           <div style={{ flex: 1 }}>
@@ -109,8 +110,8 @@ export default function LoudnormPanel({ value, onChange, currentLufs = -Infinity
             <div style={{ fontSize: '10px', color: '#555', marginBottom: '4px', lineHeight: '1.3' }}>
               Độ biến thiên âm lượng — thấp = đều hơn, cao = giữ nhiều cảm xúc gốc hơn
             </div>
-            <input type="number" min={1} max={20} step={1} value={value.lra}
-              onChange={e => { setPreset('Custom'); set('lra', Number(e.target.value)) }}
+            <NumericDraftInput min={1} max={20} step={1} value={value.lra}
+              onCommit={v => { if (typeof v === 'number') { setPreset('Custom'); set('lra', v) } }}
               style={{ width: '100%', backgroundColor: '#252526', color: '#ccc', border: '1px solid #444', borderRadius: '3px', padding: '4px 6px', fontSize: '12px' }} />
           </div>
         </div>

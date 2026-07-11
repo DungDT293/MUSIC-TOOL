@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, useRef, type CSSProperties } from 'react'
 import { DiskSpaceErrorModal } from '../../components/DiskSpaceErrorModal'
+import NumericDraftInput from '../../components/NumericDraftInput'
 import { useExportActivityStore } from '../../stores/exportActivityStore'
 import type {
   FinalExportDonePayload,
@@ -182,6 +183,9 @@ function FinalExportTab() {
   const [imageItems, setImageItems] = useState<FinalExportScanItem[]>([])
   const [imageFileCount, setImageFileCount] = useState<number | null>(null)
   const [imageTotalSec, setImageTotalSec] = useState<number | null>(null)
+  const [endingAudioPaths, setEndingAudioPaths] = useState<string[]>([])
+  const [endingAudioItems, setEndingAudioItems] = useState<FinalExportScanItem[]>([])
+  const [endingAudioTotalSec, setEndingAudioTotalSec] = useState<number | null>(null)
   const [diskSpaceError, setDiskSpaceError] = useState<string | null>(null)
 
   const [usePriorityVideos, setUsePriorityVideos] = useState<boolean>(false)
@@ -275,6 +279,7 @@ function FinalExportTab() {
     const name = presetName.trim() || `Preset ${new Date().toLocaleString('vi-VN')}`
     const settings = {
       outputFilename, outputNamesText, tracklistEnabled, forceReencode, normalizeAudio,
+      endingAudioPaths,
       useGpuEncoding, deleteSourceFiles, audioVisualizerEnabled, audioVisualizerPreset, audioVisualizerPosition,
       audioVisualizerWidthPercent, audioVisualizerHeightPercent, audioVisualizerMarginBottomPx,
       audioVisualizerPrimaryColor, audioVisualizerSecondaryColor, audioVisualizerOpacity,
@@ -309,6 +314,7 @@ function FinalExportTab() {
     if (settings.audioVisualizerSensitivity !== undefined) setAudioVisualizerSensitivity(settings.audioVisualizerSensitivity)
     if (settings.usePriorityVideos !== undefined) setUsePriorityVideos(settings.usePriorityVideos)
     if (settings.priorityVideoFolder !== undefined) setPriorityVideoFolder(settings.priorityVideoFolder)
+    if (Array.isArray(settings.endingAudioPaths)) setEndingAudioPaths(settings.endingAudioPaths)
   }
 
   const handleDeletePreset = async (id: string) => {
@@ -493,6 +499,10 @@ function FinalExportTab() {
   // Nếu chỉ có 1 audio và 1 video → disable textarea "Tên file output (mỗi dòng một tên)"
   const multipleAudio = audioItems.length > 1
   const singleAudioVideo = audioItems.length === 1 && videoItems.length === 1
+  const endingAudioPerJobSec = endingAudioTotalSec ?? endingAudioItems.reduce((sum, item) => sum + item.durationSec, 0)
+  const totalExportAudioSec = audioTotalSec != null
+    ? audioTotalSec + (audioFileCount ?? audioItems.length) * endingAudioPerJobSec
+    : null
 
   const parsedOutputNames = useMemo(() => {
     return outputNamesText
@@ -664,6 +674,38 @@ function FinalExportTab() {
     }
   }
 
+  const handlePickEndingAudio = async () => {
+    if (isExporting) return
+    try {
+      const paths: string[] | null = await api?.selectAudioFilesMulti?.()
+      if (!paths || paths.length === 0) return
+      const uniquePaths = Array.from(new Set(paths.filter(Boolean)))
+      if (uniquePaths.length === 0) return
+      const scanRes = await api?.videoFinalExport?.scanAudioSource({
+        requestId: `scan-ending-audio-${Date.now()}`,
+        audioSource: { type: 'files', path: uniquePaths[0], paths: uniquePaths },
+      })
+      if (scanRes && scanRes.kind === 'audio') {
+        setEndingAudioPaths(uniquePaths)
+        setEndingAudioItems(scanRes.items || [])
+        setEndingAudioTotalSec(scanRes.totalDurationSec)
+        setExportOutputs(null)
+        setErrorMessage(null)
+      }
+    } catch (err) {
+      const detail = describeUnknownError(err)
+      console.error('[FinalExportTab] scan ending audio error', detail, err)
+      setErrorMessage(`Không quét được nhạc cuối.\n${detail}\n${buildFinalExportFixHint(detail)}`)
+    }
+  }
+
+  const clearEndingAudio = () => {
+    if (isExporting) return
+    setEndingAudioPaths([])
+    setEndingAudioItems([])
+    setEndingAudioTotalSec(null)
+  }
+
   const handleSelectPriorityVideoFolder = async () => {
     if (isExporting) return
     try {
@@ -770,6 +812,7 @@ function FinalExportTab() {
       outputFolder,
       outputFilename,
       outputNames: parsedOutputNames.length > 0 ? parsedOutputNames : undefined,
+      endingAudio: endingAudioPaths.length > 0 ? { paths: endingAudioPaths } : undefined,
       tracklists: undefined,
       tracklistAuto: tracklistEnabled,
       forceReencode,
@@ -961,6 +1004,10 @@ function FinalExportTab() {
       return 'Chưa chọn đủ playlist audio và clips video để lập kế hoạch xuất.'
     }
 
+    const endingText = endingAudioPerJobSec > 0
+      ? ` + nhạc cuối ${formatSeconds(endingAudioPerJobSec)}/job`
+      : ''
+
     // Chỉ cảnh báo count mismatch khi CÙNG chọn files riêng lẻ (type=files)
     // Khi video source là folder thì backend loop clips — không cần match 1-1
     const videoIsFolder = videoSource?.type === 'folder'
@@ -969,10 +1016,10 @@ function FinalExportTab() {
     }
 
     if (audioItems.length === 1) {
-      return 'Sẽ xuất 1 video: audio[1] + video[1] → output.mp4 (1-1 mapping)'
+      return `Sẽ xuất 1 video: audio[1]${endingText} + video[1] → output.mp4 (1-1 mapping)`
     }
-    return `Sẽ xuất ${audioItems.length} video với mapping 1-1: audio[i] + video[i] → output_i.mp4 (mỗi video khớp với 1 cặp audio-video tương ứng)`
-  }, [audioItems, videoItems, videoSource])
+    return `Sẽ xuất ${audioItems.length} video với mapping 1-1: audio[i]${endingText} + video[i] → output_i.mp4`
+  }, [audioItems, videoItems, videoSource, endingAudioPerJobSec])
 
   const renderAudioPreview = () => {
     if (!audioItems.length) return null
@@ -1133,10 +1180,49 @@ function FinalExportTab() {
             )}
             <div style={{ marginTop: '6px', fontSize: '12px', color: '#9f9f9f' }}>
               {audioTotalSec != null
-                ? `Tổng thời lượng audio: ${formatSeconds(audioTotalSec)}`
+                ? `Tổng thời lượng audio chính: ${formatSeconds(audioTotalSec)}`
                 : 'Thời lượng video xuất ra sẽ khớp 100% với tổng thời lượng audio.'}
             </div>
+            {endingAudioPaths.length > 0 && (
+              <div style={{ marginTop: '6px', fontSize: '12px', color: '#ffcc88' }}>
+                Nhạc cuối: {endingAudioItems.length || endingAudioPaths.length} file • {formatSeconds(endingAudioPerJobSec)}/job
+                {totalExportAudioSec != null && ` • tổng dự kiến ${formatSeconds(totalExportAudioSec)}`}
+              </div>
+            )}
             {renderAudioPreview()}
+            <div style={{ marginTop: '10px', padding: '8px', borderRadius: '6px', backgroundColor: '#2b2418', border: '1px solid #5c4520' }}>
+              <div style={{ fontSize: '13px', fontWeight: 600, color: '#ffcc88', marginBottom: '6px' }}>
+                Nhạc nối cuối mỗi video (tùy chọn)
+              </div>
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  onClick={handlePickEndingAudio}
+                  style={{ ...buttonStyle, padding: '6px 10px', fontSize: '12px', backgroundColor: '#9a6a16' }}
+                  disabled={isExporting}
+                >
+                  Chọn file nhạc cuối
+                </button>
+                {endingAudioPaths.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={clearEndingAudio}
+                    style={{ ...buttonStyle, padding: '6px 10px', fontSize: '12px', backgroundColor: '#444' }}
+                    disabled={isExporting}
+                  >
+                    Xóa nhạc cuối
+                  </button>
+                )}
+              </div>
+              <div style={{ marginTop: '6px', fontSize: '11px', color: '#c9ad75' }}>
+                File này được nối sau từng audio job, không tạo thêm video riêng.
+              </div>
+              {endingAudioPaths.length > 0 && (
+                <div style={{ marginTop: '6px', fontSize: '11px', color: '#d7c39a', wordBreak: 'break-all' }}>
+                  {endingAudioPaths.map(getFileName).join(', ')}
+                </div>
+              )}
+            </div>
           </div>
 
           <div style={{ flex: '1 1 320px', backgroundColor: '#252525', borderRadius: '8px', padding: '16px', border: '1px solid #333' }}>
@@ -1338,7 +1424,9 @@ function FinalExportTab() {
         </div>
         {audioFileCount != null && audioTotalSec != null && (
           <div style={{ marginTop: '4px', fontSize: '12px', color: '#9f9f9f' }}>
-            Audio job: {audioFileCount} file, tổng {formatSeconds(audioTotalSec)}.
+            Audio job: {audioFileCount} file, chính {formatSeconds(audioTotalSec)}
+            {endingAudioPerJobSec > 0 && ` + nhạc cuối ${formatSeconds(endingAudioPerJobSec)}/job`}
+            {totalExportAudioSec != null && ` = tổng ${formatSeconds(totalExportAudioSec)}`}.
           </div>
         )}
         {usedVideoCount != null && concatVideoDurationSec != null && (
@@ -1752,33 +1840,79 @@ function FinalExportTab() {
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '12px' }}>
                 <label style={{ fontSize: '12px', color: '#d1d5db' }}>
                   Chiều rộng: {audioVisualizerWidthPercent}%
-                  <input type="range" min={10} max={100} step={1} value={audioVisualizerWidthPercent} disabled={isExporting}
-                    onChange={(e) => { setAudioVisualizerWidthPercent(Number(e.target.value)); setAudioVisualizerPreviewUrl(null) }} style={{ width: '100%' }} />
+                  <NumericDraftInput
+                    min={10}
+                    max={100}
+                    step={1}
+                    integer
+                    value={audioVisualizerWidthPercent}
+                    disabled={isExporting}
+                    onCommit={(value) => { if (typeof value === 'number') { setAudioVisualizerWidthPercent(value); setAudioVisualizerPreviewUrl(null) } }}
+                    style={{ width: '100%', padding: '6px 8px', borderRadius: '4px', border: '1px solid #4b5563', backgroundColor: '#1f2937', color: '#f3f4f6' }}
+                  />
                 </label>
                 <label style={{ fontSize: '12px', color: '#d1d5db' }}>
                   Chiều cao: {audioVisualizerHeightPercent}%
-                  <input type="range" min={5} max={60} step={1} value={audioVisualizerHeightPercent} disabled={isExporting}
-                    onChange={(e) => { setAudioVisualizerHeightPercent(Number(e.target.value)); setAudioVisualizerPreviewUrl(null) }} style={{ width: '100%' }} />
+                  <NumericDraftInput
+                    min={5}
+                    max={60}
+                    step={1}
+                    integer
+                    value={audioVisualizerHeightPercent}
+                    disabled={isExporting}
+                    onCommit={(value) => { if (typeof value === 'number') { setAudioVisualizerHeightPercent(value); setAudioVisualizerPreviewUrl(null) } }}
+                    style={{ width: '100%', padding: '6px 8px', borderRadius: '4px', border: '1px solid #4b5563', backgroundColor: '#1f2937', color: '#f3f4f6' }}
+                  />
                 </label>
                 <label style={{ fontSize: '12px', color: '#d1d5db' }}>
                   Cách mép: {audioVisualizerMarginBottomPx}px
-                  <input type="range" min={0} max={400} step={4} value={audioVisualizerMarginBottomPx} disabled={isExporting}
-                    onChange={(e) => { setAudioVisualizerMarginBottomPx(Number(e.target.value)); setAudioVisualizerPreviewUrl(null) }} style={{ width: '100%' }} />
+                  <NumericDraftInput
+                    min={0}
+                    max={400}
+                    step={4}
+                    integer
+                    value={audioVisualizerMarginBottomPx}
+                    disabled={isExporting}
+                    onCommit={(value) => { if (typeof value === 'number') { setAudioVisualizerMarginBottomPx(value); setAudioVisualizerPreviewUrl(null) } }}
+                    style={{ width: '100%', padding: '6px 8px', borderRadius: '4px', border: '1px solid #4b5563', backgroundColor: '#1f2937', color: '#f3f4f6' }}
+                  />
                 </label>
                 <label style={{ fontSize: '12px', color: '#d1d5db' }}>
                   Độ trong suốt: {Math.round(audioVisualizerOpacity * 100)}%
-                  <input type="range" min={0.1} max={1} step={0.01} value={audioVisualizerOpacity} disabled={isExporting}
-                    onChange={(e) => { setAudioVisualizerOpacity(Number(e.target.value)); setAudioVisualizerPreviewUrl(null) }} style={{ width: '100%' }} />
+                  <NumericDraftInput
+                    min={0.1}
+                    max={1}
+                    step={0.01}
+                    value={audioVisualizerOpacity}
+                    disabled={isExporting}
+                    onCommit={(value) => { if (typeof value === 'number') { setAudioVisualizerOpacity(value); setAudioVisualizerPreviewUrl(null) } }}
+                    style={{ width: '100%', padding: '6px 8px', borderRadius: '4px', border: '1px solid #4b5563', backgroundColor: '#1f2937', color: '#f3f4f6' }}
+                  />
                 </label>
                 <label style={{ fontSize: '12px', color: '#d1d5db' }}>
                   Số cột / độ mịn: {audioVisualizerBarCount}
-                  <input type="range" min={64} max={1024} step={16} value={audioVisualizerBarCount} disabled={isExporting}
-                    onChange={(e) => { setAudioVisualizerBarCount(Number(e.target.value)); setAudioVisualizerPreviewUrl(null) }} style={{ width: '100%' }} />
+                  <NumericDraftInput
+                    min={64}
+                    max={1024}
+                    step={16}
+                    integer
+                    value={audioVisualizerBarCount}
+                    disabled={isExporting}
+                    onCommit={(value) => { if (typeof value === 'number') { setAudioVisualizerBarCount(value); setAudioVisualizerPreviewUrl(null) } }}
+                    style={{ width: '100%', padding: '6px 8px', borderRadius: '4px', border: '1px solid #4b5563', backgroundColor: '#1f2937', color: '#f3f4f6' }}
+                  />
                 </label>
                 <label style={{ fontSize: '12px', color: '#d1d5db' }}>
                   Độ nhạy / Beat boost: {audioVisualizerSensitivity.toFixed(1)}x
-                  <input type="range" min={1} max={12} step={0.5} value={audioVisualizerSensitivity} disabled={isExporting}
-                    onChange={(e) => { setAudioVisualizerSensitivity(Number(e.target.value)); setAudioVisualizerPreviewUrl(null) }} style={{ width: '100%' }} />
+                  <NumericDraftInput
+                    min={1}
+                    max={12}
+                    step={0.5}
+                    value={audioVisualizerSensitivity}
+                    disabled={isExporting}
+                    onCommit={(value) => { if (typeof value === 'number') { setAudioVisualizerSensitivity(value); setAudioVisualizerPreviewUrl(null) } }}
+                    style={{ width: '100%', padding: '6px 8px', borderRadius: '4px', border: '1px solid #4b5563', backgroundColor: '#1f2937', color: '#f3f4f6' }}
+                  />
                 </label>
               </div>
 

@@ -6,6 +6,7 @@ import {
   ExportProgressPayload,
 } from '../../types/ipc'
 import { DiskSpaceErrorModal } from '../../components/DiskSpaceErrorModal'
+import NumericDraftInput from '../../components/NumericDraftInput'
 import type { ExportHistoryEntry } from '../../types/ipc'
 
 function formatDuration(seconds: number | undefined | null): string {
@@ -970,14 +971,14 @@ const filteredHistory = useMemo(() => {
             <span>Chuyển bài mượt (crossfade)</span>
           </label>
           <div style={{ marginTop: '8px', display: 'flex', gap: '8px', alignItems: 'center' }}>
-            <input
-              type="number"
+            <NumericDraftInput
               min={1}
               max={10}
               step={0.5}
+              allowBlank
               disabled={loading || !smoothTransitions}
-              value={crossfadeDuration}
-              onChange={(e) => setCrossfadeDuration(e.target.value)}
+              value={crossfadeDuration === '' ? '' : Number(crossfadeDuration)}
+              onCommit={(value) => setCrossfadeDuration(value === '' ? '' : String(value))}
               placeholder="Thời lượng crossfade (giây, mặc định 4s)"
               style={{
                 flex: 1,

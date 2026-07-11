@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
+import NumericDraftInput from '../../components/NumericDraftInput'
 import {
   DayPlanDetailDialog,
   createDefaultOverrides,
@@ -17,12 +18,13 @@ interface BatchGenre {
   priorityMusicFolder: string
   randomMusicFolder: string
   priorityVideoFolder: string
+  endingAudioPaths: string[]
   autoCreateDailySubfolder: boolean
-  minVideoClipsTarget: number
+  minVideoClipsTarget: number | ''
   // Day plans cho genre này
   dateCode: string
-  playlistCount: number
-  minutesPerPlaylist: number
+  playlistCount: number | ''
+  minutesPerPlaylist: number | ''
   presetId: DayPresetId
   // Overrides (giống Plan Mode — dùng chung type)
   overrides?: DayPlanDetailOverrides
@@ -49,6 +51,17 @@ type BatchRunProgress = {
   updatedAt: number | null
 }
 
+type NumericText = number | ''
+
+function numberOrDefault(value: NumericText, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback
+}
+
+function clampNumberOrDefault(value: NumericText, fallback: number, min: number, max?: number): number {
+  const next = numberOrDefault(value, fallback)
+  return Math.min(max ?? next, Math.max(min, next))
+}
+
 export const BATCH_STORAGE_KEY = 'autopilotBatchConfigV1'
 const BATCH_RUNTIME_STORAGE_KEY = 'autopilotBatchRuntimeV1'
 
@@ -67,6 +80,7 @@ function createDefaultBatch(): BatchGenre {
     priorityMusicFolder: '',
     randomMusicFolder: '',
     priorityVideoFolder: '',
+    endingAudioPaths: [],
     autoCreateDailySubfolder: true,
     minVideoClipsTarget: 1000,
     dateCode: `${day}${month}`,
@@ -75,6 +89,27 @@ function createDefaultBatch(): BatchGenre {
     presetId: 'tomorrowland',
     status: 'pending',
   }
+}
+
+function serializeBatchConfig(batches: BatchGenre[]) {
+  return batches.map((batch) => ({
+    id: batch.id,
+    name: batch.name,
+    rootAudio: batch.rootAudio,
+    rootVideo: batch.rootVideo,
+    rootFinal: batch.rootFinal,
+    priorityMusicFolder: batch.priorityMusicFolder,
+    randomMusicFolder: batch.randomMusicFolder,
+    priorityVideoFolder: batch.priorityVideoFolder,
+    endingAudioPaths: batch.endingAudioPaths,
+    autoCreateDailySubfolder: batch.autoCreateDailySubfolder,
+    minVideoClipsTarget: batch.minVideoClipsTarget,
+    dateCode: batch.dateCode,
+    playlistCount: batch.playlistCount,
+    minutesPerPlaylist: batch.minutesPerPlaylist,
+    presetId: batch.presetId,
+    overrides: batch.overrides,
+  }))
 }
 
 function mergeBatchLogEntries(existing: BatchLogEntry[], incoming: BatchLogEntry[]): BatchLogEntry[] {
@@ -108,7 +143,7 @@ export default function BatchModeTab() {
       const raw = window.localStorage.getItem(BATCH_STORAGE_KEY)
       if (!raw) return []
       const parsed = JSON.parse(raw)
-      return Array.isArray(parsed) ? parsed.map((b: any) => ({ ...createDefaultBatch(), ...b, status: 'pending' })) : []
+      return Array.isArray(parsed) ? parsed.map((b: any) => ({ ...createDefaultBatch(), ...b, status: 'pending', error: undefined, message: undefined })) : []
     } catch {
       return []
     }
@@ -170,7 +205,7 @@ export default function BatchModeTab() {
   useEffect(() => {
     batchesRef.current = batches  // Luôn sync ref với state mới nhất
     try {
-      window.localStorage.setItem(BATCH_STORAGE_KEY, JSON.stringify(batches))
+      window.localStorage.setItem(BATCH_STORAGE_KEY, JSON.stringify(serializeBatchConfig(batches)))
       if (batches.length > 0) {
         const now = new Date()
         setLastSaved(`${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}:${now.getSeconds().toString().padStart(2,'0')}`)
@@ -276,10 +311,7 @@ export default function BatchModeTab() {
 
   // Export cấu hình ra file JSON
   const handleExportConfig = () => {
-    const data = JSON.stringify(batches.map(b => {
-      const { status, error, ...rest } = b
-      return rest
-    }), null, 2)
+    const data = JSON.stringify(serializeBatchConfig(batches), null, 2)
     const blob = new Blob([data], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
@@ -308,6 +340,7 @@ export default function BatchModeTab() {
               id: `batch-${batchIdCounter++}-${Date.now()}`,
               status: 'pending' as const,
               error: undefined,
+              message: undefined,
             }))
             setBatches(imported)
             setLastSaved(null)
@@ -333,6 +366,7 @@ export default function BatchModeTab() {
       name: `${batch.name} (copy)`,
       status: 'pending',
       error: undefined,
+      message: undefined,
     }
     setBatches(prev => [...prev, copy])
   }
@@ -361,11 +395,32 @@ export default function BatchModeTab() {
     } catch { /* ignore */ }
   }
 
-  // Chạy batch lần lượt
-  const runBatch = async () => {
+  const handleSelectEndingAudio = async (batchId: string) => {
+    const w = window
+    if (!w.api?.selectAudioFilesMulti) return
+    try {
+      const paths: string[] | null = await w.api.selectAudioFilesMulti()
+      if (!paths || paths.length === 0) return
+      handleUpdateBatch(batchId, { endingAudioPaths: Array.from(new Set(paths.filter(Boolean))) })
+    } catch { /* ignore */ }
+  }
+
+  // Chạy batch lần lượt hoặc chạy riêng một thể loại
+  const runBatch = async (onlyIndex?: number) => {
     const w = window
     if (!w.api?.autopilot?.start) {
       addLog('error', 'Autopilot backend chưa sẵn sàng.')
+      return
+    }
+
+    // Dùng batchesRef.current để tránh stale closure
+    const currentBatches = batchesRef.current
+    const queue = typeof onlyIndex === 'number'
+      ? (currentBatches[onlyIndex] ? [{ batch: currentBatches[onlyIndex], index: onlyIndex }] : [])
+      : currentBatches.map((batch, index) => ({ batch, index }))
+
+    if (queue.length === 0) {
+      addLog('warn', 'Không có thể loại nào để chạy.')
       return
     }
 
@@ -386,34 +441,40 @@ export default function BatchModeTab() {
     setLogMessages([])
     batchCancelledRef.current = false  // Reset cancel flag khi bắt đầu
 
-    // Dùng batchesRef.current để tránh stale closure
-    const currentBatches = batchesRef.current
-
-    // Reset tất cả status
-    setBatches(prev => prev.map(b => ({ ...b, status: 'pending', error: undefined, message: undefined })))
+    if (typeof onlyIndex === 'number') {
+      setBatches(prev => prev.map((b, idx) => idx === onlyIndex ? { ...b, status: 'pending', error: undefined, message: undefined } : b))
+    } else {
+      // Reset tất cả status khi chạy full batch
+      setBatches(prev => prev.map(b => ({ ...b, status: 'pending', error: undefined, message: undefined })))
+    }
 
     let hadErrors = false
     let hadPartials = false
 
-    for (let i = 0; i < currentBatches.length; i++) {
+    for (let queueIndex = 0; queueIndex < queue.length; queueIndex++) {
+      const { batch, index: batchIndex } = queue[queueIndex]
+
       // Kiểm tra cancel trước mỗi batch
       if (batchCancelledRef.current) {
-        addLog('warn', `Đã hủy — dừng tại batch ${i + 1}.`)
+        addLog('warn', `Đã hủy — dừng tại batch ${queueIndex + 1}.`)
         break
       }
 
-      const batch = currentBatches[i]
       if (!batch.name.trim()) {
-        addLog('warn', `Bỏ qua batch ${i + 1}: chưa đặt tên.`)
+        addLog('warn', `Bỏ qua batch ${batchIndex + 1}: chưa đặt tên.`)
+        continue
+      }
+      if (typeof batch.playlistCount !== 'number' || typeof batch.minutesPerPlaylist !== 'number' || typeof batch.minVideoClipsTarget !== 'number') {
+        addLog('warn', `Bỏ qua batch ${batchIndex + 1}: thiếu số playlist/phút/clip mục tiêu hợp lệ.`)
         continue
       }
 
-      currentRunIndexRef.current = i
-      setCurrentRunIndex(i)
-      setBatches(prev => prev.map((b, idx) => idx === i ? { ...b, status: 'running', error: undefined, message: undefined } : b))
+      currentRunIndexRef.current = batchIndex
+      setCurrentRunIndex(batchIndex)
+      setBatches(prev => prev.map((b, idx) => idx === batchIndex ? { ...b, status: 'running', error: undefined, message: undefined } : b))
 
       addLog('info', `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`)
-      addLog('info', `Bắt đầu batch ${i + 1}/${currentBatches.length}: "${batch.name}"`)
+      addLog('info', `Bắt đầu batch ${queueIndex + 1}/${queue.length}: "${batch.name}"`)
       addLog(
         requireGpuForVideoEncode ? 'warn' : 'info',
         requireGpuForVideoEncode
@@ -424,10 +485,10 @@ export default function BatchModeTab() {
       // Tạo config cho Autopilot
       const config = {
         dayPlans: [{
-          id: `batch-day-${i}`,
+          id: `batch-day-${batchIndex}`,
           dateCode: batch.dateCode,
-          playlistCount: batch.playlistCount,
-          minutesPerPlaylist: batch.minutesPerPlaylist,
+          playlistCount: clampNumberOrDefault(batch.playlistCount, 1, 1),
+          minutesPerPlaylist: clampNumberOrDefault(batch.minutesPerPlaylist, 30, 1),
           presetId: batch.presetId,
           overrides: batch.overrides,
         }],
@@ -439,7 +500,8 @@ export default function BatchModeTab() {
           priorityMusicFolder: batch.priorityMusicFolder,
           randomMusicFolder: batch.randomMusicFolder,
           priorityVideoFolder: batch.priorityVideoFolder,
-          minVideoClipsTarget: batch.minVideoClipsTarget,
+          endingAudioPaths: batch.endingAudioPaths,
+          minVideoClipsTarget: clampNumberOrDefault(batch.minVideoClipsTarget, 1000, 100, 100000),
         },
         runtimeOverrides: {
           requireGpuForVideoEncode,
@@ -451,7 +513,7 @@ export default function BatchModeTab() {
         if (!res?.ok) {
           hadErrors = true
           addLog('error', `Batch "${batch.name}" lỗi: ${res?.error || 'Không rõ'}`)
-          setBatches(prev => prev.map((b, idx) => idx === i ? { ...b, status: 'error', error: res?.error } : b))
+          setBatches(prev => prev.map((b, idx) => idx === batchIndex ? { ...b, status: 'error', error: res?.error } : b))
           setRunProgress({
             status: 'error',
             currentStep: null,
@@ -471,18 +533,18 @@ export default function BatchModeTab() {
         // Cập nhật status từ backend
         const finalStatus = await w.api.autopilot.getStatus()
         if (batchCancelledRef.current && finalStatus?.status === 'idle') {
-          setBatches(prev => prev.map((b, idx) => idx === i ? { ...b, status: 'error', error: 'Đã hủy', message: finalStatus?.message } : b))
+          setBatches(prev => prev.map((b, idx) => idx === batchIndex ? { ...b, status: 'error', error: 'Đã hủy', message: finalStatus?.message } : b))
           addLog('warn', `Batch "${batch.name}" đã bị hủy.`)
           break
         }
 
         if (finalStatus?.status === 'error' || finalStatus?.status === 'cancelling') {
           hadErrors = true
-          setBatches(prev => prev.map((b, idx) => idx === i ? { ...b, status: 'error', error: finalStatus.error, message: finalStatus.message } : b))
+          setBatches(prev => prev.map((b, idx) => idx === batchIndex ? { ...b, status: 'error', error: finalStatus.error, message: finalStatus.message } : b))
           addLog('error', `Batch "${batch.name}" kết thúc với lỗi.`)
         } else if (finalStatus?.status === 'completed_with_errors') {
           hadPartials = true
-          setBatches(prev => prev.map((b, idx) => idx === i ? {
+          setBatches(prev => prev.map((b, idx) => idx === batchIndex ? {
             ...b,
             status: 'completed_with_errors',
             error: finalStatus.error,
@@ -490,11 +552,11 @@ export default function BatchModeTab() {
           } : b))
           addLog('warn', `Batch "${batch.name}" hoàn thành nhưng có lỗi.`)
         } else if (finalStatus?.status === 'completed') {
-          setBatches(prev => prev.map((b, idx) => idx === i ? { ...b, status: 'completed', error: undefined, message: finalStatus.message } : b))
+          setBatches(prev => prev.map((b, idx) => idx === batchIndex ? { ...b, status: 'completed', error: undefined, message: finalStatus.message } : b))
           addLog('info', `Batch "${batch.name}" hoàn thành!`)
         } else {
           const unexpectedStatus = finalStatus?.status || 'unknown'
-          setBatches(prev => prev.map((b, idx) => idx === i ? {
+          setBatches(prev => prev.map((b, idx) => idx === batchIndex ? {
             ...b,
             status: 'error',
             error: `Trạng thái cuối không hợp lệ: ${unexpectedStatus}`,
@@ -509,13 +571,13 @@ export default function BatchModeTab() {
         }
       } catch (err: any) {
         if (batchCancelledRef.current) {
-          setBatches(prev => prev.map((b, idx) => idx === i ? { ...b, status: 'error', error: 'Đã hủy' } : b))
+          setBatches(prev => prev.map((b, idx) => idx === batchIndex ? { ...b, status: 'error', error: 'Đã hủy' } : b))
           addLog('warn', `Batch "${batch.name}" đã bị hủy.`)
           break
         }
         hadErrors = true
         addLog('error', `Batch "${batch.name}" exception: ${err?.message}`)
-        setBatches(prev => prev.map((b, idx) => idx === i ? { ...b, status: 'error', error: err?.message } : b))
+        setBatches(prev => prev.map((b, idx) => idx === batchIndex ? { ...b, status: 'error', error: err?.message } : b))
         setRunProgress({
           status: 'error',
           currentStep: null,
@@ -527,7 +589,7 @@ export default function BatchModeTab() {
       }
 
       // Nghỉ 2s giữa các batch để cleanup (chỉ khi chưa cancel)
-      if (!batchCancelledRef.current && i < currentBatches.length - 1) {
+      if (!batchCancelledRef.current && queueIndex < queue.length - 1) {
         addLog('info', `Nghỉ 2s trước batch tiếp theo...`)
         await new Promise(resolve => setTimeout(resolve, 2000))
       }
@@ -535,12 +597,12 @@ export default function BatchModeTab() {
 
     if (!batchCancelledRef.current) {
       addLog('info', `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`)
-      addLog('info', `Batch Mode hoàn thành! Đã xử lý ${currentBatches.length} thể loại.`)
+      addLog('info', `Batch Mode hoàn thành! Đã xử lý ${queue.length} thể loại.`)
       setRunProgress({
         status: hadErrors || hadPartials ? 'completed_with_errors' : 'completed',
         currentStep: 5,
         stepPercent: 100,
-        message: `Batch Mode hoàn thành. Đã xử lý ${currentBatches.length} thể loại.`,
+        message: `Batch Mode hoàn thành. Đã xử lý ${queue.length} thể loại.`,
         error: undefined,
         updatedAt: Date.now(),
       })
@@ -584,9 +646,10 @@ export default function BatchModeTab() {
   }
 
   // Helpers
-  const canStart = batches.length > 0 && batches.some(b => b.name.trim())
+  const canStart = batches.length > 0 && batches.some(b => b.name.trim() && typeof b.playlistCount === 'number' && typeof b.minutesPerPlaylist === 'number' && typeof b.minVideoClipsTarget === 'number')
 
   const completedCount = batches.filter(b => b.status === 'completed' || b.status === 'completed_with_errors').length
+  const batchNumberLabel = (value: NumericText, fallback: number) => numberOrDefault(value, fallback)
   const errorCount = batches.filter(b => b.status === 'error').length
   const partialCount = batches.filter(b => b.status === 'completed_with_errors').length
   const currentBatch = currentRunIndex >= 0 ? batches[currentRunIndex] : null
@@ -684,13 +747,22 @@ export default function BatchModeTab() {
                   {batch.name || '(Chưa đặt tên)'}
                 </span>
                 <span style={{ fontSize: '12px', color: '#9ca3af' }}>
-                  {batch.playlistCount} pl × {batch.minutesPerPlaylist} phút
+                  {batchNumberLabel(batch.playlistCount, 10)} pl × {batchNumberLabel(batch.minutesPerPlaylist, 30)} phút
                 </span>
                 <span style={{ fontSize: '11px', color: statusColor, fontWeight: 500 }}>
                   {batch.status === 'running' ? 'Đang chạy...' : batch.status === 'completed' ? 'Xong' : batch.status === 'completed_with_errors' ? 'Xong (có lỗi)' : batch.status === 'error' ? 'Lỗi' : ''}
                 </span>
                 {!isRunning && (
                   <div style={{ display: 'flex', gap: '4px' }} onClick={e => e.stopPropagation()}>
+                    <button
+                      type="button"
+                      onClick={() => runBatch(idx)}
+                      disabled={!batch.name.trim() || typeof batch.playlistCount !== 'number' || typeof batch.minutesPerPlaylist !== 'number' || typeof batch.minVideoClipsTarget !== 'number'}
+                      style={{ ...btnSmall, color: '#86efac', borderColor: '#14532d' }}
+                      title={batch.name.trim() ? 'Chạy riêng thể loại này' : 'Cần đặt tên thể loại'}
+                    >
+                      Chạy
+                    </button>
                     <button type="button" onClick={() => handleDuplicateBatch(batch)} style={btnSmall} title="Nhân bản">Nhân bản</button>
                     <button
                       type="button"
@@ -748,18 +820,22 @@ export default function BatchModeTab() {
                       disabled={isRunning}
                     />
                     <label style={{ fontSize: '12px', color: '#9ca3af', marginLeft: '8px' }}>Số playlist</label>
-                    <input
-                      type="number" min={1}
+                    <NumericDraftInput
+                      min={1}
+                      integer
+                      allowBlank
                       value={batch.playlistCount}
-                      onChange={e => handleUpdateBatch(batch.id, { playlistCount: Number(e.target.value) || 1 })}
+                      onCommit={(value) => handleUpdateBatch(batch.id, { playlistCount: value })}
                       style={{ ...inputStyle, width: '70px' }}
                       disabled={isRunning}
                     />
                     <label style={{ fontSize: '12px', color: '#9ca3af', marginLeft: '8px' }}>Phút/pl</label>
-                    <input
-                      type="number" min={1}
+                    <NumericDraftInput
+                      min={1}
+                      integer
+                      allowBlank
                       value={batch.minutesPerPlaylist}
-                      onChange={e => handleUpdateBatch(batch.id, { minutesPerPlaylist: Number(e.target.value) || 1 })}
+                      onCommit={(value) => handleUpdateBatch(batch.id, { minutesPerPlaylist: value })}
                       style={{ ...inputStyle, width: '70px' }}
                       disabled={isRunning}
                     />
@@ -788,8 +864,10 @@ export default function BatchModeTab() {
                     <div key={field} style={{ display: 'flex', alignItems: 'flex-start', gap: '6px' }}>
                       <label style={{ minWidth: '120px', fontSize: '11px', color: '#6b7280', paddingTop: '6px' }}>{label}</label>
                       <textarea
-                        readOnly
                         value={(batch as any)[field] || ''}
+                        onChange={e => handleUpdateBatch(batch.id, { [field]: e.target.value } as any)}
+                        disabled={isRunning}
+                        placeholder={field === 'rootVideo' ? 'Dán mỗi thư mục video một dòng' : 'Dán hoặc nhập đường dẫn thư mục'}
                         rows={Math.max(1, ((batch as any)[field] || '').split('\n').length)}
                         style={{
                           ...inputStyle,
@@ -816,15 +894,46 @@ export default function BatchModeTab() {
                     </div>
                   ))}
 
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: '6px' }}>
+                    <label style={{ minWidth: '120px', fontSize: '11px', color: '#6b7280', paddingTop: '6px' }}>Nhạc nối cuối</label>
+                    <textarea
+                      readOnly
+                      value={(batch.endingAudioPaths ?? []).join('\n')}
+                      rows={Math.max(1, (batch.endingAudioPaths ?? []).length)}
+                      style={{
+                        ...inputStyle,
+                        flex: 1,
+                        resize: 'vertical',
+                        minHeight: '30px',
+                        wordBreak: 'break-all',
+                        whiteSpace: 'pre-wrap',
+                        fontFamily: 'monospace',
+                        fontSize: '11px',
+                        lineHeight: '1.4',
+                      }}
+                      title={(batch.endingAudioPaths ?? []).join('\n')}
+                    />
+                    <button type="button" onClick={() => handleSelectEndingAudio(batch.id)} style={btnSmall} disabled={isRunning}>Chọn</button>
+                    <button
+                      type="button"
+                      onClick={() => handleUpdateBatch(batch.id, { endingAudioPaths: [] })}
+                      style={{ ...btnSmall, color: '#f87171', fontSize: '10px' }}
+                      disabled={isRunning}
+                    >
+                      Xóa
+                    </button>
+                  </div>
+
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                     <label style={{ minWidth: '120px', fontSize: '11px', color: '#6b7280' }}>Clip mục tiêu</label>
-                    <input
-                      type="number" min={100} max={100000} step={100}
+                    <NumericDraftInput
+                      min={100}
+                      max={100000}
+                      step={100}
+                      integer
+                      allowBlank
                       value={batch.minVideoClipsTarget}
-                      onChange={e => {
-                        const v = Math.min(100000, Math.max(100, Number(e.target.value) || 1000))
-                        handleUpdateBatch(batch.id, { minVideoClipsTarget: v })
-                      }}
+                      onCommit={(value) => handleUpdateBatch(batch.id, { minVideoClipsTarget: value })}
                       style={{ ...inputStyle, width: '100px' }}
                       disabled={isRunning}
                     />
@@ -902,8 +1011,8 @@ export default function BatchModeTab() {
                     plan={showConfigFor === batch.id ? {
                       id: batch.id,
                       dateCode: batch.dateCode,
-                      playlistCount: batch.playlistCount,
-                      minutesPerPlaylist: batch.minutesPerPlaylist,
+                      playlistCount: numberOrDefault(batch.playlistCount, 10),
+                      minutesPerPlaylist: numberOrDefault(batch.minutesPerPlaylist, 30),
                       presetId: batch.presetId,
                       overrides: batch.overrides,
                     } : null}
@@ -921,6 +1030,7 @@ export default function BatchModeTab() {
                       priorityMusicFolder: batch.priorityMusicFolder,
                       randomMusicFolder: batch.randomMusicFolder,
                       priorityVideoFolder: batch.priorityVideoFolder,
+                      endingAudioPaths: batch.endingAudioPaths,
                     }}
                   />
 
@@ -1060,7 +1170,7 @@ export default function BatchModeTab() {
         {!isRunning ? (
           <button
             type="button"
-            onClick={runBatch}
+            onClick={() => runBatch()}
             disabled={!canStart}
             style={{
               padding: '8px 20px',

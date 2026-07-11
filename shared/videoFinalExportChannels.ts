@@ -148,14 +148,21 @@ export interface FinalExportVisualizerOptions {
   sensitivity?: number
 }
 
+export interface FinalExportEndingAudio {
+  paths: string[]
+}
+
 export interface FinalExportRequestPayload {
   requestId: string
   audioSource: FinalExportSource
-  videoSource: FinalExportSource
+  /** Nguồn video (tùy chọn khi dùng slideshow ảnh-only). */
+  videoSource?: FinalExportSource
   /** Nguồn ảnh cho slideshow (tùy chọn) – khi có, engine sẽ render ảnh thành clip video tạm trước khi ghép nhạc */
   imageSource?: FinalExportSource
   /** Nguồn video ưu tiên (tùy chọn) – các clip trong nguồn này sẽ được ưu tiên xuất hiện đầu video trước khi loop các clip khác */
   priorityVideoSource?: FinalExportSource
+  /** Nhạc nối thêm cuối mỗi output, không làm tăng số job audio chính. */
+  endingAudio?: FinalExportEndingAudio
   outputFolder: string
   outputFilename: string
   shuffle?: boolean // Shuffle video clips when building playlist
@@ -244,7 +251,7 @@ export interface FinalExportScanItem {
 
 export interface FinalExportScanResult {
   requestId: string
-  kind: 'audio' | 'video'
+  kind: 'audio' | 'video' | 'image'
   fileCount: number
   totalDurationSec: number
   items: FinalExportScanItem[]

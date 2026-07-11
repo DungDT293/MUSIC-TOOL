@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import NumericDraftInput from '../../components/NumericDraftInput'
 import {
   ScanMusicResult,
   BuildPlaylistsOptions,
@@ -27,9 +28,39 @@ function formatDurationShort(seconds: number): string {
   return `${m}:${sec.toString().padStart(2, '0')}`
 }
 
+const SCAN_RESULT_STORAGE_KEY = 'scanResultV1'
+
+function getActiveTracks(scanResult: ScanMusicResult | null, genreId: string): ScannedTrack[] {
+  if (!scanResult) return []
+  if (genreId === 'all') return scanResult.tracks
+  return scanResult.tracks.filter((track) => track.genreId === genreId)
+}
+
+function getAvailableGenres(scanResult: ScanMusicResult | null): Array<{ id: string; name: string; count: number }> {
+  if (!scanResult) return []
+  const configGenres = scanResult.config?.genres ?? []
+  if (configGenres.length > 0) {
+    return configGenres.map((genre) => ({
+      id: genre.id,
+      name: genre.name,
+      count: scanResult.tracks.filter((track) => track.genreId === genre.id).length,
+    }))
+  }
+
+  const byId = new Map<string, { id: string; name: string; count: number }>()
+  for (const track of scanResult.tracks) {
+    if (!track.genreId) continue
+    const current = byId.get(track.genreId) ?? { id: track.genreId, name: track.genreName || track.genreId, count: 0 }
+    current.count++
+    byId.set(track.genreId, current)
+  }
+  return Array.from(byId.values())
+}
+
 function CreatePlaylistPage() {
   const [scanResult, setScanResult] = useState<ScanMusicResult | null>(null)
   const [pinnedTrackIds, setPinnedTrackIds] = useState<string[]>([])
+  const [endingTrackIds, setEndingTrackIds] = useState<string[]>([])
   const [playlistCountInput, setPlaylistCountInput] = useState<string>('5')
   const [targetHoursInput, setTargetHoursInput] = useState<string>('0')
   const [targetMinutesInput, setTargetMinutesInput] = useState<string>('30')
@@ -42,6 +73,7 @@ function CreatePlaylistPage() {
   const [showPoolDetail, setShowPoolDetail] = useState(false)
   const [loading, setLoading] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
+  const [selectedGenreId, setSelectedGenreId] = useState('all')
   const [expandedPlaylistId, setExpandedPlaylistId] = useState<string | null>(null)
 
   // Helper clamp
@@ -61,7 +93,7 @@ function CreatePlaylistPage() {
       : 0 // 0 = invalid
 
   const hoursValid = Number.isFinite(parsedTargetHours) && parsedTargetHours >= 0 && parsedTargetHours <= 24
-  const minutesValid = Number.isFinite(parsedTargetMinutes) && parsedTargetMinutes >= 0 && parsedTargetMinutes <= 59
+  const minutesValid = Number.isFinite(parsedTargetMinutes) && parsedTargetMinutes >= 0
 
   const targetDurationMinutes =
     hoursValid && minutesValid && parsedTargetHours * 60 + parsedTargetMinutes > 0
@@ -89,30 +121,61 @@ function CreatePlaylistPage() {
     !Number.isFinite(playlistCount) ||
     !Number.isFinite(targetDurationMinutes)
 
-  // Load scanResult từ localStorage
+  // Load scanResult từ backend cache trước, localStorage chỉ fallback khi backend API không có/lỗi.
   useEffect(() => {
-    const raw = localStorage.getItem('scanResultV1')
-    if (!raw) {
-      // Không có scanResult → reset playlists
-      setPlaylists([])
+    let disposed = false
+
+    const loadSavedScan = async () => {
+      const hasBackendCacheApi = typeof window.api.getLastScanResult === 'function'
+      try {
+        if (hasBackendCacheApi) {
+          const saved = await window.api.getLastScanResult()
+          if (!disposed && saved?.tracks?.length) {
+            setScanResult(saved)
+            localStorage.setItem(SCAN_RESULT_STORAGE_KEY, JSON.stringify(saved))
+          }
+          return
+        }
+      } catch (e) {
+        console.warn('Failed to load getLastScanResult', e)
+      }
+
+      const raw = localStorage.getItem(SCAN_RESULT_STORAGE_KEY)
+      if (!raw || disposed) {
+        setPlaylists([])
+        return
+      }
+
+      try {
+        const parsed: ScanMusicResult = JSON.parse(raw)
+        setScanResult(parsed)
+      } catch (e) {
+        console.error('Failed to parse scanResultV1', e)
+        setPlaylists([])
+      }
+    }
+
+    loadSavedScan()
+    return () => { disposed = true }
+  }, [])
+
+  const availableGenres = getAvailableGenres(scanResult)
+  const activeTracks = getActiveTracks(scanResult, selectedGenreId)
+
+  // Reset playlists khi scanResult/thể loại thay đổi
+  useEffect(() => {
+    const validGenreIds = availableGenres.map((genre) => genre.id)
+    if (selectedGenreId !== 'all' && !validGenreIds.includes(selectedGenreId)) {
+      setSelectedGenreId('all')
       return
     }
 
-    try {
-      const parsed: ScanMusicResult = JSON.parse(raw)
-      setScanResult(parsed)
-    } catch (e) {
-      console.error('Failed to parse scanResultV1', e)
-      setPlaylists([])
-    }
-  }, [])
-
-  // Reset playlists khi scanResult thay đổi (quét nhạc mới)
-  useEffect(() => {
     setPlaylists([])
     setWarnings([])
-    if (scanResult) loadPoolStats(scanResult.tracks)
-  }, [scanResult])
+    setPinnedTrackIds((ids) => ids.filter((id) => activeTracks.some((track) => track.id === id)))
+    setEndingTrackIds((ids) => ids.filter((id) => activeTracks.some((track) => track.id === id)))
+    if (scanResult) loadPoolStats(activeTracks)
+  }, [scanResult, selectedGenreId])
 
   // Listen for custom event khi Tab 1 quét nhạc mới (trong cùng window)
   useEffect(() => {
@@ -134,6 +197,18 @@ function CreatePlaylistPage() {
       if (prev.includes(trackId)) {
         return prev.filter((id) => id !== trackId)
       } else {
+        setEndingTrackIds((ids) => ids.filter((id) => id !== trackId))
+        return [...prev, trackId]
+      }
+    })
+  }
+
+  const handleToggleEnding = (trackId: string) => {
+    setEndingTrackIds((prev) => {
+      if (prev.includes(trackId)) {
+        return prev.filter((id) => id !== trackId)
+      } else {
+        setPinnedTrackIds((ids) => ids.filter((id) => id !== trackId))
         return [...prev, trackId]
       }
     })
@@ -157,11 +232,16 @@ function CreatePlaylistPage() {
     if (!window.api?.clearMusicPool) return
     if (!confirm('Xoá toàn bộ lịch sử sử dụng nhạc? Pool sẽ reset về trạng thái ban đầu.')) return
     await window.api.clearMusicPool()
-    if (scanResult) await loadPoolStats(scanResult.tracks)
+    if (scanResult) await loadPoolStats(activeTracks)
   }
 
   const handleCreatePlaylists = async () => {
     if (!scanResult) return
+
+    if (activeTracks.length === 0) {
+      setError('Thể loại đang chọn không có bài nào.')
+      return
+    }
 
     if (invalidConfig) {
       setError('Vui lòng nhập số playlist và thời lượng hợp lệ.')
@@ -174,9 +254,13 @@ function CreatePlaylistPage() {
     setWarnings([])
 
     try {
+      const endingTracks = endingTrackIds
+        .map((id) => activeTracks.find((track) => track.id === id))
+        .filter((track): track is ScannedTrack => Boolean(track))
       const options: BuildPlaylistsOptions = {
-        tracks: scanResult.tracks,
-        pinnedTrackIds,
+        tracks: activeTracks,
+        pinnedTrackIds: pinnedTrackIds.filter((id) => activeTracks.some((track) => track.id === id)),
+        endingTracks,
         playlistCount, // số đã clamp
         targetDurationMinutes, // số đã clamp
         priorityRatioMin, // từ UI (mặc định 0.65)
@@ -188,7 +272,7 @@ function CreatePlaylistPage() {
       setWarnings(result.warnings ?? [])
       setExpandedPlaylistId(result.playlists[0]?.id || null)
       // Load pool stats sau khi tạo xong để cập nhật trạng thái mới
-      await loadPoolStats(scanResult.tracks)
+      await loadPoolStats(activeTracks)
 
       // Reset input về số đã chuẩn hóa sau khi tạo thành công
       if (playlistCount > 0 && targetDurationMinutes > 0) {
@@ -219,13 +303,18 @@ function CreatePlaylistPage() {
     )
   }
 
-  // Filter tracks theo search query
-  const filteredTracks = scanResult.tracks.filter((track) =>
+  // Filter tracks theo thể loại + search query
+  const filteredTracks = activeTracks.filter((track) =>
     track.fileName.toLowerCase().includes(searchQuery.toLowerCase())
   )
 
+  const endingTracks = endingTrackIds
+    .map((id) => activeTracks.find((track) => track.id === id))
+    .filter((track): track is ScannedTrack => Boolean(track))
+  const endingDurationSec = endingTracks.reduce((sum, track) => sum + track.duration, 0)
+
   // Tính tổng thời lượng có thể
-  const totalAvailableDuration = scanResult.summary.totalDuration
+  const totalAvailableDuration = activeTracks.reduce((sum, track) => sum + track.duration, 0) - endingDurationSec
   const estimatedPlaylistsPossible =
     targetDurationMinutes > 0
       ? Math.floor(totalAvailableDuration / (targetDurationMinutes * 60))
@@ -236,8 +325,31 @@ function CreatePlaylistPage() {
       {/* Bên trái: Danh sách bài hát */}
       <div style={{ flex: '0 0 400px', display: 'flex', flexDirection: 'column' }}>
         <h2 style={{ marginBottom: '15px', fontSize: '20px', fontWeight: 'bold' }}>
-          Danh sách bài hát ({pinnedTrackIds.length} đã chọn)
+          Danh sách bài hát ({activeTracks.length} bài, {pinnedTrackIds.length} ghim, {endingTrackIds.length} nhạc cuối)
         </h2>
+        {availableGenres.length > 0 && (
+          <select
+            value={selectedGenreId}
+            onChange={(e) => setSelectedGenreId(e.target.value)}
+            style={{
+              width: '100%',
+              padding: '8px 12px',
+              marginBottom: '10px',
+              backgroundColor: '#1e1e1e',
+              border: '1px solid #444',
+              borderRadius: '4px',
+              color: '#fff',
+              fontSize: '14px',
+            }}
+          >
+            <option value="all">Tất cả thể loại ({scanResult.tracks.length} bài)</option>
+            {availableGenres.map((genre) => (
+              <option key={genre.id} value={genre.id}>
+                {genre.name} ({genre.count} bài)
+              </option>
+            ))}
+          </select>
+        )}
         <input
           type="text"
           placeholder="Tìm kiếm theo tên bài..."
@@ -279,16 +391,28 @@ function CreatePlaylistPage() {
                   borderBottom: '1px solid #333',
                 }}
               >
-                <input
-                  type="checkbox"
-                  checked={pinnedTrackIds.includes(track.id)}
-                  onChange={() => handleTogglePinned(track.id)}
-                  style={{ marginRight: '10px', cursor: 'pointer' }}
-                />
+                <label style={{ display: 'flex', alignItems: 'center', gap: '4px', marginRight: '10px', fontSize: '11px', color: '#aaa', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={pinnedTrackIds.includes(track.id)}
+                    onChange={() => handleTogglePinned(track.id)}
+                    style={{ cursor: 'pointer' }}
+                  />
+                  Ghim
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '4px', marginRight: '10px', fontSize: '11px', color: '#ffcc88', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={endingTrackIds.includes(track.id)}
+                    onChange={() => handleToggleEnding(track.id)}
+                    style={{ cursor: 'pointer' }}
+                  />
+                  Cuối
+                </label>
                 <div style={{ flex: 1 }}>
                   <div style={{ color: '#ccc', fontSize: '14px' }}>{track.fileName}</div>
                   <div style={{ color: '#888', fontSize: '12px', marginTop: '2px' }}>
-                    {track.folderType === 'priority' ? 'Ưu tiên' : 'Random'} •{' '}
+                    {track.folderType === 'priority' ? 'Ưu tiên' : 'Random'} • {track.genreName || 'Mặc định'} •{' '}
                     {formatDurationShort(track.duration)}
                   </div>
                 </div>
@@ -318,7 +442,7 @@ function CreatePlaylistPage() {
                   Reset
                 </button>
                 <button
-                  onClick={() => scanResult && loadPoolStats(scanResult.tracks)}
+                  onClick={() => scanResult && loadPoolStats(activeTracks)}
                   disabled={poolLoading}
                   style={{ fontSize: '11px', padding: '2px 7px', backgroundColor: '#2a3a2a', color: '#88cc88', border: '1px solid #446644', borderRadius: '3px', cursor: 'pointer' }}
                 >
@@ -398,22 +522,12 @@ function CreatePlaylistPage() {
               <label style={{ display: 'block', marginBottom: '5px', color: '#ccc' }}>
                 Số playlist cần tạo
               </label>
-              <input
-                type="number"
-                min="1"
-                value={playlistCountInput}
-                onChange={(e) => {
-                  const v = e.target.value
-                  // Cho phép rỗng
-                  if (v === '') {
-                    setPlaylistCountInput('')
-                    return
-                  }
-                  // Chỉ nhận số nguyên dương
-                  if (/^\d+$/.test(v)) {
-                    setPlaylistCountInput(v)
-                  }
-                }}
+              <NumericDraftInput
+                min={1}
+                integer
+                allowBlank
+                value={playlistCountInput === '' ? '' : Number(playlistCountInput)}
+                onCommit={(value) => setPlaylistCountInput(value === '' ? '' : String(value))}
                 style={{
                   width: '200px',
                   padding: '8px 12px',
@@ -431,25 +545,13 @@ function CreatePlaylistPage() {
               </label>
               <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
                 <div>
-                  <input
-                    type="number"
-                    min="0"
-                    max="24"
-                    value={targetHoursInput}
-                    onChange={(e) => {
-                      const v = e.target.value
-                      if (v === '') {
-                        setTargetHoursInput('')
-                        return
-                      }
-                      if (/^\d+$/.test(v)) {
-                        const num = parseInt(v, 10)
-                        if (num >= 0 && num <= 24) {
-                        setTargetHoursInput(v)
-                          // KHÔNG tự động thay đổi phút khi nhập giờ
-                        }
-                      }
-                    }}
+                  <NumericDraftInput
+                    min={0}
+                    max={24}
+                    integer
+                    allowBlank
+                    value={targetHoursInput === '' ? '' : Number(targetHoursInput)}
+                    onCommit={(value) => setTargetHoursInput(value === '' ? '' : String(value))}
                     style={{
                       width: '100px',
                       padding: '8px 12px',
@@ -463,44 +565,12 @@ function CreatePlaylistPage() {
                   <div style={{ color: '#888', fontSize: '12px', marginTop: '4px' }}>Giờ</div>
                 </div>
                 <div>
-                  <input
-                    type="number"
-                    min="0"
-                    value={targetMinutesInput}
-                    onChange={(e) => {
-                      const v = e.target.value
-                      if (v === '') {
-                        setTargetMinutesInput('')
-                        return
-                      }
-                      if (/^\d+$/.test(v)) {
-                        const num = parseInt(v, 10)
-                        if (num >= 0) {
-                          // Nếu phút >= 60, tự động convert thành giờ + phút
-                          if (num >= 60) {
-                            const hours = Math.floor(num / 60)
-                            const minutes = num % 60
-                            const currentHours = targetHoursInput === '' ? 0 : parseInt(targetHoursInput, 10)
-                            const newHours = currentHours + hours
-                            
-                            // Giới hạn tổng giờ <= 24
-                            if (newHours <= 24) {
-                              setTargetHoursInput(newHours.toString())
-                              setTargetMinutesInput(minutes.toString())
-                            } else {
-                              // Nếu vượt quá 24 giờ, chỉ set phút tối đa có thể
-                              const maxMinutes = (24 - currentHours) * 60 + minutes
-                              if (maxMinutes >= 0) {
-                                setTargetMinutesInput(Math.min(maxMinutes, 59).toString())
-                              }
-                            }
-                          } else {
-                            // Phút < 60, chỉ set phút
-                        setTargetMinutesInput(v)
-                          }
-                        }
-                      }
-                    }}
+                  <NumericDraftInput
+                    min={0}
+                    integer
+                    allowBlank
+                    value={targetMinutesInput === '' ? '' : Number(targetMinutesInput)}
+                    onCommit={(value) => setTargetMinutesInput(value === '' ? '' : String(value))}
                     style={{
                       width: '100px',
                       padding: '8px 12px',
@@ -522,25 +592,13 @@ function CreatePlaylistPage() {
               <label style={{ display: 'block', marginBottom: '5px', color: '#ccc' }}>
                 Tỷ lệ nhạc ưu tiên (%)
               </label>
-              <input
-                type="number"
-                min="0"
-                max="100"
-                step="1"
-                value={priorityRatioInput}
-                onChange={(e) => {
-                  const v = e.target.value
-                  if (v === '') {
-                    setPriorityRatioInput('')
-                    return
-                  }
-                  if (/^\d*\.?\d*$/.test(v)) {
-                    const num = parseFloat(v)
-                    if (num >= 0 && num <= 100) {
-                      setPriorityRatioInput(v)
-                    }
-                  }
-                }}
+              <NumericDraftInput
+                min={0}
+                max={100}
+                step={1}
+                allowBlank
+                value={priorityRatioInput === '' ? '' : Number(priorityRatioInput)}
+                onCommit={(value) => setPriorityRatioInput(value === '' ? '' : String(value))}
                 placeholder="Để trống = mặc định 65-85%"
                 style={{
                   width: '200px',
@@ -559,8 +617,13 @@ function CreatePlaylistPage() {
               </div>
             </div>
             <div style={{ color: '#888', fontSize: '12px', lineHeight: '1.5' }}>
-              Logic: bài đã chọn sẽ luôn nằm đầu playlist, sau đó là nhạc ưu tiên ({priorityRatioInput ? `${priorityRatioInput}%` : '65-85%'} thời lượng), cuối cùng là nhạc random ({priorityRatioInput ? `${randomRatioPercent}%` : '15-35%'}).
+              Logic: bài đã chọn sẽ luôn nằm đầu playlist, sau đó là nhạc ưu tiên ({priorityRatioInput ? `${priorityRatioInput}%` : '65-85%'} thời lượng), cuối cùng là nhạc random ({priorityRatioInput ? `${randomRatioPercent}%` : '15-35%'}). Nhạc cuối nối thêm sau target chính.
             </div>
+            {endingTrackIds.length > 0 && (
+              <div style={{ color: '#ffcc88', fontSize: '12px' }}>
+                Nhạc cuối: {endingTrackIds.length} bài • {formatDuration(endingDurationSec)}. Output dự kiến dài hơn target chính từng playlist.
+              </div>
+            )}
             {estimatedPlaylistsPossible < playlistCount && (
               <div
                 style={{
@@ -572,7 +635,7 @@ function CreatePlaylistPage() {
                   fontSize: '12px',
                 }}
               >
-                Cảnh báo: Không đủ số bài khác nhau để đạt đúng thời lượng cho tất cả playlist. Một số bài có thể được lặp lại (nhưng sẽ không lặp liên tiếp).
+                Cảnh báo: Thể loại đang chọn không đủ số bài khác nhau để đạt đúng thời lượng cho tất cả playlist. Một số bài có thể được lặp lại (nhưng sẽ không lặp liên tiếp).
               </div>
             )}
             <button
@@ -642,11 +705,12 @@ function CreatePlaylistPage() {
                 Kết quả ({playlists.length} playlist)
               </h2>
               {playlists.map((playlist) => {
-                const priorityPercent = playlist.totalDurationSec > 0
-                  ? ((playlist.priorityDurationSec / playlist.totalDurationSec) * 100).toFixed(1)
+                const mainDurationSec = Math.max(playlist.totalDurationSec - (playlist.endingDurationSec ?? 0), 0)
+                const priorityPercent = mainDurationSec > 0
+                  ? ((playlist.priorityDurationSec / mainDurationSec) * 100).toFixed(1)
                   : '0.0'
-                const randomPercent = playlist.totalDurationSec > 0
-                  ? ((playlist.randomDurationSec / playlist.totalDurationSec) * 100).toFixed(1)
+                const randomPercent = mainDurationSec > 0
+                  ? ((playlist.randomDurationSec / mainDurationSec) * 100).toFixed(1)
                   : '0.0'
                 const isExpanded = expandedPlaylistId === playlist.id
 
@@ -680,7 +744,7 @@ function CreatePlaylistPage() {
                           {playlist.name}
                         </div>
                         <div style={{ fontSize: '14px', color: '#888' }}>
-                          Thời lượng: {formatDuration(playlist.totalDurationSec)} • Số bài:{' '}
+                          Thời lượng: {formatDuration(playlist.totalDurationSec)} • Main: {formatDuration(mainDurationSec)} • Nhạc cuối: {playlist.endingCount ?? 0} • Số bài:{' '}
                           {playlist.tracks.length} • Ưu tiên: {priorityPercent}%, Random:{' '}
                           {randomPercent}%
                         </div>
@@ -723,8 +787,8 @@ function CreatePlaylistPage() {
                             <tbody>
                               {playlist.tracks.map((track) => {
                                 const isPinned = pinnedTrackIds.includes(track.id)
-                                let typeLabel = track.folderType === 'priority' ? 'Ưu tiên' : 'Random'
-                                if (isPinned) {
+                                let typeLabel = track.role === 'ending' ? 'Nhạc cuối' : (track.folderType === 'priority' ? 'Ưu tiên' : 'Random')
+                                if (isPinned && track.role !== 'ending') {
                                   typeLabel = `Pinned${track.folderType === 'priority' ? ' + Ưu tiên' : ''}`
                                 }
 

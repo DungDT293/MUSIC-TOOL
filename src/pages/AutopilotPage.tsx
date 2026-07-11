@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import NumericDraftInput from '../components/NumericDraftInput'
 
 export type DayPresetId = 'tomorrowland' | 'partymix' | 'custom'
 
@@ -44,8 +45,10 @@ export interface AutopilotFoldersConfig {
   priorityMusicFolder: string
   randomMusicFolder: string
   priorityVideoFolder?: string
+  /** File nhạc nối cuối mỗi playlist/video. */
+  endingAudioPaths?: string[]
   /** Số clip video tối thiểu cần chọn (mặc định 1000) */
-  minVideoClipsTarget?: number
+  minVideoClipsTarget?: number | ''
 }
 
 type AutopilotRunStatus = 'idle' | 'running' | 'paused' | 'completed' | 'completed_with_errors' | 'error' | 'cancelling'
@@ -116,6 +119,17 @@ interface AutopilotConfig {
     finalExportUseGpuEncoding?: 'gpu' | 'cpu' | 'auto'
     requireGpuForVideoEncode?: boolean
   }
+}
+
+type NumericText = number | ''
+
+function numberOrDefault(value: NumericText | undefined, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback
+}
+
+function clampNumberOrDefault(value: NumericText | undefined, fallback: number, min: number, max?: number): number {
+  const next = numberOrDefault(value, fallback)
+  return Math.min(max ?? next, Math.max(min, next))
 }
 
 interface PriorityTrack {
@@ -248,15 +262,12 @@ function DayPlansSection({
                     }}
                   />
 
-                  <input
-                    type="number"
+                  <NumericDraftInput
                     min={1}
+                    integer
+                    allowBlank
                     value={plan.playlistCount}
-                    onChange={(e) =>
-                      onUpdateDay(plan.id, {
-                        playlistCount: e.target.value === '' ? '' : Number(e.target.value),
-                      })
-                    }
+                    onCommit={(value) => onUpdateDay(plan.id, { playlistCount: value })}
                     {...commonFieldHandlers}
                     style={{
                       width: '100%',
@@ -269,15 +280,12 @@ function DayPlansSection({
                     }}
                   />
 
-                  <input
-                    type="number"
+                  <NumericDraftInput
                     min={1}
+                    integer
+                    allowBlank
                     value={plan.minutesPerPlaylist}
-                    onChange={(e) =>
-                      onUpdateDay(plan.id, {
-                        minutesPerPlaylist: e.target.value === '' ? '' : Number(e.target.value),
-                      })
-                    }
+                    onCommit={(value) => onUpdateDay(plan.id, { minutesPerPlaylist: value })}
                     {...commonFieldHandlers}
                     style={{
                       width: '100%',
@@ -516,11 +524,9 @@ export function DayPlanDetailDialog({
 
     const normalized: DayPlanDetailOverrides = {
       ...local,
-      priorityTracksPerPlaylist: typeof local.priorityTracksPerPlaylist === 'number'
-        ? local.priorityTracksPerPlaylist
-        : 0,
-      videoPickPercent: typeof local.videoPickPercent === 'number' ? local.videoPickPercent : 0,
-      crossfadeSeconds: typeof local.crossfadeSeconds === 'number' ? local.crossfadeSeconds : 0,
+      priorityTracksPerPlaylist: clampNumberOrDefault(local.priorityTracksPerPlaylist, 6, 1, 10),
+      videoPickPercent: clampNumberOrDefault(local.videoPickPercent, 70, 50, 100),
+      crossfadeSeconds: clampNumberOrDefault(local.crossfadeSeconds, 4, 1, 10),
       titleVariant: local.titleVariant,
       topDj: local.topDj,
       useCustomTitles: !!local.useCustomTitles,
@@ -697,18 +703,14 @@ export function DayPlanDetailDialog({
 
           <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', opacity: local.prioritySelectionMode === 'manual' ? 0.6 : 1 }}>
             <span>Số bài ưu tiên mỗi playlist</span>
-            <input
-              type="number"
+            <NumericDraftInput
               min={1}
               max={10}
+              integer
+              allowBlank
               disabled={local.prioritySelectionMode === 'manual'}
               value={local.priorityTracksPerPlaylist}
-              onChange={(e) =>
-                setLocal((prev) => ({
-                  ...prev,
-                  priorityTracksPerPlaylist: e.target.value === '' ? '' : Number(e.target.value),
-                }))
-              }
+              onCommit={(value) => setLocal((prev) => ({ ...prev, priorityTracksPerPlaylist: value }))}
               style={{
                 padding: '6px 8px',
                 borderRadius: '4px',
@@ -721,17 +723,12 @@ export function DayPlanDetailDialog({
 
           <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
             <span>Tỷ lệ chọn video (%)</span>
-            <input
-              type="number"
+            <NumericDraftInput
               min={50}
               max={100}
+              allowBlank
               value={local.videoPickPercent}
-              onChange={(e) =>
-                setLocal((prev) => ({
-                  ...prev,
-                  videoPickPercent: e.target.value === '' ? '' : Number(e.target.value),
-                }))
-              }
+              onCommit={(value) => setLocal((prev) => ({ ...prev, videoPickPercent: value }))}
               style={{
                 padding: '6px 8px',
                 borderRadius: '4px',
@@ -762,17 +759,12 @@ export function DayPlanDetailDialog({
           {local.enableCrossfade && (
             <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginLeft: '20px' }}>
               <span>Thời lượng crossfade (giây)</span>
-              <input
-                type="number"
+              <NumericDraftInput
                 min={1}
                 max={10}
+                allowBlank
                 value={local.crossfadeSeconds}
-                onChange={(e) =>
-                  setLocal((prev) => ({
-                    ...prev,
-                    crossfadeSeconds: e.target.value === '' ? '' : Number(e.target.value),
-                  }))
-                }
+                onCommit={(value) => setLocal((prev) => ({ ...prev, crossfadeSeconds: value }))}
                 style={{
                   padding: '6px 8px',
                   borderRadius: '4px',
@@ -1191,6 +1183,27 @@ function FoldersAndSourcesSection({ foldersConfig, onChange, videoSelectionInfo 
     }
   }
 
+  const handleChooseEndingAudio = async () => {
+    const w = window
+    if (w.api?.selectAudioFilesMulti) {
+      try {
+        const paths = await w.api.selectAudioFilesMulti()
+        if (!paths || paths.length === 0) return
+        onChange({ endingAudioPaths: Array.from(new Set(paths.filter(Boolean))) })
+        return
+      } catch (err) {
+        console.warn('[AutopilotPage] selectAudioFilesMulti error (ending audio), fallback prompt:', err)
+      }
+    }
+
+    const current = foldersConfig.endingAudioPaths?.join('\n') || ''
+    // eslint-disable-next-line no-alert
+    const next = window.prompt('Nhập file nhạc cuối, mỗi dòng một đường dẫn.', current)
+    if (next != null) {
+      onChange({ endingAudioPaths: next.split(/\r?\n/).map(p => p.trim()).filter(Boolean) })
+    }
+  }
+
   return (
     <section style={{ flex: 2, display: 'flex', flexDirection: 'column', gap: '12px' }}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -1330,16 +1343,14 @@ function FoldersAndSourcesSection({ foldersConfig, onChange, videoSelectionInfo 
               <label style={{ fontSize: '12px', color: '#9ca3af', whiteSpace: 'nowrap' }}>
                 Số clip mục tiêu:
               </label>
-              <input
-                type="number"
+              <NumericDraftInput
                 min={100}
                 max={100000}
                 step={100}
+                integer
+                allowBlank
                 value={foldersConfig.minVideoClipsTarget ?? 1000}
-                onChange={(e) => {
-                  const v = Math.min(100000, Math.max(100, Number(e.target.value) || 1000))
-                  onChange({ minVideoClipsTarget: v })
-                }}
+                onCommit={(value) => onChange({ minVideoClipsTarget: value })}
                 style={{
                   width: '90px',
                   padding: '3px 6px',
@@ -1382,10 +1393,17 @@ function FoldersAndSourcesSection({ foldersConfig, onChange, videoSelectionInfo 
               onChoose={() => handleChooseMusicFolder('randomMusicFolder')}
               onClear={() => onChange({ randomMusicFolder: '' })}
             />
+            <MusicFolderRow
+              label="Nhạc nối cuối (tùy chọn)"
+              value={(foldersConfig.endingAudioPaths ?? []).join('\n')}
+              onChoose={handleChooseEndingAudio}
+              onClear={() => onChange({ endingAudioPaths: [] })}
+            />
           </div>
           <span style={{ display: 'block', marginTop: '10px', fontSize: '11px', color: '#9ca3af', lineHeight: 1.5 }}>
             - Nhạc ưu tiên sẽ luôn được ưu tiên mở đầu playlist (65–80% thời lượng).<br />
             - Nhạc random bổ sung phần còn lại để đủ thời lượng và tạo độ đa dạng.<br />
+            - Nhạc nối cuối được append sau target chính của từng playlist/video.<br />
             - Có thể chọn 1 hoặc cả 2 thư mục, Autopilot sẽ tự cân đối.
           </span>
         </div>
@@ -1529,6 +1547,7 @@ function MusicFolderRow({ label, value, onChoose, onClear }: MusicFolderRowProps
 
 interface AutopilotControlSectionProps {
   config: AutopilotConfig
+  numbersValid: boolean
   runProgress: AutopilotRunProgress
   onStart: () => void
   onCancel: () => void
@@ -1536,6 +1555,7 @@ interface AutopilotControlSectionProps {
 
 function AutopilotControlSection({
   config,
+  numbersValid,
   runProgress,
   onStart,
   onCancel,
@@ -1546,6 +1566,7 @@ function AutopilotControlSection({
   // Cho phép start lại khi status là 'idle', 'error', hoặc 'completed' (để user có thể chạy lại sau khi sửa lỗi)
   const canStart =
     config.dayPlans.length > 0 &&
+    numbersValid &&
     !!config.folders.rootAudio &&
     !!config.folders.rootVideo &&
     !!config.folders.rootFinal &&
@@ -1956,6 +1977,7 @@ function AutopilotPageLegacy() {
         priorityMusicFolder: parsed?.folders?.priorityMusicFolder || '',
         randomMusicFolder: parsed?.folders?.randomMusicFolder || '',
         priorityVideoFolder: parsed?.folders?.priorityVideoFolder || '',
+        endingAudioPaths: Array.isArray(parsed?.folders?.endingAudioPaths) ? parsed.folders.endingAudioPaths : [],
         minVideoClipsTarget: typeof parsed?.folders?.minVideoClipsTarget === 'number' ? parsed.folders.minVideoClipsTarget : 1000,
       }
     } catch {
@@ -1992,14 +2014,21 @@ function AutopilotPageLegacy() {
 
   const currentOverrides: DayPlanDetailOverrides = currentDetailPlan?.overrides ?? createDefaultOverrides()
 
+  const numbersValid =
+    dayPlans.every((plan) => typeof plan.playlistCount === 'number' && typeof plan.minutesPerPlaylist === 'number') &&
+    typeof foldersConfig.minVideoClipsTarget === 'number'
+
   const config: AutopilotConfig = {
     // FIX: Coerce number|'' sang number trước khi gửi IPC
     dayPlans: dayPlans.map(plan => ({
       ...plan,
-      playlistCount: typeof plan.playlistCount === 'number' ? plan.playlistCount : (Number(plan.playlistCount) || 1),
-      minutesPerPlaylist: typeof plan.minutesPerPlaylist === 'number' ? plan.minutesPerPlaylist : (Number(plan.minutesPerPlaylist) || 60),
+      playlistCount: clampNumberOrDefault(plan.playlistCount, 1, 1),
+      minutesPerPlaylist: clampNumberOrDefault(plan.minutesPerPlaylist, 60, 1),
     })),
-    folders: foldersConfig,
+    folders: {
+      ...foldersConfig,
+      minVideoClipsTarget: clampNumberOrDefault(foldersConfig.minVideoClipsTarget, 1000, 100, 100000),
+    },
   }
 
   const videoSelectionInfo =
@@ -2192,6 +2221,18 @@ function AutopilotPageLegacy() {
       return
     }
 
+    const invalidPlan = dayPlans.find((plan) => typeof plan.playlistCount !== 'number' || typeof plan.minutesPerPlaylist !== 'number')
+    if (invalidPlan) {
+      // eslint-disable-next-line no-alert
+      alert(`Ngày ${invalidPlan.dateCode || '(chưa nhập)'} thiếu số playlist hoặc phút/playlist hợp lệ.`)
+      return
+    }
+    if (typeof foldersConfig.minVideoClipsTarget !== 'number') {
+      // eslint-disable-next-line no-alert
+      alert('Vui lòng nhập số clip mục tiêu hợp lệ.')
+      return
+    }
+
     console.log('[Autopilot] start with config:', config)
     // Debug: Log dayPlans với overrides để kiểm tra customTitles
     config.dayPlans.forEach((plan, idx) => {
@@ -2363,6 +2404,7 @@ function AutopilotPageLegacy() {
 
       <AutopilotControlSection
         config={config}
+        numbersValid={numbersValid}
         runProgress={runProgress}
         onStart={simulateStartAutopilot}
         onCancel={handleCancel}

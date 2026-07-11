@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
+import NumericDraftInput from '../../../components/NumericDraftInput'
 import type {
   EQSettings, CompressorSettings, LoudnormSettings, StereoSettings,
   NoiseGateSettings, LimiterSettings, ExciterSettings, NoiseReductionSettings,
@@ -48,7 +49,7 @@ export default function EnhanceAudioMain() {
   // Output settings
   const [outputDir, setOutputDir] = useState<string>('')
   const [outputFormat, setOutputFormat] = useState<'mp3' | 'aac' | 'wav' | 'keep'>('keep')
-  const [bitrateKbps, setBitrateKbps] = useState(320)
+  const [bitrateKbps, setBitrateKbps] = useState<number | ''>(320)
   const [overwrite, setOverwrite] = useState(false)
 
   // Audio effect settings — 8 settings
@@ -189,9 +190,12 @@ export default function EnhanceAudioMain() {
 
   const handleStart = async () => {
     if (files.length === 0) { setError('Vui lòng thêm ít nhất 1 file.'); return }
+    if (outputFormat !== 'keep' && typeof bitrateKbps !== 'number') { setError('Vui lòng nhập bitrate hợp lệ.'); return }
     const anyEnabled = eq.enabled || compressor.enabled || loudnorm.enabled || stereo.enabled
       || noiseGate.enabled || limiter.enabled || exciter.enabled || noiseReduction.enabled
     if (!anyEnabled) { setError('Vui lòng bật ít nhất 1 hiệu ứng.'); return }
+
+    const normalizedBitrate = outputFormat !== 'keep' ? bitrateKbps : undefined
 
     setError(null); setSuccess(null); setResult(null); setProgress(null); setLoading(true)
 
@@ -201,7 +205,7 @@ export default function EnhanceAudioMain() {
         files: files.map(f => f.path),
         outputDir: outputDir || undefined,
         outputFormat,
-        bitrateKbps: outputFormat !== 'keep' ? bitrateKbps : undefined,
+        bitrateKbps: normalizedBitrate,
         overwrite,
         eq: eq.enabled ? eq : undefined,
         compressor: compressor.enabled ? compressor : undefined,
@@ -301,8 +305,8 @@ export default function EnhanceAudioMain() {
               <option value="wav">WAV</option>
             </select>
             {outputFormat !== 'keep' && (
-              <input type="number" min={64} max={512} step={32} value={bitrateKbps}
-                onChange={e => setBitrateKbps(Math.max(64, Math.min(512, Number(e.target.value) || 64)))} disabled={loading}
+              <NumericDraftInput min={64} max={512} step={32} integer allowBlank value={bitrateKbps}
+                onCommit={setBitrateKbps} disabled={loading}
                 style={{ width: '70px', backgroundColor: '#1a1a1a', color: '#ccc', border: '1px solid #333', borderRadius: '4px', padding: '4px 6px', fontSize: '12px' }} />
             )}
           </div>

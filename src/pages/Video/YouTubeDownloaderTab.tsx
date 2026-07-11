@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import NumericDraftInput from '../../components/NumericDraftInput';
 import {
   YouTubeQuality,
   YouTubeVideoInfo,
@@ -1473,25 +1474,26 @@ export function YouTubeDownloaderTab() {
           <>
             <div className="setting-item">
               <label>Giới hạn số videos:</label>
-              <input
-                type="number"
-                min="1"
+              <NumericDraftInput
+                min={1}
                 placeholder="Không giới hạn"
-                value={channelLimit || ''}
-                onChange={(e) => setChannelLimit(e.target.value ? parseInt(e.target.value) : undefined)}
+                value={channelLimit}
+                allowBlank
+                integer
+                onCommit={(value) => setChannelLimit(typeof value === 'number' ? value : undefined)}
                 disabled={isDownloading}
               />
             </div>
 
             <div className="setting-item">
               <label>Thời lượng tối thiểu (phút):</label>
-              <input
-                type="number"
-                min="0"
+              <NumericDraftInput
+                min={0}
                 step="0.5"
                 placeholder="Không giới hạn"
-                value={minDuration || ''}
-                onChange={(e) => setMinDuration(e.target.value ? parseFloat(e.target.value) : undefined)}
+                value={minDuration}
+                allowBlank
+                onCommit={(value) => setMinDuration(typeof value === 'number' ? value : undefined)}
                 disabled={isDownloading}
               />
               {minDuration && minDuration > 0 && (

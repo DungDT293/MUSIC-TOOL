@@ -8,22 +8,39 @@ import { z } from 'zod'
 
 // ========== Music Schemas ==========
 
+export const MusicScanGenreSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  priorityFolders: z.array(z.string()).optional().default([]),
+  randomFolders: z.array(z.string()).optional().default([]),
+})
+
 export const MusicScanFoldersSchema = z.object({
   priorityFolder: z.string().nullable().optional(),
   randomFolder: z.string().nullable().optional(),
+  genres: z.array(MusicScanGenreSchema).optional(),
+  forceRescan: z.boolean().optional(),
 }).transform((data) => ({
   priorityFolder: data.priorityFolder ?? null,
   randomFolder: data.randomFolder ?? null,
+  genres: data.genres,
+  forceRescan: data.forceRescan ?? false,
 }))
+
+const ScannedTrackSchema = z.object({
+  id: z.string().optional(),
+  path: z.string().optional(),
+  name: z.string().optional(),
+  fileName: z.string().optional(),
+  duration: z.number().optional(),
+  durationSec: z.number().optional(),
+  folderType: z.enum(['priority', 'random']).optional(),
+}).passthrough()
 
 export const BuildPlaylistsOptionsSchema = z.object({
   // DATA-01 fix: tracks is an array of track objects (id + path are required minimum fields)
-  tracks: z.array(z.object({
-    id: z.string().optional(),
-    path: z.string().optional(),
-    name: z.string().optional(),
-    durationSec: z.number().optional(),
-  }).passthrough()).optional(),
+  tracks: z.array(ScannedTrackSchema).optional(),
+  endingTracks: z.array(ScannedTrackSchema).optional(),
   pinnedTrackIds: z.array(z.string()).optional(),
   playlistCount: z.number().int().positive().optional(),
   targetDurationMinutes: z.number().positive().optional(),
@@ -156,6 +173,9 @@ export const FinalExportRequestPayloadSchema = z.object({
     z.object({ type: z.literal('file'), path: z.string().min(1) }),
     z.object({ type: z.literal('files'), path: z.string().optional(), paths: z.array(z.string().min(1)).min(1) }),
   ]).optional(),
+  endingAudio: z.object({
+    paths: z.array(z.string().min(1)).min(1),
+  }).optional(),
   outputFolder: z.string().min(1),
   outputFilename: z.string().min(1),
   shuffle: z.boolean().optional(),
@@ -211,6 +231,7 @@ export const AutopilotConfigSchema = z.object({
     priorityMusicFolder: z.string().optional(),
     randomMusicFolder: z.string().optional(),
     priorityVideoFolder: z.string().optional(),
+    endingAudioPaths: z.array(z.string().min(1)).optional(),
     minVideoClipsTarget: z.coerce.number().int().min(100).max(100000).optional(), // 100–100000, coerce string từ input
   }),
   // Additional fields that may be present but not in base interface
