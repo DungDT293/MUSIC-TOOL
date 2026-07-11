@@ -10,6 +10,85 @@ Cross-session changelog. **Newest entries on top.** Every feature update or bug 
 
 ---
 
+## 2026-07-11
+
+### Thêm agent sửa code tối thiểu và agent đọc tài liệu read-only
+- Files touched:
+  - [.claude/agents/minimal-change-applier.md](.claude/agents/minimal-change-applier.md) — specialist áp dụng yêu cầu code rõ ràng bằng diff nhỏ nhất, giữ dirty tree, chạy targeted verification và cập nhật HANDOFF sau thay đổi thật.
+  - [.claude/agents/repository-docs-reader.md](.claude/agents/repository-docs-reader.md) — specialist hard read-only để đọc, đối chiếu, tóm tắt docs repo/web với Fact/Inference/Unknown và citation.
+  - [.claude/skills/minimal-change-apply/SKILL.md](.claude/skills/minimal-change-apply/SKILL.md), [.claude/skills/repository-docs-research/SKILL.md](.claude/skills/repository-docs-research/SKILL.md) — routing, domain gates, trigger/near-miss matrix và dry-run scenarios cho hai agent.
+  - [CLAUDE.md](CLAUDE.md) — đăng ký trigger pointer, giữ `harness-orchestrator` review-only.
+  - [HANDOFF.md](HANDOFF.md) — ghi thay đổi theo rule dự án.
+- Why: harness hiện có specialist review theo domain nhưng thiếu executor ngang repo cho scoped code change và reader chuyên tổng hợp tài liệu repo/upstream mà không có quyền ghi.
+- Verification: Node assertion kiểm frontmatter/section bắt buộc và tool allowlist pass; docs reader không có write/shell tools; `git diff --check` pass. Hai custom agent chưa smoke-run được trong session hiện tại vì agent registry chưa refresh (`Agent type ... not found`); cần xác minh discovery trong session mới.
+- Follow-up: mở session mới từ repo chính, chạy một prompt gate cho `minimal-change-applier` và một prompt repo-only cho `repository-docs-reader`; theo dõi false-positive trigger trước khi thêm hook/settings.
+
+## 2026-07-08
+
+### Build Windows EXE 4.4.3 cho auto-update test
+- Files touched:
+  - [shared/videoFinalExportChannels.ts](shared/videoFinalExportChannels.ts) — sửa IPC type drift: `videoSource` optional cho slideshow ảnh-only; `FinalExportScanResult.kind` thêm `image` để khớp `scanImageSource` runtime.
+  - [dist-electron-output/latest.yml](dist-electron-output/latest.yml), `dist-electron-output/93-media-tool-mix-nhac-setup-4.4.3.exe`, `dist-electron-output/93-media-tool-mix-nhac-setup-4.4.3.exe.blockmap`, `dist-electron-output/93-media-tool-mix-nhac-4.4.3-portable.exe` — artifact Windows build local sau fix IPC type drift.
+  - [HANDOFF.md](HANDOFF.md) — ghi lại build theo rule dự án.
+- Why: user muốn build bản `4.4.3` để test auto-update và yêu cầu kiểm lại IPC/API nối có ổn không.
+- Verification: `package.json`, `package-lock.json`, [server/env.ts](server/env.ts) đều ở `4.4.3`; resource đóng gói có đủ `ffmpeg/ffprobe/ffplay/yt-dlp/AtomicParsley/license_public_key/installer.nsh`; updater guard còn `autoDownload=false`, `autoInstallOnAppQuit=false`, `app:installUpdate` chặn khi export active; manual IPC/API QA không thấy blocker sau khi fix type drift; `npm run build:win` exit 0; `latest.yml` ghi `version: 4.4.3`; installer size `387573884`, portable size `387343754`, blockmap size `399466`.
+- Warnings: build còn warnings cũ dynamic import/font asset/inject-hash sentinel; electron-builder dùng default icon, duplicate dependency references, Node `DEP0190`.
+- Follow-up: cần upload `setup`, `.blockmap`, `latest.yml` lên GitHub Release feed để client thật sự nhận auto-update.
+
+### Build Windows EXE 4.4.2
+- Files touched:
+  - [package.json](package.json), [package-lock.json](package-lock.json) — đổi app version sang `4.4.2` để electron-builder đặt version đúng trong installer/portable.
+  - [dist-electron-output/latest.yml](dist-electron-output/latest.yml), `dist-electron-output/93-media-tool-mix-nhac-setup-4.4.2.exe`, `dist-electron-output/93-media-tool-mix-nhac-setup-4.4.2.exe.blockmap`, `dist-electron-output/93-media-tool-mix-nhac-4.4.2-portable.exe` — artifact Windows build local.
+  - [HANDOFF.md](HANDOFF.md) — ghi lại build theo rule dự án.
+- Why: user yêu cầu build bản EXE `4.4.2`.
+- Verification: `npm run build:win` exit 0; `latest.yml` ghi `version: 4.4.2`; installer size `387574379`, portable size `387344208`, blockmap size `399471`.
+- Warnings: build còn warnings cũ dynamic import/font asset/inject-hash sentinel; electron-builder dùng default icon và báo duplicate dependency references/Node DEP0190.
+- Follow-up: [server/env.ts](server/env.ts) vẫn có `DEFAULT_POLICY_VERSION = '4.4.3'`; nếu Worker policy đang `min_supported_version=4.4.3`, app 4.4.2 có thể bị policy/update chặn. Chỉ dùng bản 4.4.2 này khi server policy cho phép.
+
+### NumericDraftInput dùng cho Autopilot/Music/YouTube/sóng nhạc
+- Files touched:
+  - [src/components/NumericDraftInput.tsx](src/components/NumericDraftInput.tsx) — helper input số giữ draft khi người dùng xóa/gõ dở, commit số hợp lệ, clamp khi blur.
+  - [src/pages/AutopilotPage.tsx](src/pages/AutopilotPage.tsx), [src/pages/Autopilot/BatchModeTab.tsx](src/pages/Autopilot/BatchModeTab.tsx) — Plan/Batch numeric fields dùng helper, cho phép xóa trắng rồi nhập lại, sửa lỗi JSX thiếu `}` ở nút chạy batch.
+  - [src/pages/Music/CreatePlaylistPage.tsx](src/pages/Music/CreatePlaylistPage.tsx), [src/pages/Music/ExportAudioPage.tsx](src/pages/Music/ExportAudioPage.tsx), [src/pages/Music/EnhanceAudio/LimiterPanel.tsx](src/pages/Music/EnhanceAudio/LimiterPanel.tsx), [src/pages/Music/EnhanceAudio/LoudnormPanel.tsx](src/pages/Music/EnhanceAudio/LoudnormPanel.tsx), [src/pages/Music/EnhanceAudio/index.tsx](src/pages/Music/EnhanceAudio/index.tsx) — playlist/crossfade/enhance numeric inputs dùng helper thay vì parse trực tiếp lúc đang gõ.
+  - [src/pages/Video/YouTubeDownloaderTab.tsx](src/pages/Video/YouTubeDownloaderTab.tsx), [src/pages/Video/FinalExportTab.tsx](src/pages/Video/FinalExportTab.tsx) — giới hạn tải/min duration và thông số sóng nhạc dùng helper.
+  - [HANDOFF.md](HANDOFF.md) — ghi lại thay đổi theo rule dự án.
+- Why: input số cũ tự ép value trong lúc đang gõ nên khó xóa trắng/nhập lại; cần hành vi draft ổn định cho các màn hình cấu hình.
+- Verification: grep `type="number"` trên các file mục tiêu không còn match; `npm run build` exit 0. Warnings còn lại là dynamic import/font asset/inject-hash sentinel cũ.
+- Follow-up: còn `type="number"` ở [src/pages/Video/MergeTab.tsx](src/pages/Video/MergeTab.tsx), [src/pages/Video/MultiCutTab.tsx](src/pages/Video/MultiCutTab.tsx), [src/pages/Video/SingleCutTabSimple.tsx](src/pages/Video/SingleCutTabSimple.tsx) ngoài scope yêu cầu hiện tại.
+
+### UI Quét nhạc gọn hơn + giữ cấu hình Autopilot/Batch sau update
+- Files touched:
+  - [src/pages/Music/ScanMusicPage.tsx](src/pages/Music/ScanMusicPage.tsx) — bỏ nút test khỏi UI scan, gom action scan vào header, giữ scan đa thể loại, chuyển tool chuẩn hóa bitrate và bảng preview bài hát sang `<details>` mặc định gọn, summary đổi thành stat tile.
+  - [src/pages/Autopilot/BatchModeTab.tsx](src/pages/Autopilot/BatchModeTab.tsx) — autosave Batch chỉ lưu config, không lưu runtime `status/error/message`; số playlist/phút/clip mục tiêu cho phép xóa rỗng rồi nhập lại, khi chạy mới clamp/default.
+  - [src/pages/AutopilotPage.tsx](src/pages/AutopilotPage.tsx) — Plan Mode numeric inputs dùng parser cho phép rỗng rồi nhập lại; config gửi backend mới clamp/default, autosave vẫn giữ đúng trạng thái người dùng đang nhập.
+  - [backend/utils/cacheCleanup.ts](backend/utils/cacheCleanup.ts) — version cleanup không xóa `Local Storage`/`IndexedDB` nữa để không làm mất config renderer như Autopilot/Batch.
+  - [HANDOFF.md](HANDOFF.md) — ghi lại thay đổi theo rule dự án.
+- Why: user thấy UI quét nhạc lộn xộn và muốn Autopilot/Batch nhớ cấu hình sau khi mở lại app; numeric inputs trước đó tự bật về default khi xóa nên dễ nhập nhầm.
+- Verification: `npm run build` exit 0. Warnings còn lại là warnings cũ dynamic import/font asset/inject-hash sentinel.
+- Follow-up: cần smoke manual trong app: Quét nhạc, Tạo playlist đọc lại scan cache, Batch Mode close/reopen giữ config, thử xóa trắng rồi nhập lại các ô số trong Plan/Batch.
+
+## 2026-07-08
+
+### Quét nhạc — nhiều thể loại + cache scan theo path
+- Files touched:
+  - [backend/music/scanMusic.ts](backend/music/scanMusic.ts), [backend/music/scanStore.ts](backend/music/scanStore.ts), [electron/handlers/musicHandlers.ts](electron/handlers/musicHandlers.ts), [shared/ipcSchemas.ts](shared/ipcSchemas.ts), [src/types/ipc.ts](src/types/ipc.ts) — mở rộng scan payload từ 2 folder cố định sang nhiều thể loại, thêm metadata genre/sourceFolder, reuse cache khi config giống và mọi path còn tồn tại.
+  - [src/pages/Music/ScanMusicPage.tsx](src/pages/Music/ScanMusicPage.tsx), [src/pages/Music/CreatePlaylistPage.tsx](src/pages/Music/CreatePlaylistPage.tsx) — Tab 1 quản lý nhiều thể loại/folder, hydrate kết quả đã lưu; Tab 2 load backend cache và lọc tạo playlist theo thể loại.
+  - [backend/autopilot/autopilotRunner.ts](backend/autopilot/autopilotRunner.ts) — Autopilot scan nhạc với `persist:false`/`forceRescan:true` để không ghi đè cache Tab 1.
+  - [tests/unit/backend/scanMusic.test.ts](tests/unit/backend/scanMusic.test.ts), [tests/unit/backend/scanStore.test.ts](tests/unit/backend/scanStore.test.ts) — check normalize legacy payload và cache usability theo path.
+- Why: user muốn quét nhiều thể loại nhạc và lần sau mở lại dùng dữ liệu đã quét nếu file vẫn ở đường dẫn cũ, không nhập folder/quét lại từ đầu.
+- Post-feedback fix: renderer gửi kèm `priorityFolder`/`randomFolder` đầu tiên cùng payload `genres` để dev app/main cũ không còn báo `No folders provided`; Tab 2 dropdown thể loại giờ lấy từ cả `config.genres` và metadata `track.genreId`, header hiển thị số bài của thể loại đang chọn.
+- Verification: `npm run build` exit 0; `npx vitest run tests/unit/backend/scanMusic.test.ts tests/unit/backend/scanStore.test.ts --reporter=verbose` chạy bằng PowerShell exit 0 (Bash Git shell bị lỗi Vitest project config pre-import, cả test cũ cũng lỗi tương tự).
+- Follow-up: cache chỉ kiểm path tồn tại, không hash/mtime nội dung; nếu thêm/xóa/sửa file trong folder thì bấm `Quét lại từ đầu`.
+
+## 2026-07-08
+
+### Autopilot Batch Mode — dán folder path + chạy riêng từng thể loại
+- Files touched:
+  - [src/pages/Autopilot/BatchModeTab.tsx](src/pages/Autopilot/BatchModeTab.tsx) — folder textareas trong Batch Mode cho nhập/dán trực tiếp path, giữ picker `Chọn`/`Xóa`; `runBatch` nhận queue một row hoặc toàn bộ batch; thêm nút `Chạy` ở từng thể loại và giữ nút `Chạy Batch` tổng.
+  - [HANDOFF.md](HANDOFF.md) — ghi lại thay đổi theo rule dự án.
+- Why: user muốn paste folder path thay vì luôn mở picker và muốn chạy riêng một thể loại khi Batch Mode có nhiều thể loại, không mất chế độ chạy batch tuần tự.
+- Follow-up: nếu cần paste nhiều folder bằng dấu `;` cho `Video đã cắt`, cần chuẩn hóa parser/validation backend; hiện hỗ trợ multiline như flow picker đang dùng.
+
 ## 2026-06-24
 
 ### Release prep — bump 4.4.3 cho auto-update

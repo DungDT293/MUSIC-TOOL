@@ -16,6 +16,10 @@ Project: 93-media-tool-mix-nhac — Electron + React + TypeScript desktop media 
   - License, auth, JWT, version policy, Worker server → `license-auth-change`
   - Build, packaging, updater, server deploy → `release-safety-check`
 - IPC-shape integrity (preload ↔ `src/types/ipc.ts` ↔ handler registration ↔ `shared/`): use `integration-qa` skill.
+- Explicit scoped implementation/fix requests: use `minimal-change-apply`; domain workflows above still apply for sensitive subsystems.
+- Multi-document repository or upstream documentation research: use `repository-docs-research`.
+
+`harness-orchestrator` remains review-only; do not place the code-writing agent in its review fan-out. `repository-docs-reader` is read-only and never edits code or documentation.
 
 Simple questions or single-file edits unrelated to the above can be answered directly.
 
@@ -34,4 +38,5 @@ After every feature update, fix, refactor, or notable change, append an entry to
 
 | Date | Change | Target | Reason |
 |------|--------|--------|--------|
+| 2026-07-11 | Added minimal code applier + read-only repository docs reader and routing skills | `.claude/agents/minimal-change-applier.md`, `.claude/agents/repository-docs-reader.md`, `.claude/skills/minimal-change-apply/`, `.claude/skills/repository-docs-research/`, `CLAUDE.md` | Add safe implementation and cited documentation workflows without changing review-only orchestration |
 | 2026-06-13 | Added orchestrator skill + integration-qa agent/skill + this pointer | `.claude/skills/harness-orchestrator/`, `.claude/agents/integration-qa.md`, `.claude/skills/integration-qa/`, `CLAUDE.md` | Route cross-cutting changes; close IPC contract-drift gap |
