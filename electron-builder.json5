@@ -7,6 +7,9 @@
     buildResources: 'build',
   },
 
+  // Keep Windows packaging within available 7-Zip memory for large FFmpeg bundles.
+  compression: 'store',
+
   files: [
     'dist/**/*',
     'dist-electron/**/*',

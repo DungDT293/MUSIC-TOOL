@@ -1,5 +1,13 @@
 # HANDOFF
 
+## 2026-09-30 — Complete portable package build with low-memory compression
+
+- Changed: electron-builder uses `compression: 'store'` to avoid 7-Zip memory exhaustion while packaging the ~1.36 GiB Windows media bundle.
+- Files: [electron-builder.json5](electron-builder.json5), [HANDOFF.md](HANDOFF.md).
+- Verification: `npx electron-builder --config electron-builder.json5 --config.directories.output=dist-electron-output-portable2 --win portable --config.win.target=portable` passed; portable EXE exists and packaged FFmpeg/FFprobe/yt-dlp/browser cookie extractor resources verified.
+- Risk: portable artifact is larger because compression is disabled; NSIS installer build still pending and no publish performed.
+- Follow-up: build NSIS with same config, launch packaged portable for media smoke, then decide whether archive size is acceptable.
+
 ## 2026-09-30 — Complete auth mock and verification test gate
 
 - Changed: Completed Electron mock surface required by auth regression tests (`protocol`, lifecycle, IPC listener/removal, BrowserWindow stub, and dev-auth helper).
