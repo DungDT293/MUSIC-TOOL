@@ -1794,13 +1794,14 @@ export async function executeFinalExport(
           ? 'gpu_heavy'
           : 'software'
 
+      const stagedOutputPath = path.join(jobScratchDir, `output-${String(job.jobIndex + 1).padStart(2, '0')}.mp4`)
       await runFinalCommand({
         requestId,
         totalDurationSec: effectiveAudio.durationSec,
         videoListPath: videoListFile,
         tempWorkspaceDir: jobScratchDir,
         audioPath: effectiveAudio.path,
-        outputPath: job.outputPath,
+        outputPath: stagedOutputPath,
         audioCodec,
         forceReencode,
         normalizeAudio,
@@ -1833,13 +1834,13 @@ export async function executeFinalExport(
         },
       })
 
-      let outputStat: fs.Stats
+      let stagedOutputStat: fs.Stats
       try {
-        outputStat = await fsp.stat(job.outputPath)
+        stagedOutputStat = await fsp.stat(stagedOutputPath)
       } catch {
         throw new Error(`FFmpeg completed but output file was not created: ${job.outputFileName}`)
       }
-      if (!outputStat.isFile() || outputStat.size <= 0) {
+      if (!stagedOutputStat.isFile() || stagedOutputStat.size <= 0) {
         throw new Error(`FFmpeg produced an empty output file: ${job.outputFileName}`)
       }
 
@@ -1861,7 +1862,7 @@ export async function executeFinalExport(
           : `Đang smoke-check file xuất ra ${currentJobIndex}/${plan.totalJobs} (copy-stream)...`,
       })
 
-      const verify = await verifyOutputVideo(job.outputPath, {
+      const verify = await verifyOutputVideo(stagedOutputPath, {
         expectedDurationSec: effectiveAudio.durationSec,
         toleranceSec: 5,
         decodeWindowSec: getVerifyDecodeWindowSec(shouldRunDeepVerify),
@@ -1901,7 +1902,7 @@ export async function executeFinalExport(
       }
 
       if (forceReencode) {
-        const playback = await runPlaybackTest(job.outputPath)
+        const playback = await runPlaybackTest(stagedOutputPath)
         if (playback.success) {
           console.log(
             `[FinalExport][playback] ${job.outputFileName} phát thử OK với ${playback.player} (exitCode=${playback.exitCode})`
@@ -1926,6 +1927,9 @@ export async function executeFinalExport(
           })
         }
       }
+
+      await fsp.rm(job.outputPath, { force: true })
+      await fsp.rename(stagedOutputPath, job.outputPath)
 
       // 6. Ghi tracklist file nếu có
       let tracklistPath: string | undefined = undefined
@@ -1989,6 +1993,13 @@ export async function executeFinalExport(
         if (videoJobManager.isCancelled(requestId)) {
           throw new Error('Đã dừng bởi người dùng')
         }
+
+        const failedStagedOutputPath = path.join(
+          tempDir,
+          `job_${String(job.jobIndex + 1).padStart(2, '0')}`,
+          `output-${String(job.jobIndex + 1).padStart(2, '0')}.mp4`,
+        )
+        await fsp.rm(failedStagedOutputPath, { force: true }).catch(() => {})
 
         const diagnostic = jobDiagnostics.get(job.jobIndex) ?? {
           stage: 'không xác định',

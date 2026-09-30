@@ -1,5 +1,13 @@
 # HANDOFF
 
+## 2026-09-30 — Stage final video output before publish
+
+- Changed: Each final-export job now writes to a request/job scratch output, verifies that staged file, then replaces the planned output path only after verification. Failed staged output is removed; stale final output is not used as verification input and retry can regenerate the same filename.
+- Files: [backend/video/finalExport.ts](backend/video/finalExport.ts), [HANDOFF.md](HANDOFF.md).
+- Preserved: no-clobber planning for unrelated existing outputs, output naming, verification rules, and atomic-ish same-drive publish flow.
+- Verification: esbuild syntax check and `git diff --check` passed. Real FFmpeg failure/retry smoke test remains pending.
+- Follow-up: inject FFmpeg failure with an existing output, verify stale output is not accepted, failed staged output is cleaned, and rerun succeeds.
+
 ## 2026-09-30 — Fence FinalExport UI restore, cancel, and source scans
 
 - Changed: FinalExport restore now restores `isExportingRef` and numeric queue progress correctly; progress/done/error listeners reject events without the active request identity or after cancellation; source scan results use a generation guard; files-mode status reports backend-valid count instead of raw selected count.
