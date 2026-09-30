@@ -654,30 +654,16 @@ export function forceResetAutopilot(): { reset: boolean; previousStatus: string 
     return { reset: false, previousStatus }
   }
 
-  console.warn(`[Autopilot] Force reset requested. Previous status: ${previousStatus}`)
+  console.warn(`[Autopilot] Force reset requested. Previous status: ${previousStatus}. Starting cancellation; waiting for teardown.`)
+  isCancelling = true
+  emit({ status: 'cancelling', message: 'Đang dừng Autopilot; chờ FFmpeg và scan kết thúc trước khi cho chạy lại...' })
 
-  // Kill any active video jobs
   try { cancelAutopilotVideoJobs() } catch {}
-
-  // Abort any active controllers
   for (const ctrl of activeAbortControllers) {
     try { ctrl.abort() } catch {}
   }
-  activeAbortControllers = []
 
-  isCancelling = false
-  activeRunToken = null
-  currentProgress = {
-    status: 'idle',
-    currentDayIndex: null,
-    currentStep: null,
-    stepPercent: 0,
-    message: 'Đã force reset Autopilot.',
-  }
-  lastHeartbeatAt = 0
-  scheduleProgressBroadcast(currentProgress)
-
-  return { reset: true, previousStatus }
+  return { reset: false, previousStatus }
 }
 
 function normalizeNumber(value: number | string | null | undefined, fallback: number): number {
@@ -729,15 +715,11 @@ export async function startAutopilot(
     // and the recovery branch would never trigger. The recovery itself nulls the token.
     if (lastHeartbeatAt > 0 && staleDuration > STALE_LOCK_TIMEOUT_MS) {
       console.warn(
-        `[Autopilot] Detected stale status='${currentProgress.status}' after ${Math.round(staleDuration / 1000)}s (token=${activeRunToken ? 'present-but-stale' : 'absent'}). Resetting to idle.`,
+        `[Autopilot] Detected stale status='${currentProgress.status}' after ${Math.round(staleDuration / 1000)}s (token=${activeRunToken ? 'present-but-stale' : 'absent'}). Refusing concurrent start; cancellation required before retry.`,
       )
-      currentProgress.status = 'idle'
-      isCancelling = false
-      activeAbortControllers = []
-      activeRunToken = null
-    } else {
-      throw new Error('Autopilot đang chạy. Hãy dừng job hiện tại trước khi chạy job mới.')
+      throw new Error('Autopilot cũ chưa xác nhận kết thúc. Hãy hủy và chờ teardown hoàn tất trước khi chạy lại.')
     }
+    throw new Error('Autopilot đang chạy. Hãy dừng job hiện tại trước khi chạy job mới.')
   }
 
   const runToken = randomUUID()

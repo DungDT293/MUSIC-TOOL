@@ -1,5 +1,13 @@
 # HANDOFF
 
+## 2026-09-30 — Refuse concurrent Autopilot start after stale heartbeat
+
+- Changed: Stale heartbeat no longer resets Autopilot singleton state to idle while old async work may still run. `forceResetAutopilot()` now initiates cancellation and keeps teardown ownership instead of reporting a fake reset.
+- Files: [backend/autopilot/autopilotRunner.ts](backend/autopilot/autopilotRunner.ts), [HANDOFF.md](HANDOFF.md).
+- Preserved: normal start/cancel flow, active run token ownership, and existing progress/log channels.
+- Verification: esbuild syntax check and `git diff --check` pending after this batch; long silent-run smoke test remains required.
+- Follow-up: hold a run in silent planning/FFmpeg, attempt second start, assert rejection; force reset must not allow a new run until old teardown completes.
+
 ## 2026-09-30 — Stage final video output before publish
 
 - Changed: Each final-export job now writes to a request/job scratch output, verifies that staged file, then replaces the planned output path only after verification. Failed staged output is removed; stale final output is not used as verification input and retry can regenerate the same filename.
