@@ -1,5 +1,13 @@
 # HANDOFF
 
+## 2026-09-30 — Bound Autopilot video scan and stop on cancel
+
+- Changed: Recursive video collection now shares a hard 50,000-entry cap, checks cancellation while walking, avoids unbounded recursive accumulation, and aborts before merging/shuffling after scan cancellation.
+- Files: [backend/autopilot/autopilotRunner.ts](backend/autopilot/autopilotRunner.ts), [HANDOFF.md](HANDOFF.md).
+- Preserved: folder bucketing, percent/minimum selection policy, summary counts, and video ordering within collected results.
+- Verification: esbuild syntax check and `git diff --check` passed. Large-folder/cancel smoke test remains pending.
+- Follow-up: scan a large nested root and cancel during traversal; verify bounded memory, no later video export, and actionable cap warning.
+
 ## 2026-09-30 — Refuse concurrent Autopilot start after stale heartbeat
 
 - Changed: Stale heartbeat no longer resets Autopilot singleton state to idle while old async work may still run. `forceResetAutopilot()` now initiates cancellation and keeps teardown ownership instead of reporting a fake reset.

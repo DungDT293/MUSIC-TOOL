@@ -1494,7 +1494,10 @@ async function collectVideoFilesRecursive(
   dir: string,
   onProgress?: (currentCount: number, currentDir: string) => void,
   maxDepth: number = 10,
-  currentDepth: number = 0
+  currentDepth: number = 0,
+  maxEntries: number = 50_000,
+  shouldStop?: () => boolean,
+  counter: { value: number } = { value: 0 },
 ): Promise<string[]> {
   const results: string[] = []
   if (currentDepth >= maxDepth) {
@@ -1506,18 +1509,20 @@ async function collectVideoFilesRecursive(
     // Quét song song các subfolder để tăng tốc độ
     const subdirPromises: Promise<string[]>[] = []
     for (const entry of entries) {
+      if (shouldStop?.() || counter.value >= maxEntries) break
+      counter.value++
       const full = path.join(dir, entry.name)
       // Bỏ qua symlinks để tránh vòng lặp vô hạn
       if (entry.isSymbolicLink()) continue
       if (entry.isDirectory()) {
-        subdirPromises.push(collectVideoFilesRecursive(full, onProgress, maxDepth, currentDepth + 1))
+        subdirPromises.push(collectVideoFilesRecursive(full, onProgress, maxDepth, currentDepth + 1, maxEntries, shouldStop, counter))
       } else if (entry.isFile()) {
         const ext = path.extname(entry.name).toLowerCase()
         if (VIDEO_EXTS.has(ext)) {
           results.push(full)
           // Emit progress mỗi khi tìm thấy file
           if (onProgress) {
-            onProgress(results.length, dir)
+            onProgress(counter.value, dir)
           }
         }
       }
@@ -1629,14 +1634,15 @@ async function pickVideosFromFolders(
     // Quét với progress callback
     let folderFileCount = 0
     const previouslyScanned = allFilesByFolder.reduce((sum, item) => sum + item.files.length, 0)
+    const scanCounter = { value: 0 }
     const allFiles = await collectVideoFilesRecursive(folder, (currentCount, currentDir) => {
       folderFileCount = currentCount
       totalScanned = previouslyScanned + currentCount
       // Emit progress theo nhịp thưa hơn để tránh spam IPC/log khi scan thư mục lớn
       if (currentCount % VIDEO_SCAN_PROGRESS_LOG_EVERY === 0 || currentCount === 1) {
-        emitVerboseLog('info', `[Bước 3]   → Đã quét ${currentCount} video từ "${path.basename(currentDir)}"...`)
+        emitVerboseLog('info', `[Bước 3]   → Đã quét ${currentCount} entry từ "${path.basename(currentDir)}"...`)
       }
-    })
+    }, 10, 0, 50_000, () => isCancelling, scanCounter)
 
     emitVerboseLog('info', `[Bước 3] ✓ Thư mục ${i + 1}/${buckets.length}: Tìm thấy ${allFiles.length} video`)
 
@@ -1650,6 +1656,8 @@ async function pickVideosFromFolders(
     // FIX BUG-4: Cập nhật totalScanned chính xác sau khi folder scan xong
     totalScanned = previouslyScanned + allFiles.length
   }
+
+  throwIfCancelling()
 
   // BƯỚC 2: Gộp tất cả video lại
   const allFiles: string[] = []
