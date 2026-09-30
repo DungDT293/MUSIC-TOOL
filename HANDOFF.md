@@ -1,5 +1,13 @@
 # HANDOFF
 
+## 2026-09-30 — Complete Windows package and full test gate
+
+- Changed: Completed portable and NSIS packaging after enabling store compression; no publish/upload performed.
+- Files: [electron-builder.json5](electron-builder.json5), [HANDOFF.md](HANDOFF.md).
+- Verification: `npm run build` passed; full Vitest passed 33 files / 222 tests with 2 intentionally skipped; portable EXE `dist-electron-output-portable2/93-media-tool-mix-nhac-4.5.2-portable.exe` built; NSIS installer `dist-electron-output-nsis/93-media-tool-mix-nhac-setup-4.5.2.exe` built; unpacked resources include FFmpeg, FFprobe, yt-dlp, and browser cookie extractor.
+- Warnings: existing Vite dynamic-import/font/hash warnings, duplicate dependency references, default Electron icon, and GPU fallback warnings remain. No packaged real-media smoke run yet.
+- Follow-up: launch packaged portable/installed app, run one short audio/video export and one cancel/retry case; verify updater/auth guard and downloader cookie extraction on Windows.
+
 ## 2026-09-30 — Complete portable package build with low-memory compression
 
 - Changed: electron-builder uses `compression: 'store'` to avoid 7-Zip memory exhaustion while packaging the ~1.36 GiB Windows media bundle.
