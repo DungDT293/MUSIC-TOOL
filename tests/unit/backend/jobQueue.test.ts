@@ -154,6 +154,43 @@ describe('JobQueue', () => {
     expect(onCancel).toHaveBeenCalledWith(handle.jobId)
   })
 
+  it('rejects pending result and calls onCancel once', async () => {
+    const first = queue.enqueue({
+      type: 'blocker',
+      task: async () => new Promise<void>(() => {}),
+    })
+    const blocker = queue.enqueue({
+      type: 'blocker',
+      task: async () => new Promise<void>(() => {}),
+    })
+    const secondCancel = vi.fn()
+    const second = queue.enqueue({
+      type: 'pending',
+      task: async () => 'never',
+      onCancel: secondCancel,
+    })
+    second.result.catch(() => {})
+    await second.cancel()
+    await expect(second.result).rejects.toThrow('cancelled before starting')
+    expect(secondCancel).toHaveBeenCalledWith(second.jobId)
+    first.result.catch(() => {})
+    blocker.result.catch(() => {})
+    await Promise.all([first.cancel(), blocker.cancel()])
+  })
+
+  it('does not mark cancelled task completed after late resolve', async () => {
+    let resolveTask!: () => void
+    const handle = queue.enqueue({
+      type: 'late',
+      task: async () => new Promise<void>((resolve) => { resolveTask = resolve }),
+    })
+    await new Promise(r => setTimeout(r, 10))
+    await handle.cancel()
+    resolveTask()
+    await expect(handle.result).rejects.toThrow('cancelled')
+    expect(queue.getJob(handle.jobId)?.status).toBe('cancelled')
+  })
+
   // ─── getJobs / removeJob ──────────────────────────────────────────────────
 
   it('getJobs returns all tracked jobs', async () => {

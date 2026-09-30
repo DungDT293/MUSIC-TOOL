@@ -6,11 +6,14 @@
 import { BrowserWindow, ipcMain } from 'electron'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
-import { isValidAbsolutePath } from '../authState'
+import { normalizeVideo } from '../../backend/video/normalizeVideo'
+import { getVideoFileInfo } from '../../backend/video/videoInfo'
+import { getOrInitAuthState, isAllowedAuthState, isValidAbsolutePath } from '../authState'
 import { AutopilotConfigSchema } from '../../shared/ipcSchemas'
 import {
   cancelAutopilot,
   forceResetAutopilot,
+  splitFolderLines,
   getAutopilotLogVerbosity,
   getAutopilotProgress,
   getRecentAutopilotLogs,
@@ -52,6 +55,11 @@ export function registerAutopilotHandlers(_getMainWindow: () => BrowserWindow | 
   })
 
   ipcMain.handle('autopilot:start', async (_event, config: AutopilotBackendConfig) => {
+    const authState = await getOrInitAuthState()
+    if (!isAllowedAuthState(authState)) {
+      return { ok: false, error: 'Phiên đăng nhập không hợp lệ. Vui lòng đăng nhập lại trước khi chạy Autopilot.' }
+    }
+
     const parsed = AutopilotConfigSchema.safeParse(config)
     if (!parsed.success) {
       const errorMessages = parsed.error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join('; ')
@@ -123,7 +131,7 @@ export function registerAutopilotHandlers(_getMainWindow: () => BrowserWindow | 
     if (!rootVideo || typeof rootVideo !== 'string') return { totalFiles: 0, folders: [] }
 
     const VIDEO_EXTENSIONS = new Set(['.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm', '.ts', '.m2ts', '.m4v'])
-    const folders = rootVideo.split('\n').map(f => f.trim()).filter(f => f.length > 0)
+    const folders = splitFolderLines(rootVideo)
     const SCAN_CONCURRENCY = 8
 
     const validFolders = folders.filter(f => isValidAbsolutePath(f))
@@ -192,6 +200,106 @@ export function registerAutopilotHandlers(_getMainWindow: () => BrowserWindow | 
     }
 
     return result
+  })
+
+  ipcMain.handle('autopilot:repairInvalidVideos', async (_event, request: {
+    paths: string[]
+    rootDir: string
+    mode: 'delete' | 'replace'
+    confirmed: boolean
+  }) => {
+    const authState = await getOrInitAuthState()
+    if (!isAllowedAuthState(authState)) {
+      return { success: false, repaired: [], failed: [], error: 'Phiên đăng nhập không hợp lệ. Vui lòng đăng nhập lại trước khi sửa video.' }
+    }
+    if (!request || !request.confirmed || !Array.isArray(request.paths) || request.paths.length === 0) {
+      return { success: false, repaired: [], failed: [], error: 'Phải rà soát và xác nhận danh sách video lỗi trước khi sửa.' }
+    }
+    if (!isValidAbsolutePath(request.rootDir)) {
+      return { success: false, repaired: [], failed: [], error: `Thư mục gốc không hợp lệ: ${request.rootDir || '(trống)'}` }
+    }
+
+    const root = path.normalize(request.rootDir).replace(/[\\/]+$/, '').toLowerCase()
+    const paths = Array.from(new Set(request.paths.filter(isValidAbsolutePath)))
+    const invalidScope = paths.filter((filePath) => {
+      const normalized = path.normalize(filePath).toLowerCase()
+      return normalized === root || !normalized.startsWith(`${root}${path.sep}`)
+    })
+    if (invalidScope.length > 0 || paths.length !== request.paths.length) {
+      return {
+        success: false,
+        repaired: [],
+        failed: invalidScope.map((filePath) => ({ path: filePath, error: 'File nằm ngoài thư mục gốc cho phép.' })),
+        error: 'Danh sách có file ngoài thư mục gốc hoặc đường dẫn không hợp lệ; không thực hiện sửa.',
+      }
+    }
+
+    if (request.mode === 'delete') {
+      const deleted: string[] = []
+      const failed: Array<{ path: string; error: string }> = []
+      for (const filePath of paths) {
+        try {
+          await fsp.unlink(filePath)
+          deleted.push(filePath)
+        } catch (error: any) {
+          failed.push({ path: filePath, error: error?.message || String(error) })
+        }
+      }
+      return {
+        success: failed.length === 0,
+        repaired: deleted,
+        failed,
+        error: failed.length > 0 ? `Đã xóa ${deleted.length}/${paths.length}; còn lỗi ${failed.length} file.` : undefined,
+      }
+    }
+
+    const outputDir = path.join(request.rootDir, '_autopilot_repair_temp')
+    await fsp.mkdir(outputDir, { recursive: true })
+    const repaired: string[] = []
+    const failed: Array<{ path: string; error: string }> = []
+    for (const filePath of paths) {
+      const tempResult = await normalizeVideo({
+        inputFiles: [filePath],
+        outputDir,
+        useGpu: false,
+        targetResolution: '1920x1080',
+        targetFps: '30',
+        concatSafe: true,
+        skipExisting: false,
+        writeManifest: false,
+        trustInputs: true,
+        requestId: `autopilot-repair-${Date.now()}`,
+      })
+      const repairedPath = tempResult.outputPaths[0]
+      if (!tempResult.success || !repairedPath) {
+        failed.push({ path: filePath, error: tempResult.error || 'FFmpeg không tạo được file chuẩn hóa.' })
+        continue
+      }
+      try {
+        const info = await getVideoFileInfo(repairedPath)
+        if (!(info.durationSec && info.width && info.height && info.codecName)) {
+          throw new Error('File chuẩn hóa không có duration/stream video hợp lệ.')
+        }
+        const backupPath = `${filePath}.autopilot-backup`
+        await fsp.rename(filePath, backupPath)
+        try {
+          await fsp.rename(repairedPath, filePath)
+          await fsp.unlink(backupPath)
+          repaired.push(filePath)
+        } catch (replaceError) {
+          await fsp.rename(backupPath, filePath).catch(() => {})
+          throw replaceError
+        }
+      } catch (error: any) {
+        failed.push({ path: filePath, error: error?.message || String(error) })
+      }
+    }
+    return {
+      success: failed.length === 0,
+      repaired,
+      failed,
+      error: failed.length > 0 ? `Đã chuẩn hóa/thay ${repaired.length}/${paths.length}; còn lỗi ${failed.length} file.` : undefined,
+    }
   })
 
   ipcMain.handle('autopilot:video-pool-stats', async () => {

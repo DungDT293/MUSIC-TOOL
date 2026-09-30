@@ -36,6 +36,8 @@ function getActiveTracks(scanResult: ScanMusicResult | null, genreId: string): S
   return scanResult.tracks.filter((track) => track.genreId === genreId)
 }
 
+const tracksForGenre = getActiveTracks
+
 function getAvailableGenres(scanResult: ScanMusicResult | null): Array<{ id: string; name: string; count: number }> {
   if (!scanResult) return []
   const configGenres = scanResult.config?.genres ?? []
@@ -75,6 +77,13 @@ function CreatePlaylistPage() {
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedGenreId, setSelectedGenreId] = useState('all')
   const [expandedPlaylistId, setExpandedPlaylistId] = useState<string | null>(null)
+  const [genrePlaylists, setGenrePlaylists] = useState<Record<string, PlaylistDefinition[]>>({})
+  const [genreErrors, setGenreErrors] = useState<Record<string, string>>({})
+  const [creatingGenreId, setCreatingGenreId] = useState<string | null>(null)
+  const [isCreatingAllGenres, setIsCreatingAllGenres] = useState(false)
+  const [settingsSavedAt, setSettingsSavedAt] = useState<string | null>(null)
+  const [genreConfig, setGenreConfig] = useState<Record<string, { playlistCount: string; hours: string; minutes: string; priority: string; crossfade: boolean; crossfadeSeconds: string; loudnorm: boolean; pinnedTrackIds: string[]; endingTrackIds: string[] }>>({})
+  const GENRE_WORKSPACE_KEY = 'musicGenreWorkspaceV1'
 
   // Helper clamp
   const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value))
@@ -123,6 +132,22 @@ function CreatePlaylistPage() {
 
   // Load scanResult từ backend cache trước, localStorage chỉ fallback khi backend API không có/lỗi.
   useEffect(() => {
+    try {
+      const raw = localStorage.getItem(GENRE_WORKSPACE_KEY)
+      if (!raw) return
+      const saved = JSON.parse(raw)
+      if (saved?.genrePlaylists) setGenrePlaylists(saved.genrePlaylists)
+      if (saved?.genreConfig) setGenreConfig(saved.genreConfig)
+    } catch (workspaceError) {
+      console.warn('[CreatePlaylist] Failed to load genre workspace:', workspaceError)
+    }
+  }, [])
+
+  useEffect(() => {
+    localStorage.setItem(GENRE_WORKSPACE_KEY, JSON.stringify({ genrePlaylists, genreConfig }))
+  }, [genrePlaylists, genreConfig])
+
+  useEffect(() => {
     let disposed = false
 
     const loadSavedScan = async () => {
@@ -161,6 +186,8 @@ function CreatePlaylistPage() {
 
   const availableGenres = getAvailableGenres(scanResult)
   const activeTracks = getActiveTracks(scanResult, selectedGenreId)
+  const openingTracks = activeTracks.filter((track) => track.folderType === 'opening')
+  const bodyTracks = activeTracks.filter((track) => track.folderType !== 'opening')
 
   // Reset playlists khi scanResult/thể loại thay đổi
   useEffect(() => {
@@ -172,9 +199,9 @@ function CreatePlaylistPage() {
 
     setPlaylists([])
     setWarnings([])
-    setPinnedTrackIds((ids) => ids.filter((id) => activeTracks.some((track) => track.id === id)))
-    setEndingTrackIds((ids) => ids.filter((id) => activeTracks.some((track) => track.id === id)))
-    if (scanResult) loadPoolStats(activeTracks)
+    setPinnedTrackIds((ids) => ids.filter((id) => bodyTracks.some((track) => track.id === id)))
+    setEndingTrackIds((ids) => ids.filter((id) => bodyTracks.some((track) => track.id === id)))
+    if (scanResult) loadPoolStats(bodyTracks)
   }, [scanResult, selectedGenreId])
 
   // Listen for custom event khi Tab 1 quét nhạc mới (trong cùng window)
@@ -232,14 +259,97 @@ function CreatePlaylistPage() {
     if (!window.api?.clearMusicPool) return
     if (!confirm('Xoá toàn bộ lịch sử sử dụng nhạc? Pool sẽ reset về trạng thái ban đầu.')) return
     await window.api.clearMusicPool()
-    if (scanResult) await loadPoolStats(activeTracks)
+    if (scanResult) await loadPoolStats(bodyTracks)
+  }
+
+  const getGenreConfig = (genreId: string) => genreConfig[genreId] ?? {
+    playlistCount: playlistCountInput,
+    hours: targetHoursInput,
+    minutes: targetMinutesInput,
+    priority: priorityRatioInput,
+    crossfade: false,
+    crossfadeSeconds: '4',
+    loudnorm: false,
+    pinnedTrackIds: [],
+    endingTrackIds: [],
+  } as const
+
+  const updateGenreConfig = (genreId: string, patch: Partial<ReturnType<typeof getGenreConfig>>) => {
+    setGenreConfig((prev) => ({ ...prev, [genreId]: { ...getGenreConfig(genreId), ...patch } }))
+  }
+
+  const handleSaveGenreSettings = () => {
+    localStorage.setItem(GENRE_WORKSPACE_KEY, JSON.stringify({ genrePlaylists, genreConfig }))
+    setSettingsSavedAt(new Date().toLocaleTimeString('vi-VN'))
+  }
+
+  const handleRecreateAllGenres = async () => {
+    if (isCreatingAllGenres || creatingGenreId || availableGenres.length === 0) return
+    setIsCreatingAllGenres(true)
+    try {
+      for (const genre of availableGenres) {
+        await handleCreateGenrePlaylists(genre.id)
+      }
+    } finally {
+      setIsCreatingAllGenres(false)
+    }
+  }
+
+  const handleCreateGenrePlaylists = async (genreId: string) => {
+    if (!scanResult) return
+    const genre = availableGenres.find((item) => item.id === genreId)
+    if (!genre) return
+    const tracks = getActiveTracks(scanResult, genreId)
+    const body = tracks.filter((track) => track.folderType !== 'opening')
+    if (body.length === 0) {
+      setGenreErrors((prev) => ({ ...prev, [genreId]: 'Thể loại này không có bài nhạc chính.' }))
+      return
+    }
+    const config = getGenreConfig(genreId)
+    const count = Number(config.playlistCount)
+    const minutes = Number(config.hours) * 60 + Number(config.minutes)
+    const priority = config.priority ? Number(config.priority) / 100 : undefined
+    if (!Number.isInteger(count) || count < 1 || !Number.isFinite(minutes) || minutes <= 0) {
+      setGenreErrors((prev) => ({ ...prev, [genreId]: 'Nhập số playlist và thời lượng hợp lệ.' }))
+      return
+    }
+
+    setCreatingGenreId(genreId)
+    setGenreErrors((prev) => ({ ...prev, [genreId]: '' }))
+    try {
+      const result = await window.api.createPlaylists({
+        tracks: body,
+        openingTracks: tracks.filter((track) => track.folderType === 'opening'),
+        pinnedTrackIds: config.pinnedTrackIds,
+        endingTracks: config.endingTrackIds
+          .map((id) => body.find((track) => track.id === id))
+          .filter((track): track is ScannedTrack => !!track),
+        playlistCount: count,
+        targetDurationMinutes: minutes,
+        priorityRatioMin: priority,
+        priorityRatioMax: priority,
+        genreId,
+        genreName: genre.name,
+        genreSettings: { smoothTransitions: config.crossfade, crossfadeDurationSec: Number(config.crossfadeSeconds) || 4, normalizeLoudness: config.loudnorm },
+        replaceExisting: false,
+      })
+      setGenrePlaylists((previous) => {
+        const next = { ...previous, [genreId]: result.playlists }
+        localStorage.setItem(GENRE_WORKSPACE_KEY, JSON.stringify({ genrePlaylists: next, genreConfig }))
+        return next
+      })
+    } catch (createError: any) {
+      setGenreErrors((prev) => ({ ...prev, [genreId]: createError?.message || 'Không tạo được playlist cho thể loại này.' }))
+    } finally {
+      setCreatingGenreId(null)
+    }
   }
 
   const handleCreatePlaylists = async () => {
     if (!scanResult) return
 
-    if (activeTracks.length === 0) {
-      setError('Thể loại đang chọn không có bài nào.')
+    if (bodyTracks.length === 0) {
+      setError('Thể loại đang chọn không có bài nhạc chính nào.')
       return
     }
 
@@ -255,11 +365,12 @@ function CreatePlaylistPage() {
 
     try {
       const endingTracks = endingTrackIds
-        .map((id) => activeTracks.find((track) => track.id === id))
+        .map((id) => bodyTracks.find((track) => track.id === id))
         .filter((track): track is ScannedTrack => Boolean(track))
       const options: BuildPlaylistsOptions = {
-        tracks: activeTracks,
-        pinnedTrackIds: pinnedTrackIds.filter((id) => activeTracks.some((track) => track.id === id)),
+        tracks: bodyTracks,
+        openingTracks,
+        pinnedTrackIds: pinnedTrackIds.filter((id) => bodyTracks.some((track) => track.id === id)),
         endingTracks,
         playlistCount, // số đã clamp
         targetDurationMinutes, // số đã clamp
@@ -272,7 +383,7 @@ function CreatePlaylistPage() {
       setWarnings(result.warnings ?? [])
       setExpandedPlaylistId(result.playlists[0]?.id || null)
       // Load pool stats sau khi tạo xong để cập nhật trạng thái mới
-      await loadPoolStats(activeTracks)
+      await loadPoolStats(bodyTracks)
 
       // Reset input về số đã chuẩn hóa sau khi tạo thành công
       if (playlistCount > 0 && targetDurationMinutes > 0) {
@@ -304,17 +415,18 @@ function CreatePlaylistPage() {
   }
 
   // Filter tracks theo thể loại + search query
-  const filteredTracks = activeTracks.filter((track) =>
+  const filteredTracks = bodyTracks.filter((track) =>
     track.fileName.toLowerCase().includes(searchQuery.toLowerCase())
   )
 
   const endingTracks = endingTrackIds
-    .map((id) => activeTracks.find((track) => track.id === id))
+    .map((id) => bodyTracks.find((track) => track.id === id))
     .filter((track): track is ScannedTrack => Boolean(track))
   const endingDurationSec = endingTracks.reduce((sum, track) => sum + track.duration, 0)
+  const openingDurationSec = openingTracks.reduce((sum, track) => sum + track.duration, 0)
 
   // Tính tổng thời lượng có thể
-  const totalAvailableDuration = activeTracks.reduce((sum, track) => sum + track.duration, 0) - endingDurationSec
+  const totalAvailableDuration = bodyTracks.reduce((sum, track) => sum + track.duration, 0) - endingDurationSec
   const estimatedPlaylistsPossible =
     targetDurationMinutes > 0
       ? Math.floor(totalAvailableDuration / (targetDurationMinutes * 60))
@@ -322,11 +434,36 @@ function CreatePlaylistPage() {
 
   return (
     <div style={{ padding: '20px', display: 'flex', gap: '20px', height: 'calc(100vh - 100px)' }}>
-      {/* Bên trái: Danh sách bài hát */}
-      <div style={{ flex: '0 0 400px', display: 'flex', flexDirection: 'column' }}>
+      {/* Legacy global track panel hidden: selections now live inside each genre card. */}
+      <div style={{ display: 'none' }}>
         <h2 style={{ marginBottom: '15px', fontSize: '20px', fontWeight: 'bold' }}>
-          Danh sách bài hát ({activeTracks.length} bài, {pinnedTrackIds.length} ghim, {endingTrackIds.length} nhạc cuối)
+          Danh sách bài hát
         </h2>
+        {availableGenres.length > 0 && (
+          <div style={{ marginBottom: '10px', display: 'none', flexDirection: 'column', gap: '8px' }}>
+            {availableGenres.map((genre) => {
+              const cfg = getGenreConfig(genre.id)
+              const generated = genrePlaylists[genre.id] ?? []
+              return (
+                <div key={genre.id} style={{ padding: '10px', background: '#1e1e1e', border: '1px solid #444', borderRadius: '6px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+                    <strong>{genre.name} ({genre.count} bài)</strong>
+                    <button type="button" onClick={() => handleCreateGenrePlaylists(genre.id)} disabled={creatingGenreId !== null} style={{ padding: '5px 8px', background: '#007acc', color: '#fff', border: 0, borderRadius: '4px' }}>
+                      {creatingGenreId === genre.id ? 'Đang tạo...' : generated.length > 0 ? 'Tạo lại' : 'Tạo playlist'}
+                    </button>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '70px 60px 60px 70px', gap: '5px', marginTop: '8px' }}>
+                    {(['playlistCount', 'hours', 'minutes', 'priority'] as const).map((field) => (
+                      <input key={field} value={cfg[field]} placeholder={field === 'priority' ? '%' : field} onChange={(event) => setGenreConfig((prev) => ({ ...prev, [genre.id]: { ...cfg, [field]: event.target.value } }))} style={{ width: '100%', background: '#111', color: '#fff', border: '1px solid #555', padding: '4px' }} />
+                    ))}
+                  </div>
+                  {genreErrors[genre.id] && <div style={{ color: '#fca5a5', fontSize: '12px', marginTop: '6px', whiteSpace: 'pre-wrap' }}>{genreErrors[genre.id]}</div>}
+                  {generated.length > 0 && <div style={{ color: '#86efac', fontSize: '12px', marginTop: '6px' }}>{generated.length} playlist đã tạo</div>}
+                </div>
+              )
+            })}
+          </div>
+        )}
         {availableGenres.length > 0 && (
           <select
             value={selectedGenreId}
@@ -499,16 +636,131 @@ function CreatePlaylistPage() {
         )}
       </div>
 
-      {/* Bên phải: Cấu hình và preview */}
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-        <h1 style={{ marginBottom: '20px', fontSize: '32px', fontWeight: 'bold' }}>
-          Tạo playlist
-        </h1>
+      {/* Bên phải: workspace từng thể loại */}
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'auto' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', marginBottom: '8px', flexWrap: 'wrap' }}>
+          <h1 style={{ margin: 0, fontSize: '32px', fontWeight: 'bold' }}>
+            Playlist theo thể loại
+          </h1>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            {settingsSavedAt && <span style={{ color: '#86efac', fontSize: '12px' }}>Đã lưu {settingsSavedAt}</span>}
+            <button type="button" onClick={handleSaveGenreSettings} disabled={creatingGenreId !== null || isCreatingAllGenres} style={{ padding: '8px 11px', background: '#374151', color: '#fff', border: '1px solid #4b5563', borderRadius: '5px', cursor: creatingGenreId !== null || isCreatingAllGenres ? 'not-allowed' : 'pointer' }}>
+              Lưu cài đặt
+            </button>
+            <button type="button" onClick={() => void handleRecreateAllGenres()} disabled={creatingGenreId !== null || isCreatingAllGenres || availableGenres.length === 0} style={{ padding: '8px 11px', background: '#16a34a', color: '#fff', border: 0, borderRadius: '5px', cursor: creatingGenreId !== null || isCreatingAllGenres || availableGenres.length === 0 ? 'not-allowed' : 'pointer', fontWeight: 700 }}>
+              {isCreatingAllGenres ? 'Đang tạo toàn bộ...' : 'Tạo lại toàn bộ thể loại'}
+            </button>
+          </div>
+        </div>
+        <p style={{ margin: '0 0 16px', color: '#94a3b8', fontSize: '13px' }}>Tạo playlist riêng từng thể loại. Khi đã sẵn sàng, vào Xuất nhạc để chạy tuần tự theo thứ tự card.</p>
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: '12px', marginBottom: '16px' }}>
+          {availableGenres.map((genre) => {
+            const cfg = getGenreConfig(genre.id)
+            const generated = genrePlaylists[genre.id] ?? []
+            return <section key={genre.id} style={{ padding: '14px', background: '#252526', border: `1px solid ${generated.length ? '#166534' : '#444'}`, borderRadius: '8px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', alignItems: 'center' }}>
+                <div><strong>{genre.name}</strong><div style={{ color: '#94a3b8', fontSize: '12px' }}>{genre.count} bài · {generated.length ? `${generated.length} playlist sẵn sàng` : 'Chưa tạo playlist'}</div></div>
+                <button type="button" onClick={() => handleCreateGenrePlaylists(genre.id)} disabled={creatingGenreId !== null} style={{ padding: '7px 10px', background: '#007acc', color: '#fff', border: 0, borderRadius: '5px', cursor: 'pointer' }}>{creatingGenreId === genre.id ? 'Đang tạo...' : generated.length ? 'Tạo lại' : 'Tạo playlist'}</button>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '6px', marginTop: '12px' }}>
+                {([['playlistCount', 'Số playlist'], ['hours', 'Giờ'], ['minutes', 'Phút'], ['priority', '% ưu tiên']] as const).map(([field, label]) => <label key={field} style={{ color: '#9ca3af', fontSize: '11px' }}>{label}<input value={cfg[field]} onChange={(event) => updateGenreConfig(genre.id, { [field]: event.target.value } as any)} placeholder={field === 'priority' ? '65-85' : ''} style={{ marginTop: '3px', width: '100%', boxSizing: 'border-box', background: '#111', color: '#fff', border: '1px solid #555', borderRadius: '4px', padding: '6px' }} /></label>)}
+              </div>
+              <div style={{ display: 'flex', gap: '14px', flexWrap: 'wrap', marginTop: '10px', fontSize: '12px', color: '#cbd5e1' }}>
+                <label><input type="checkbox" checked={cfg.crossfade} onChange={(event) => updateGenreConfig(genre.id, { crossfade: event.target.checked })} /> Crossfade</label>
+                <label><input type="checkbox" checked={cfg.loudnorm} onChange={(event) => updateGenreConfig(genre.id, { loudnorm: event.target.checked })} /> Loudnorm</label>
+                <label>Giây <input value={cfg.crossfadeSeconds} disabled={!cfg.crossfade} onChange={(event) => updateGenreConfig(genre.id, { crossfadeSeconds: event.target.value })} style={{ width: '45px', marginLeft: '4px' }} /></label>
+              </div>
+              <details style={{ marginTop: '10px' }}>
+                <summary style={{ cursor: 'pointer', color: '#94a3b8', fontSize: '12px' }}>Bài hát ghim/cuối</summary>
+                <div style={{ maxHeight: '130px', overflowY: 'auto', marginTop: '6px', border: '1px solid #374151', borderRadius: '4px', padding: '4px' }}>
+                  {tracksForGenre(scanResult, genre.id).filter((track) => track.folderType !== 'opening').map((track) => <label key={track.id} style={{ display: 'flex', gap: '5px', alignItems: 'center', fontSize: '11px', padding: '3px' }}><input type="checkbox" checked={cfg.pinnedTrackIds.includes(track.id)} onChange={(event) => updateGenreConfig(genre.id, { pinnedTrackIds: event.target.checked ? [...cfg.pinnedTrackIds, track.id] : cfg.pinnedTrackIds.filter((id) => id !== track.id) })} /> Ghim {track.fileName}</label>)}
+                </div>
+              </details>
+              <details style={{ marginTop: '6px' }}>
+                <summary style={{ cursor: 'pointer', color: '#94a3b8', fontSize: '12px' }}>Nhạc cuối</summary>
+                <div style={{ maxHeight: '100px', overflowY: 'auto', marginTop: '6px' }}>{tracksForGenre(scanResult, genre.id).filter((track) => track.folderType !== 'opening').map((track) => <label key={track.id} style={{ display: 'flex', gap: '5px', alignItems: 'center', fontSize: '11px', padding: '3px' }}><input type="checkbox" checked={cfg.endingTrackIds.includes(track.id)} onChange={(event) => updateGenreConfig(genre.id, { endingTrackIds: event.target.checked ? [...cfg.endingTrackIds, track.id] : cfg.endingTrackIds.filter((id) => id !== track.id) })} /> Cuối {track.fileName}</label>)}</div>
+              </details>
+              {generated.length > 0 && (
+                <div style={{ marginTop: '10px' }}>
+                  <div style={{ color: '#86efac', fontSize: '13px', fontWeight: 700, marginBottom: '8px' }}>
+                    Kết quả ({generated.length} playlist)
+                  </div>
+                  {generated.map((playlist) => {
+                    const mainDurationSec = Math.max(
+                      playlist.totalDurationSec - (playlist.openingDurationSec ?? 0) - (playlist.endingDurationSec ?? 0),
+                      0,
+                    )
+                    const priorityPercent = mainDurationSec > 0
+                      ? ((playlist.priorityDurationSec / mainDurationSec) * 100).toFixed(1)
+                      : '0.0'
+                    const randomPercent = mainDurationSec > 0
+                      ? ((playlist.randomDurationSec / mainDurationSec) * 100).toFixed(1)
+                      : '0.0'
+
+                    return (
+                      <details key={playlist.id} style={{ marginBottom: '10px', background: '#1e1e1e', border: '1px solid #444', borderRadius: '5px', overflow: 'hidden' }}>
+                        <summary style={{ cursor: 'pointer', padding: '10px', background: '#252526', color: '#fff', fontSize: '13px', fontWeight: 700 }}>
+                          {playlist.name}
+                          <div style={{ color: '#94a3b8', fontSize: '11px', fontWeight: 400, marginTop: '4px' }}>
+                            Thời lượng: {formatDuration(playlist.totalDurationSec)} · Main: {formatDuration(mainDurationSec)} · Nhạc cuối: {playlist.endingCount ?? 0} · Số bài: {playlist.tracks.length} · Ưu tiên: {priorityPercent}% · Random: {randomPercent}%
+                          </div>
+                        </summary>
+                        <div style={{ overflowX: 'auto', maxHeight: '260px', overflowY: 'auto' }}>
+                          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '560px' }}>
+                            <thead>
+                              <tr style={{ borderBottom: '1px solid #444', background: '#252526' }}>
+                                <th style={{ padding: '8px', textAlign: 'left', color: '#888' }}>#</th>
+                                <th style={{ padding: '8px', textAlign: 'left', color: '#888' }}>Tên bài</th>
+                                <th style={{ padding: '8px', textAlign: 'left', color: '#888' }}>Loại</th>
+                                <th style={{ padding: '8px', textAlign: 'left', color: '#888' }}>Thời lượng</th>
+                                <th style={{ padding: '8px', textAlign: 'left', color: '#888' }}>Tích lũy</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {playlist.tracks.map((track) => {
+                                const isPinned = cfg.pinnedTrackIds.includes(track.id)
+                                let typeLabel = track.role === 'opening'
+                                  ? 'Nhạc mở đầu'
+                                  : track.role === 'ending'
+                                    ? 'Nhạc cuối'
+                                    : track.folderType === 'priority'
+                                      ? 'Ưu tiên'
+                                      : 'Random'
+                                if (isPinned && track.role !== 'ending') {
+                                  typeLabel = `Pinned${track.folderType === 'priority' ? ' + Ưu tiên' : ''}`
+                                }
+
+                                return (
+                                  <tr key={`${playlist.id}-${track.id}-${track.order}`} style={{ borderBottom: '1px solid #333' }}>
+                                    <td style={{ padding: '8px', color: '#ccc' }}>{track.order}</td>
+                                    <td style={{ padding: '8px', color: '#ccc' }}>{track.fileName}</td>
+                                    <td style={{ padding: '8px', color: '#ccc' }}>{typeLabel}</td>
+                                    <td style={{ padding: '8px', color: '#ccc' }}>{formatDurationShort(track.duration)}</td>
+                                    <td style={{ padding: '8px', color: '#ccc' }}>{formatDurationShort(track.cumulativeDuration)}</td>
+                                  </tr>
+                                )
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </details>
+                    )
+                  })}
+                </div>
+              )}
+              {genreErrors[genre.id] && <div style={{ color: '#fca5a5', fontSize: '12px', marginTop: '8px', whiteSpace: 'pre-wrap' }}>{genreErrors[genre.id]}</div>}
+            </section>
+          })}
+        </div>
+        <div style={{ display: 'none' }}>
+        <h2 style={{ marginBottom: '20px', fontSize: '20px', fontWeight: 'bold' }}>
+          Cấu hình thủ công
+        </h2>
 
         {/* Cấu hình */}
         <div
           style={{
-            padding: '20px',
+            padding: '12px',
             backgroundColor: '#252526',
             borderRadius: '6px',
             marginBottom: '20px',
@@ -617,8 +869,13 @@ function CreatePlaylistPage() {
               </div>
             </div>
             <div style={{ color: '#888', fontSize: '12px', lineHeight: '1.5' }}>
-              Logic: bài đã chọn sẽ luôn nằm đầu playlist, sau đó là nhạc ưu tiên ({priorityRatioInput ? `${priorityRatioInput}%` : '65-85%'} thời lượng), cuối cùng là nhạc random ({priorityRatioInput ? `${randomRatioPercent}%` : '15-35%'}). Nhạc cuối nối thêm sau target chính.
+              Logic: nhạc mở đầu xoay vòng đứng đầu playlist và không tính vào target chính; sau đó là bài ghim, nhạc ưu tiên ({priorityRatioInput ? `${priorityRatioInput}%` : '65-85%'} thời lượng), nhạc random ({priorityRatioInput ? `${randomRatioPercent}%` : '15-35%'}). Nhạc cuối nối thêm sau target chính.
             </div>
+            {openingTracks.length > 0 && (
+              <div style={{ color: '#8fd3ff', fontSize: '12px' }}>
+                Nhạc mở đầu: {openingTracks.length} bài • {formatDuration(openingDurationSec)} tổng kho • tự xoay vòng theo số playlist.
+              </div>
+            )}
             {endingTrackIds.length > 0 && (
               <div style={{ color: '#ffcc88', fontSize: '12px' }}>
                 Nhạc cuối: {endingTrackIds.length} bài • {formatDuration(endingDurationSec)}. Output dự kiến dài hơn target chính từng playlist.
@@ -705,7 +962,7 @@ function CreatePlaylistPage() {
                 Kết quả ({playlists.length} playlist)
               </h2>
               {playlists.map((playlist) => {
-                const mainDurationSec = Math.max(playlist.totalDurationSec - (playlist.endingDurationSec ?? 0), 0)
+                const mainDurationSec = Math.max(playlist.totalDurationSec - (playlist.openingDurationSec ?? 0) - (playlist.endingDurationSec ?? 0), 0)
                 const priorityPercent = mainDurationSec > 0
                   ? ((playlist.priorityDurationSec / mainDurationSec) * 100).toFixed(1)
                   : '0.0'
@@ -787,7 +1044,7 @@ function CreatePlaylistPage() {
                             <tbody>
                               {playlist.tracks.map((track) => {
                                 const isPinned = pinnedTrackIds.includes(track.id)
-                                let typeLabel = track.role === 'ending' ? 'Nhạc cuối' : (track.folderType === 'priority' ? 'Ưu tiên' : 'Random')
+                                let typeLabel = track.role === 'opening' ? 'Nhạc mở đầu' : track.role === 'ending' ? 'Nhạc cuối' : (track.folderType === 'priority' ? 'Ưu tiên' : 'Random')
                                 if (isPinned && track.role !== 'ending') {
                                   typeLabel = `Pinned${track.folderType === 'priority' ? ' + Ưu tiên' : ''}`
                                 }
@@ -822,6 +1079,7 @@ function CreatePlaylistPage() {
           )}
         </div>
       </div>
+    </div>
     </div>
   )
 }

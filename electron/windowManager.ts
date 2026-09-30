@@ -17,6 +17,41 @@ export function setMainWindow(win: BrowserWindow | null) {
   mainWindow = win
 }
 
+let isClosingWindow = false
+let forceExitTimer: ReturnType<typeof setTimeout> | null = null
+const FORCE_EXIT_TIMEOUT_MS = 8_000
+
+export function requestAppExit(): void {
+  if (isClosingWindow) return
+  isClosingWindow = true
+  app.quit()
+
+  // `before-quit` starts FFmpeg/job cancellation asynchronously. Do not leave
+  // Electron and its ASAR locked forever if a native child or quit hook hangs.
+  forceExitTimer = setTimeout(() => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      try {
+        if (!win.isDestroyed()) win.destroy()
+      } catch {}
+    }
+    app.exit(0)
+  }, FORCE_EXIT_TIMEOUT_MS)
+  forceExitTimer.unref()
+}
+
+export function clearForcedAppExit(): void {
+  if (!forceExitTimer) return
+  clearTimeout(forceExitTimer)
+  forceExitTimer = null
+}
+
+export const __windowManagerTestUtils = {
+  resetExitState() {
+    clearForcedAppExit()
+    isClosingWindow = false
+  },
+}
+
 // ─── Error page HTML ───────────────────────────────────────────────────────
 export function loadErrorPage(window: BrowserWindow | null, errorMessage: string) {
   if (!window || window.isDestroyed()) return
@@ -236,6 +271,22 @@ export function createWindow() {
     }
   })
 
+  mainWindow.on('close', (event) => {
+    if (isClosingWindow) return
+    event.preventDefault()
+    dialog.showMessageBox(mainWindow!, {
+      type: 'question',
+      title: 'Thoát ứng dụng',
+      message: 'Bạn có muốn thoát 93 Media - Tool Mix Nhạc?',
+      detail: 'Nếu đang xuất media, các job đang chạy sẽ bị dừng.',
+      buttons: ['Ở lại', 'Dừng export và thoát'],
+      defaultId: 0,
+      cancelId: 0,
+    }).then((result) => {
+      if (result.response === 1) requestAppExit()
+    }).catch(() => {})
+  })
+
   mainWindow.webContents.on('unresponsive', () => {
     console.warn('[Window] Renderer process became unresponsive')
     if (mainWindow && !mainWindow.isDestroyed()) {
@@ -247,7 +298,7 @@ export function createWindow() {
         defaultId: 0,
       }).then((result) => {
         if (result.response === 1 && mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.close()
+          requestAppExit()
         }
       }).catch(() => {})
     }

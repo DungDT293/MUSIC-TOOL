@@ -8,6 +8,13 @@ import type {
   LicenseState,
   ScanMusicFoldersPayload,
   ScanMusicResult,
+  BuildPlaylistsOptions,
+  ExtractAudioBatchRequest,
+  ExtractAudioBatchResult,
+  SpotifyMetadataRequest,
+  SpotifyMetadataResult,
+  SpotifyYouTubeDownloadRequest,
+  VideoProgressPayload,
 } from '../src/types/ipc'
 import {
   VIDEO_FINAL_EXPORT_DONE,
@@ -17,12 +24,21 @@ import {
   VIDEO_FINAL_EXPORT_SCAN_AUDIO,
   VIDEO_FINAL_EXPORT_SCAN_VIDEO,
   VIDEO_FINAL_EXPORT_SCAN_IMAGE,
+  VIDEO_FINAL_EXPORT_CANCEL,
   type FinalExportDonePayload,
   type FinalExportErrorPayload,
   type FinalExportProgressPayload,
   type FinalExportRequestPayload,
   type FinalExportScanResult,
 } from '../shared/videoFinalExportChannels'
+import {
+  SONG_NHAC_EXPORT_CANCEL,
+  SONG_NHAC_EXPORT_PROGRESS,
+  SONG_NHAC_EXPORT_START,
+  type SongNhacExportProgress,
+  type SongNhacExportRequest,
+  type SongNhacExportResult,
+} from '../shared/songNhacChannels'
 
 const api: IPCAPI = {
   license: {
@@ -67,6 +83,8 @@ const api: IPCAPI = {
     },
     cancelNormalizeAudio: () => ipcRenderer.invoke('music:normalizeAudio:cancel'),
     spotifyMeta: (url: string) => ipcRenderer.invoke('music:spotifyMeta', url),
+    spotifyImport: (request: SpotifyMetadataRequest): Promise<SpotifyMetadataResult> =>
+      ipcRenderer.invoke('music:spotifyImport', request) as Promise<SpotifyMetadataResult>,
     getExportHistory: () => ipcRenderer.invoke('music:getExportHistory'),
     deleteExportHistory: (ids: string[]) => ipcRenderer.invoke('music:deleteExportHistory', ids),
     downloadPlaylistHistory: (payload: { dates?: string[]; entryIds?: string[]; outputDir?: string }) =>
@@ -108,7 +126,7 @@ const api: IPCAPI = {
   scanMusicFolders: (payload: ScanMusicFoldersPayload) =>
     ipcRenderer.invoke('music:scanFolders', payload) as Promise<ScanMusicResult>,
   getLastScanResult: () => ipcRenderer.invoke('music:getLastScan') as Promise<ScanMusicResult | null>,
-  createPlaylists: (payload: any) => ipcRenderer.invoke('music:createPlaylists', payload),
+  createPlaylists: (payload: BuildPlaylistsOptions) => ipcRenderer.invoke('music:createPlaylists', payload),
   listPlaylists: () => ipcRenderer.invoke('music:listPlaylists'),
   getMusicPoolStats: (trackIds: string[]) => ipcRenderer.invoke('music:getPoolStats', trackIds),
   clearMusicPool: () => ipcRenderer.invoke('music:clearPool'),
@@ -136,6 +154,9 @@ const api: IPCAPI = {
   videoMuteAudio: (req: any) => ipcRenderer.invoke('video:muteAudio', req),
   videoGetActiveMuteJobId: () => ipcRenderer.invoke('video:getActiveMuteJobId') as Promise<string | null>,
   videoNormalize: (req: any) => ipcRenderer.invoke('video:normalize', req),
+  videoExtractAudioBatch: (req: ExtractAudioBatchRequest) =>
+    ipcRenderer.invoke('video:extractAudioBatch', req) as Promise<ExtractAudioBatchResult>,
+  videoGetActiveExtractAudioJobId: () => ipcRenderer.invoke('video:getActiveExtractAudioJobId') as Promise<string | null>,
   // videoNormalizeVideo: alias xóa (trùng với videoNormalize)
   videoGetActiveNormalizeJobId: () => ipcRenderer.invoke('video:getActiveNormalizeJobId') as Promise<string | null>,
   listVideosInFolder: (dir: string) => ipcRenderer.invoke('video:listVideosInFolder', dir),
@@ -177,7 +198,7 @@ const api: IPCAPI = {
   videoFinalExport: {
     start: (payload: FinalExportRequestPayload) => ipcRenderer.send(VIDEO_FINAL_EXPORT_REQUEST, payload),
     cancel: (requestId: string): Promise<{ success: boolean; error?: string }> =>
-      ipcRenderer.invoke('video:final-export:cancel', requestId),
+      ipcRenderer.invoke(VIDEO_FINAL_EXPORT_CANCEL, requestId),
     scanAudioSource: (payload: { requestId: string; audioSource: FinalExportRequestPayload['audioSource'] }): Promise<FinalExportScanResult> =>
       ipcRenderer.invoke(VIDEO_FINAL_EXPORT_SCAN_AUDIO, payload),
     scanVideoSource: (payload: { requestId: string; videoSource: FinalExportRequestPayload['videoSource'] }): Promise<FinalExportScanResult> =>
@@ -212,25 +233,7 @@ const api: IPCAPI = {
   videoGetAllJobIds: () => ipcRenderer.invoke('video:getAllJobIds'),
   videoGetActiveMergeJobId: () => ipcRenderer.invoke('video:getActiveMergeJobId'),
   videoHasJob: (requestId: string) => ipcRenderer.invoke('video:hasJob', requestId),
-  onVideoProgress: (
-    handler: (payload: {
-      requestId: string
-      jobIndex?: number
-      totalJobs?: number
-      currentVideo?: string
-      timeSec: number
-      totalDurationSec: number
-      percent: number
-      completed?: boolean
-      outputFiles?: string[]
-      outputPath?: string
-      error?: string
-      accelerationMode?: 'NONE' | 'SSD' | 'TEMP_SSD' | 'RAM'
-      diskType?: 'SSD' | 'HDD' | 'UNKNOWN'
-      speedX?: number
-      eta?: number
-    }) => void
-  ) => {
+  onVideoProgress: (handler: (payload: VideoProgressPayload) => void) => {
     const channel = 'video:progress'
     const listener = (_event: IpcRendererEvent, payload: any) => {
       handler(payload)
@@ -299,7 +302,9 @@ const api: IPCAPI = {
     
     // Download single video
     downloadVideo: (request: any) => ipcRenderer.invoke('youtube:download-video', request),
-    
+    // Search accessible YouTube sources from Spotify metadata, then download audio.
+    downloadSpotify: (request: SpotifyYouTubeDownloadRequest) => ipcRenderer.invoke('youtube:download-spotify', request),
+
     // Download channel
     downloadChannel: (params: any) => ipcRenderer.invoke('youtube:download-channel', params),
     
@@ -371,6 +376,8 @@ const api: IPCAPI = {
   videoPoolMarkUsed: (filePaths: string[]) => ipcRenderer.invoke('video:pool-mark-used', filePaths),
   videoPoolPickLRU: (folderPath: string, count: number) => ipcRenderer.invoke('video:pool-pick-lru', folderPath, count),
   autopilot: {
+    repairInvalidVideos: (request: { paths: string[]; rootDir: string; mode: 'delete' | 'replace'; confirmed: boolean }) =>
+      ipcRenderer.invoke('autopilot:repairInvalidVideos', request),
     getStatus: () => ipcRenderer.invoke('autopilot:getStatus'),
     getRecentLogs: (limit?: number) => ipcRenderer.invoke('autopilot:getRecentLogs', limit),
     getLogVerbosity: () => ipcRenderer.invoke('autopilot:getLogVerbosity'),
@@ -402,10 +409,22 @@ const api: IPCAPI = {
     reportAntiDebug: (details: { method: string; detected: boolean }) =>
       ipcRenderer.invoke('security:reportAntiDebug', details) as Promise<{ ok: boolean }>,
   },
+  songNhac: {
+    start: (request: SongNhacExportRequest) => ipcRenderer.invoke(SONG_NHAC_EXPORT_START, request) as Promise<SongNhacExportResult>,
+    cancel: (requestId: string) => ipcRenderer.invoke(SONG_NHAC_EXPORT_CANCEL, requestId) as Promise<{ success: boolean; error?: string }>,
+    onProgress: (handler: (progress: SongNhacExportProgress) => void) => {
+      const listener = (_event: IpcRendererEvent, progress: SongNhacExportProgress) => handler(progress)
+      ipcRenderer.on(SONG_NHAC_EXPORT_PROGRESS, listener)
+      return () => ipcRenderer.removeListener(SONG_NHAC_EXPORT_PROGRESS, listener)
+    },
+  },
   dialog: {
     /** Mở dialog chọn file (generic) — trả về { canceled, filePaths } */
-    openFile: (options?: { title?: string; filters?: Array<{ name: string; extensions: string[] }>; properties?: string[] }) =>
-      ipcRenderer.invoke('dialog:openFile', options) as Promise<{ canceled: boolean; filePaths: string[] }>,
+    openFile: (options: {
+      title?: string
+      filters?: Array<{ name: string; extensions: string[] }>
+      properties?: Array<'openFile' | 'multiSelections' | 'openDirectory'>
+    }) => ipcRenderer.invoke('dialog:openFile', options) as Promise<{ canceled: boolean; filePaths: string[] }>,
     /** Mở dialog lưu video — trả về { canceled, filePath } */
     saveVideoFile: (defaultFileName?: string) =>
       ipcRenderer.invoke('dialog:saveVideoFile', defaultFileName) as Promise<{ canceled: boolean; filePath: string | null }>,
@@ -472,6 +491,7 @@ const api: IPCAPI = {
       'youtube:batch-progress',
       'youtube:ytdlp-auto-updated',
       'youtube:ytdlp-age-warning',
+      SONG_NHAC_EXPORT_PROGRESS,
       VIDEO_FINAL_EXPORT_PROGRESS,
       VIDEO_FINAL_EXPORT_DONE,
       VIDEO_FINAL_EXPORT_ERROR,

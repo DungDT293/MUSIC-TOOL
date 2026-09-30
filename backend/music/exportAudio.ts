@@ -3,6 +3,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { runFfmpeg } from '../ffmpeg/wrapper'
 import { getPlaylistById, type PlaylistDefinition, type PlaylistTrack } from './playlistEngine'
+import type { ScannedTrack } from './scanMusic'
 import { loadScanResult } from './scanStore'
 import {
   checkMinimumSpace,
@@ -108,6 +109,147 @@ function getEndingDurationSec(playlist: PlaylistDefinition): number {
   return playlist.endingDurationSec ?? playlist.tracks
     .filter(track => track.role === 'ending')
     .reduce((sum, track) => sum + track.duration, 0)
+}
+
+export function canStreamCopyAac(codecs: readonly string[]): boolean {
+  return codecs.length > 0 && codecs.every((codec) => codec.toLowerCase() === 'aac')
+}
+
+export function extractMissingAudioPaths(error: unknown): string[] {
+  const message = error instanceof Error ? error.message : String(error ?? '')
+  const paths: string[] = []
+  for (const match of message.matchAll(/Error opening input file (.+?)\r?\n/gi)) {
+    const candidate = match[1]?.trim()
+    if (candidate && !paths.includes(candidate)) paths.push(candidate)
+  }
+  return paths.slice(0, 8)
+}
+
+export function isMissingAudioFailure(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? '')
+  return /no such file|error opening input|enoent|không tồn tại/i.test(message)
+}
+
+export function findMissingPlaylistTracks(tracks: readonly Pick<ScannedTrack, 'path' | 'fileName'>[]): string[] {
+  return tracks
+    .filter((track) => !track.path || !fs.existsSync(track.path))
+    .map((track) => track.path || track.fileName)
+    .slice(0, 8)
+}
+
+export function isAudioDecodeFailure(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? '')
+  return /scalefactor bands|invalid data found when processing input|error submitting packet to decoder|error while decoding|decode error/i.test(message)
+}
+
+export function describeCorruptAudioTracks(trackNames: readonly string[], technicalDetail = ''): string {
+  const names = trackNames.length > 0 ? trackNames.map((name) => `• ${name}`).join('\n') : 'Không xác định được file cụ thể.'
+  return [
+    'Nguyên nhân: Một hoặc nhiều file nhạc bị lỗi frame/codec nên FFmpeg không giải mã được.',
+    `File nghi lỗi:\n${names}`,
+    'Cách xử lý: vào Quét nhạc → Chuẩn hóa audio, chọn AAC và thư mục xuất riêng. Sau đó bỏ file vẫn lỗi, quét lại thư mục AAC và tạo playlist mới. Có thể tắt Chuyển bài mượt để kiểm tra riêng từng file.',
+    technicalDetail ? `Chi tiết kỹ thuật: ${technicalDetail.slice(-500)}` : '',
+  ].filter(Boolean).join('\n')
+}
+
+async function diagnoseCorruptAudioTracks(
+  tracks: PlaylistDefinition['tracks'],
+  requestId?: string,
+  signal?: AbortSignal,
+): Promise<string[]> {
+  const badTracks: string[] = []
+  for (const track of tracks) {
+    if (signal?.aborted) break
+    try {
+      await runFfmpeg({
+        args: ['-hide_banner', '-loglevel', 'error', '-i', track.path, '-map', '0:a:0', '-f', 'null', '-'],
+        timeoutMs: 600_000,
+        requestId,
+        signal,
+      })
+    } catch {
+      if (!signal?.aborted) {
+        const name = track.fileName || path.basename(track.path)
+        badTracks.push(`${name}\n  Đường dẫn: ${track.path}`)
+      }
+    }
+  }
+  return badTracks
+}
+
+export function describeAudioExportError(error: unknown, badTrackNames: readonly string[] = []): string {
+  const technicalDetail = error instanceof Error ? error.message : String(error ?? '')
+  const lower = technicalDetail.toLowerCase()
+
+  if (badTrackNames.length > 0 && isAudioDecodeFailure(error)) {
+    return describeCorruptAudioTracks(badTrackNames, technicalDetail)
+  }
+
+  if (isAudioDecodeFailure(error)) {
+    return describeCorruptAudioTracks([], technicalDetail)
+  }
+
+  if (/codec opus|audio: opus|ipod.*codec|could not write header/.test(lower)) {
+    return [
+      'Nguyên nhân: Có file .m4a chứa codec Opus, không phải AAC. M4A không thể copy trực tiếp stream Opus.',
+      'Cách xử lý: App sẽ tự mã hóa lại playlist sang AAC. Nếu lỗi còn lặp lại, vào Quét nhạc → Chuẩn hóa audio, chọn AAC và thư mục xuất riêng, rồi quét/tạo lại playlist.',
+      `Chi tiết kỹ thuật: ${technicalDetail.slice(-500)}`,
+    ].join('\n')
+  }
+
+  if (/no such file|không tồn tại|enoent/.test(lower)) {
+    const missingPaths = extractMissingAudioPaths(error)
+    const pathLines = missingPaths.length > 0 ? `\nFile/đường dẫn mất:\n${missingPaths.map((item) => `• ${item}`).join('\n')}` : ''
+    return [
+      'Nguyên nhân: Một file nhạc hoặc đường dẫn xuất không còn tồn tại.',
+      `Cách xử lý: Kiểm tra kết nối ổ mạng hoặc sửa thư mục nhạc hiện tại, sau đó bấm Sửa nhanh để quét lại và tạo playlist mới.${pathLines}`,
+      `Chi tiết kỹ thuật: ${technicalDetail.slice(-500)}`,
+    ].join('\n')
+  }
+
+  if (/permission denied|access is denied|eacces|eperm/.test(lower)) {
+    return [
+      'Nguyên nhân: App không có quyền đọc file nguồn hoặc ghi thư mục xuất.',
+      'Cách xử lý: Chọn thư mục xuất khác, đóng file đang mở trong ứng dụng khác, rồi thử lại.',
+      `Chi tiết kỹ thuật: ${technicalDetail.slice(-500)}`,
+    ].join('\n')
+  }
+
+  if (/no space left|disk full|enospc|dung lượng/.test(lower)) {
+    return [
+      'Nguyên nhân: Ổ đĩa không đủ dung lượng cho file tạm hoặc file xuất.',
+      'Cách xử lý: Dọn dung lượng hoặc chọn thư mục xuất ở ổ còn trống nhiều hơn, rồi xuất lại.',
+      `Chi tiết kỹ thuật: ${technicalDetail.slice(-500)}`,
+    ].join('\n')
+  }
+
+  if (/đã dừng bởi người dùng|aborted|cancelled/.test(lower)) {
+    return 'Nguyên nhân: Xuất playlist đã được dừng.\nCách xử lý: Chọn lại playlist và bấm Xuất để chạy lại.'
+  }
+
+  return [
+    'Nguyên nhân: FFmpeg không thể xuất playlist với một hoặc nhiều file nguồn.',
+    'Cách xử lý: Quét nhạc lại để kiểm tra codec/file lỗi. Nếu cần chuyển codec, dùng Quét nhạc → Chuẩn hóa audio, chọn AAC và thư mục xuất riêng. Với crossfade, thử tắt Chuyển bài mượt để xác định file lỗi.',
+    `Chi tiết kỹ thuật: ${technicalDetail.slice(-500)}`,
+  ].join('\n')
+}
+
+async function getPlaylistAudioCodecs(tracks: PlaylistDefinition['tracks']): Promise<string[]> {
+  const codecs: string[] = []
+  for (const track of tracks) {
+    try {
+      const codec = (await probeFile(track.path)).audio?.codec
+      if (!codec) throw new Error('Không tìm thấy audio stream')
+      codecs.push(codec)
+    } catch (error) {
+      throw new Error([
+        `Không thể xác nhận codec file: ${track.fileName || path.basename(track.path)}.`,
+        'Cách xử lý: Quét nhạc lại; nếu file vẫn lỗi, dùng Quét nhạc → Chuẩn hóa audio sang AAC trong thư mục xuất riêng.',
+        `Chi tiết kỹ thuật: ${error instanceof Error ? error.message : String(error)}`,
+      ].join('\n'))
+    }
+  }
+  return codecs
 }
 
 /**
@@ -252,9 +394,11 @@ export async function exportPlaylistToFile(
   // FIX BUG: Lưu original track paths trước khi normalize thay đổi path sang temp files
   // Dùng cho history entry ở cuối
   let originalTrackPaths: Map<string, string> | null = null
+  // Keep playlist available to decoder diagnosis in catch/finally.
+  let playlist: PlaylistDefinition | undefined
   try {
     // 1. Validate playlist
-    let playlist = getPlaylistById(req.playlistId)
+    playlist = getPlaylistById(req.playlistId)
     if (!playlist) {
       return {
         success: false,
@@ -408,17 +552,15 @@ export async function exportPlaylistToFile(
         listFile = createConcatListFile(playlist.tracks, tempDir, req.playlistId)
         if (listFile) tempFiles.add(listFile) // Fix High #2.1: Track for cleanup
 
-        // Detect nếu tất cả track đầu vào là AAC native (m4a/aac)
-        // → dùng -c copy thay vì re-encode để nhanh gấp 20-50x
-        const AAC_EXTS = new Set(['.m4a', '.aac'])
-        const allTracksAreAac = playlist.tracks.every(t =>
-          AAC_EXTS.has(path.extname(t.path).toLowerCase())
-        )
-        const canStreamCopy = req.format === 'aac' && allTracksAreAac
+        // Chỉ stream-copy khi codec THẬT của mọi track là AAC.
+        // Đuôi .m4a không đủ tin cậy: file .m4a có thể chứa Opus/Vorbis.
+        const codecs = await getPlaylistAudioCodecs(playlist.tracks)
+        const canStreamCopy = req.format === 'aac' && canStreamCopyAac(codecs)
+        console.log(`[ExportAudio] Audio codecs: ${codecs.join(', ')}; mode=${canStreamCopy ? 'stream-copy' : 'AAC encode'}`)
 
         if (canStreamCopy) {
-          // Stream copy: input AAC → output AAC, không re-encode
-          console.log(`[ExportAudio] ✓ All tracks are AAC → using stream copy (no re-encode)`)
+          // Stream copy: mọi input đã được ffprobe xác nhận AAC.
+          console.log(`[ExportAudio] ✓ All track codecs are AAC → using stream copy (no re-encode)`)
           args = [
             '-hide_banner',
             '-y',
@@ -933,9 +1075,12 @@ export async function exportPlaylistToFile(
     }
   } catch (err: any) {
     console.error('[ExportAudio] exportPlaylistToFile error:', err)
+    const badTrackNames = isAudioDecodeFailure(err)
+      ? await diagnoseCorruptAudioTracks(playlist?.tracks ?? [], req.requestId, req.signal)
+      : []
     return {
       success: false,
-      error: err?.message || 'Lỗi không xác định khi xuất playlist.',
+      error: describeAudioExportError(err, badTrackNames),
     }
   } finally {
     // Fix High #2.1: Cleanup all temp files comprehensively

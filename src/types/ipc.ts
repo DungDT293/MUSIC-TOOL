@@ -1,4 +1,10 @@
 import type {
+  SongNhacExportProgress,
+  SongNhacExportRequest,
+  SongNhacExportResult,
+} from '../../shared/songNhacChannels'
+import type {
+  FinalExportAudioFailure,
   FinalExportDonePayload,
   FinalExportErrorPayload,
   FinalExportProgressPayload,
@@ -166,17 +172,18 @@ export interface DiskInfoSummary {
   updatedAt: number
 }
 
-export type MusicFolderType = 'priority' | 'random'
+export type MusicFolderType = 'priority' | 'random' | 'opening'
 
 export interface MusicScanGenre {
   id: string
   name: string
   priorityFolders: string[]
   randomFolders: string[]
+  openingFolders?: string[]
 }
 
 export interface ScanMusicConfig {
-  version: 2
+  version: 3
   genres: MusicScanGenre[]
 }
 
@@ -197,18 +204,22 @@ export interface ScannedTrack {
 export interface GenreScanSummary {
   genreId: string
   genreName: string
+  openingCount?: number
   priorityCount: number
   randomCount: number
   totalCount: number
+  openingDuration?: number
   priorityDuration: number
   randomDuration: number
   totalDuration: number
 }
 
 export interface ScanSummary {
+  openingCount?: number
   priorityCount: number
   randomCount: number
   totalCount: number
+  openingDuration?: number
   priorityDuration: number
   randomDuration: number
   totalDuration: number
@@ -230,12 +241,13 @@ export interface ScanMusicFoldersPayload {
   randomFolder?: string | null
   genres?: MusicScanGenre[]
   forceRescan?: boolean
+  openingFolders?: string[]
 }
 
 export interface PlaylistTrack extends ScannedTrack {
   order: number
   cumulativeDuration: number
-  role?: 'ending'
+  role?: 'opening' | 'ending'
 }
 
 export interface PlaylistDefinition {
@@ -245,13 +257,58 @@ export interface PlaylistDefinition {
   totalDurationSec: number
   priorityDurationSec: number
   randomDurationSec: number
+  openingDurationSec?: number
+  openingCount?: number
   priorityCount: number
   randomCount: number
   endingDurationSec?: number
   endingCount?: number
   tracks: PlaylistTrack[]
   createdAt: number
+  genreId?: string
+  genreName?: string
+  genreSettings?: {
+    smoothTransitions: boolean
+    crossfadeDurationSec?: number
+    normalizeLoudness: boolean
+  }
 }
+
+export interface SpotifyMetadataRequest {
+  url: string
+  pageLimit?: number
+}
+
+export type SpotifyMetadataErrorCode = 'invalid' | 'auth-required' | 'access-denied' | 'rate-limit' | 'upstream' | 'timeout'
+
+export interface SpotifyMetadataError {
+  code: SpotifyMetadataErrorCode
+  message: string
+  retryAfterSeconds?: number
+}
+
+export interface SpotifyMetadataTrack {
+  id: string
+  name: string
+  artists: string[]
+  albumName?: string
+  durationMs?: number
+  externalUrl: string
+}
+
+export type SpotifyMetadataResult =
+  | {
+      success: true
+      type: 'track' | 'album' | 'playlist'
+      id: string
+      name: string
+      externalUrl: string
+      tracks: SpotifyMetadataTrack[]
+    }
+  | {
+      success: false
+      error: SpotifyMetadataError
+    }
 
 export interface MusicPoolTrackStat {
   id: string
@@ -291,9 +348,18 @@ export interface BuildPlaylistsOptions {
   targetDurationMinutes: number
   priorityRatioMin?: number
   priorityRatioMax?: number
+  openingTracks?: ScannedTrack[]
   endingTracks?: ScannedTrack[]
   // Tham số cho crossfade: nếu có, sẽ tính toán target duration để đảm bảo sau crossfade vẫn đạt target
   crossfadeDurationSec?: number // Thời lượng crossfade (giây), nếu có thì sẽ điều chỉnh target duration
+  replaceExisting?: boolean
+  genreId?: string
+  genreName?: string
+  genreSettings?: {
+    smoothTransitions: boolean
+    crossfadeDurationSec?: number
+    normalizeLoudness: boolean
+  }
 }
 
 export interface ExportPlaylistRequest {
@@ -607,12 +673,17 @@ export interface VideoSplitResult {
 
 export interface VideoProgressPayload {
   requestId: string
+  mode?: 'single-cut' | 'multi-cut' | 'merge' | 'mute-audio' | 'normalize' | 'extract-audio'
   jobIndex?: number // Cho splitMany
   totalJobs?: number // Cho splitMany
   currentVideo?: string // Cho splitMany
-  timeSec: number
-  totalDurationSec: number
+  currentFile?: string
+  currentIndex?: number
+  totalFiles?: number
+  timeSec?: number
+  totalDurationSec?: number
   percent: number
+  message?: string
   completed?: boolean
   outputFiles?: string[]
   outputPath?: string // Cho merge
@@ -661,6 +732,24 @@ export interface SimpleVideoFile {
   extension: string // .mp4, .mkv, etc.
 }
 
+export interface ExtractAudioBatchRequest {
+  inputFiles: string[]
+  outputDir: string
+  audioFormat: 'mp3' | 'wav'
+  mp4Only?: boolean
+  requestId?: string
+}
+
+export interface ExtractAudioBatchResult {
+  requestId: string
+  outputPaths: string[]
+  failures: Array<{ inputPath: string; fileName: string; error: string }>
+  success: boolean
+  error?: string
+  processed: number
+  failed: number
+}
+
 export type JobStatus = 'pending' | 'running' | 'cancelling' | 'success' | 'failed' | 'cancelled'
 
 export interface JobInfo {
@@ -702,6 +791,8 @@ export interface AutopilotLogEntry {
   verbosity: AutopilotLogVerbosity
 }
 
+export type { FinalExportAudioFailure }
+
 export interface AutopilotDayPlan {
   id: string
   dateCode: string
@@ -731,6 +822,7 @@ export interface AutopilotFoldersConfig {
   autoCreateDailySubfolder: boolean
   priorityMusicFolder: string
   randomMusicFolder: string
+  openingMusicFolder?: string
   priorityVideoFolder?: string
   endingAudioPaths?: string[]
   minVideoClipsTarget?: number
@@ -831,7 +923,8 @@ export interface IPCAPI {
       error?: string
     }) => void) => () => void
     cancelNormalizeAudio?: () => Promise<{ ok: boolean }>
-    spotifyMeta?: (url: string) => Promise<{ success: boolean; title?: string; artist?: string; thumbnailUrl?: string; error?: string }>
+    spotifyMeta?: (url: string) => Promise<{ success: boolean; title?: string; artist?: string; thumbnailUrl?: string; providerName?: string; url?: string; error?: string }>
+    spotifyImport: (request: SpotifyMetadataRequest) => Promise<SpotifyMetadataResult>
     getExportHistory: () => Promise<ExportHistoryEntry[]>
     downloadPlaylistHistory: (payload: { dates?: string[]; entryIds?: string[]; outputDir?: string }) => Promise<{
       success: boolean
@@ -892,6 +985,7 @@ export interface IPCAPI {
   videoAuditFolder: (paths: string[]) => Promise<{
     valid: Array<{ path: string; durationSec: number; width?: number; height?: number; codecName?: string; fps?: number; sizeBytes?: number; formatName?: string; bitrateBps?: number }>
     invalid: string[]
+    invalidDetails?: Array<{ path: string; reason: string }>
   }>
   videoDeleteFiles: (paths: string[], rootDir: string) => Promise<{ deleted: number; errors: Array<{ path: string; message: string }> }>
   ultraFastScanFolder: (folderPath: string) => Promise<SimpleVideoFile[]>
@@ -902,6 +996,8 @@ export interface IPCAPI {
   videoCutSingleSimple: (req: CutSingleSimpleRequest) => Promise<CutSingleSimpleResult>
   videoSplitManySimple: (req: SplitManySimpleRequest) => Promise<SplitManySimpleResult>
   videoMergeSimple: (req: MergeVideosSimpleRequest) => Promise<MergeVideosSimpleResult>
+  videoExtractAudioBatch: (req: ExtractAudioBatchRequest) => Promise<ExtractAudioBatchResult>
+  videoGetActiveExtractAudioJobId: () => Promise<string | null>
   videoMuteAudio: (req: {
     inputFiles: string[]
     outputDir: string
@@ -1003,6 +1099,17 @@ export interface IPCAPI {
   videoGetActiveMergeJobId: () => Promise<string | null>
   videoHasJob: (requestId: string) => Promise<boolean>
   autopilot?: {
+    repairInvalidVideos: (request: {
+      paths: string[]
+      rootDir: string
+      mode: 'delete' | 'replace'
+      confirmed: boolean
+    }) => Promise<{
+      success: boolean
+      repaired: string[]
+      failed: Array<{ path: string; error: string }>
+      error?: string
+    }>
     getStatus: () => Promise<AutopilotProgress>
     getRecentLogs: (limit?: number) => Promise<AutopilotLogEntry[]>
     getLogVerbosity: () => Promise<AutopilotLogVerbosity>
@@ -1017,6 +1124,11 @@ export interface IPCAPI {
   }
   security?: {
     reportAntiDebug: (details: { method: string; detected: boolean }) => Promise<{ ok: boolean }>
+  }
+  songNhac: {
+    start: (request: SongNhacExportRequest) => Promise<SongNhacExportResult>
+    cancel: (requestId: string) => Promise<{ success: boolean; error?: string }>
+    onProgress: (handler: (progress: SongNhacExportProgress) => void) => () => void
   }
   app: {
     getVersion: () => Promise<string>
@@ -1083,6 +1195,11 @@ export interface IPCAPI {
     downloadVideo: (request: YouTubeDownloadVideoRequest) => Promise<{
       success: boolean
       outputFile?: string
+      error?: string
+    }>
+    downloadSpotify: (request: SpotifyYouTubeDownloadRequest) => Promise<{
+      success: boolean
+      result?: SpotifyYouTubeDownloadResult
       error?: string
     }>
     downloadChannel: (params: {
@@ -1184,6 +1301,22 @@ export interface YouTubeDownloadVideoRequest {
   useCookies?: boolean
   cookiesFile?: string
   cookiesFromBrowser?: 'auto' | 'chrome' | 'firefox' | 'edge' | 'opera' | 'safari' | 'brave' | 'chromium' | 'vivaldi'
+}
+
+export interface SpotifyYouTubeDownloadRequest {
+  tracks: SpotifyMetadataTrack[]
+  outputDir: string
+  audioFormat?: 'mp3' | 'wav'
+  createZip?: boolean
+  cookiesFile?: string
+  cookiesFromBrowser?: 'auto' | 'chrome' | 'firefox' | 'edge' | 'opera' | 'safari' | 'brave' | 'chromium' | 'vivaldi'
+}
+
+export interface SpotifyYouTubeDownloadResult {
+  downloaded: string[]
+  failed: Array<{ track: SpotifyMetadataTrack; error: string }>
+  zipPath?: string
+  cancelled?: boolean
 }
 
 export interface YouTubeDownloadProgress {

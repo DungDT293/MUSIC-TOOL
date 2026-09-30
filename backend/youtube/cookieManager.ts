@@ -1,6 +1,6 @@
 /**
  * CookieManager - Quản lý cookies đa nền tảng cho video downloader
- * Hỗ trợ: Facebook, TikTok, Instagram, và các nền tảng khác
+ * Hỗ trợ: Spotify, Facebook, TikTok, Instagram, và các nền tảng khác
  * Cookies được import từ J2Team Cookies extension hoặc các extension tương tự
  */
 
@@ -77,6 +77,13 @@ const PLATFORM_RULES: Array<{
     loginIndicators: ['signin', '/ServiceLogin'],
     successIndicators: ['subscriptions', 'feed'],
   },
+  {
+    platform: 'spotify',
+    domains: ['.spotify.com', 'spotify.com', '.spotifycdn.com', 'spotifycdn.com'],
+    testUrl: 'https://open.spotify.com/',
+    loginIndicators: ['/login', 'log in to spotify'],
+    successIndicators: ['spotify', 'open.spotify.com'],
+  },
 ];
 
 export class CookieManager {
@@ -104,21 +111,32 @@ export class CookieManager {
         this.cookieFiles = data.cookieFiles || [];
 
         // Reload cookies from files
+        let stateChanged = false;
         for (const cf of this.cookieFiles) {
           try {
             if (fs.existsSync(cf.filePath)) {
               const cookies = this.parseCookieFile(cf.filePath);
-              const platformCookies = cookies.filter(c =>
-                PLATFORM_RULES.find(r => r.platform === cf.platform)?.domains.some(d =>
-                  c.domain?.includes(d.replace('.', ''))
-                )
-              );
-              this.cookiesMap.set(cf.platform, platformCookies);
+              // Reclassify older imports stored as "other" now that Spotify is supported.
+              const detectedPlatform = this.detectPlatform(cookies);
+              const platform = cf.platform === 'other' && detectedPlatform !== 'other' ? detectedPlatform : cf.platform;
+              const rule = PLATFORM_RULES.find(r => r.platform === platform);
+              const platformCookies = rule
+                ? cookies.filter(c => rule.domains.some(d => c.domain?.includes(d.replace('.', ''))))
+                : cookies;
+              if (platform !== cf.platform) {
+                cf.platform = platform;
+                cf.domain = rule?.domains[0] || cf.domain;
+                cf.cookieCount = platformCookies.length;
+                cf.label = `${platform.charAt(0).toUpperCase() + platform.slice(1)} Cookies`;
+                stateChanged = true;
+              }
+              this.cookiesMap.set(platform, platformCookies);
             }
           } catch (e) {
-            console.warn(`[CookieManager] Failed to reload cookies for ${cf.platform}: ${e}`);
+            console.warn(`[CookieManager] Failed to reload cookies for ${cf.platform}`);
           }
         }
+        if (stateChanged) this.saveState();
 
         console.log(`[CookieManager] Loaded ${this.cookieFiles.length} cookie files from state`);
       }
@@ -295,6 +313,7 @@ export class CookieManager {
     if (lower.includes('tiktok.com')) return 'tiktok';
     if (lower.includes('instagram.com')) return 'instagram';
     if (lower.includes('youtube.com') || lower.includes('youtu.be')) return 'youtube';
+    if (lower.includes('spotify.com') || lower.includes('spotifycdn.com')) return 'spotify';
     return 'other';
   }
 

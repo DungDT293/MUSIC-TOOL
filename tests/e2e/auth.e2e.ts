@@ -301,8 +301,65 @@ describe('Auth restore regression', () => {
     vi.clearAllMocks()
   })
 
-  test('getOrInitAuthState restores allowed state when remembered auth has deviceToken but no password', async () => {
+  test('dev local renderer bypasses stale auth without credentials', async () => {
+    const previousRendererUrl = process.env.ELECTRON_RENDERER_URL
+    process.env.ELECTRON_RENDERER_URL = 'http://localhost:5173'
+    vi.doMock('electron', () => ({ app: { isPackaged: false } }))
     vi.doMock('../../backend/license/machineId', () => ({
+      getMachineHash: vi.fn().mockResolvedValue('dev-machine'),
+      hasMachineHashCacheFootprint: vi.fn().mockReturnValue(true),
+    }))
+    vi.doMock('../../backend/auth/encryptedAuthStore', () => ({
+      readEncryptedAuthState: vi.fn().mockResolvedValue(null),
+      writeEncryptedAuthState: vi.fn(),
+      migrateFromPlaintext: vi.fn().mockResolvedValue(undefined),
+      hasEncryptedAuthFile: vi.fn().mockReturnValue(true),
+      hasAuthStorageFootprint: vi.fn().mockReturnValue(true),
+    }))
+    vi.doMock('../../backend/security/stringEncryption', () => ({ getDecryptedString: vi.fn(() => 'https://example.com') }))
+    vi.doMock('../../backend/security/apiSigning', () => ({ createSignedHeaders: vi.fn().mockResolvedValue({}) }))
+
+    try {
+      const authStateModule = await import('../../electron/authState')
+      const state = await authStateModule.getOrInitAuthState()
+      expect(state).toMatchObject({ status: 'allowed', username: 'dev-local', machineId: 'dev-machine' })
+      expect((state as any).password).toBeUndefined()
+    } finally {
+      if (previousRendererUrl === undefined) delete process.env.ELECTRON_RENDERER_URL
+      else process.env.ELECTRON_RENDERER_URL = previousRendererUrl
+    }
+  })
+
+  test('packaged app never enables dev auth bypass from renderer URL', async () => {
+    const previousRendererUrl = process.env.ELECTRON_RENDERER_URL
+    process.env.ELECTRON_RENDERER_URL = 'http://localhost:5173'
+    vi.doMock('electron', () => ({ app: { isPackaged: true } }))
+    vi.doMock('../../backend/license/machineId', () => ({
+      getMachineHash: vi.fn().mockResolvedValue('packaged-machine'),
+      hasMachineHashCacheFootprint: vi.fn().mockReturnValue(false),
+    }))
+    vi.doMock('../../backend/auth/encryptedAuthStore', () => ({
+      readEncryptedAuthState: vi.fn().mockResolvedValue(null),
+      writeEncryptedAuthState: vi.fn(),
+      migrateFromPlaintext: vi.fn().mockResolvedValue(undefined),
+      hasEncryptedAuthFile: vi.fn().mockReturnValue(false),
+      hasAuthStorageFootprint: vi.fn().mockReturnValue(false),
+    }))
+    vi.doMock('../../backend/security/stringEncryption', () => ({ getDecryptedString: vi.fn(() => 'https://example.com') }))
+    vi.doMock('../../backend/security/apiSigning', () => ({ createSignedHeaders: vi.fn().mockResolvedValue({}) }))
+
+    try {
+      const authStateModule = await import('../../electron/authState')
+      const state = await authStateModule.getOrInitAuthState()
+      expect(state.status).toBe('unregistered')
+    } finally {
+      if (previousRendererUrl === undefined) delete process.env.ELECTRON_RENDERER_URL
+      else process.env.ELECTRON_RENDERER_URL = previousRendererUrl
+    }
+  })
+
+  test('getOrInitAuthState restores allowed state when remembered auth has deviceToken but no password', async () => {
+    vi.doMock('../../backend/license/machineId', () => {
       getMachineHash: vi.fn().mockResolvedValue('machine-1'),
       hasMachineHashCacheFootprint: vi.fn().mockReturnValue(true),
     }))

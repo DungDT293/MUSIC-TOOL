@@ -6,6 +6,43 @@
 
 import { z } from 'zod'
 
+export const SpotifyMetadataRequestSchema = z.object({
+  url: z.string().min(1).max(2048),
+  pageLimit: z.number().int().min(1).max(50).optional().default(50),
+}).strict()
+
+export type SpotifyResourceType = 'track' | 'album' | 'playlist'
+export type SpotifyMetadataErrorCode = 'invalid' | 'auth-required' | 'access-denied' | 'rate-limit' | 'upstream' | 'timeout'
+
+export interface SpotifyMetadataError {
+  code: SpotifyMetadataErrorCode
+  message: string
+  retryAfterSeconds?: number
+}
+
+export interface SpotifyMetadataTrack {
+  id: string
+  name: string
+  artists: string[]
+  albumName?: string
+  durationMs?: number
+  externalUrl: string
+}
+
+export type SpotifyMetadataResult =
+  | {
+      success: true
+      type: SpotifyResourceType
+      id: string
+      name: string
+      externalUrl: string
+      tracks: SpotifyMetadataTrack[]
+    }
+  | {
+      success: false
+      error: SpotifyMetadataError
+    }
+
 // ========== Music Schemas ==========
 
 export const MusicScanGenreSchema = z.object({
@@ -13,6 +50,7 @@ export const MusicScanGenreSchema = z.object({
   name: z.string().min(1),
   priorityFolders: z.array(z.string()).optional().default([]),
   randomFolders: z.array(z.string()).optional().default([]),
+  openingFolders: z.array(z.string()).optional().default([]),
 })
 
 export const MusicScanFoldersSchema = z.object({
@@ -34,12 +72,13 @@ const ScannedTrackSchema = z.object({
   fileName: z.string().optional(),
   duration: z.number().optional(),
   durationSec: z.number().optional(),
-  folderType: z.enum(['priority', 'random']).optional(),
+  folderType: z.enum(['priority', 'random', 'opening']).optional(),
 }).passthrough()
 
 export const BuildPlaylistsOptionsSchema = z.object({
   // DATA-01 fix: tracks is an array of track objects (id + path are required minimum fields)
   tracks: z.array(ScannedTrackSchema).optional(),
+  openingTracks: z.array(ScannedTrackSchema).optional(),
   endingTracks: z.array(ScannedTrackSchema).optional(),
   pinnedTrackIds: z.array(z.string()).optional(),
   playlistCount: z.number().int().positive().optional(),
@@ -128,51 +167,46 @@ export const SplitManySimpleRequestSchema = z.object({
 
 // ========== Final Export Schemas ==========
 
+const FinalExportAudioSourceSchema = z.union([
+  z.object({ type: z.literal('folder'), path: z.string().min(1) }),
+  z.object({ type: z.literal('file'), path: z.string().min(1) }),
+  z.object({ type: z.literal('files'), path: z.string().optional(), paths: z.array(z.string().min(1)).min(1) }),
+])
+
+const FinalExportVideoSourceSchema = z.union([
+  z.object({ type: z.literal('folder'), path: z.string().min(1), strictPairing: z.boolean().optional() }),
+  z.object({ type: z.literal('file'), path: z.string().min(1), strictPairing: z.boolean().optional() }),
+  z.object({ type: z.literal('files'), path: z.string().optional(), paths: z.array(z.string().min(1)).min(1), strictPairing: z.boolean().optional() }),
+])
+
 export const FinalExportScanAudioSchema = z.object({
-  requestId: z.string().optional(),
-  audioSource: z.union([
-    z.object({ type: z.literal('folder'), path: z.string().min(1) }),
-    z.object({ type: z.literal('file'), path: z.string().min(1) }),
-    z.object({ type: z.literal('files'), path: z.string(), paths: z.array(z.string().min(1)).min(1) }),
-    z.object({ type: z.literal('playlist'), playlistId: z.string().min(1) }),
-  ]),
-}).transform((data) => ({
-  requestId: data.requestId || '',
-  audioSource: data.audioSource,
-}))
+  requestId: z.string().trim().min(1),
+  audioSource: FinalExportAudioSourceSchema,
+})
 
 export const FinalExportScanVideoSchema = z.object({
-  requestId: z.string().optional(),
-  videoSource: z.union([
-    z.object({ type: z.literal('folder'), path: z.string().min(1) }),
-    z.object({ type: z.literal('file'), path: z.string().min(1) }),
-    z.object({ type: z.literal('files'), path: z.string(), paths: z.array(z.string().min(1)).min(1) }),
-  ]),
-}).transform((data) => ({
-  requestId: data.requestId || '',
-  videoSource: data.videoSource,
-}))
+  requestId: z.string().trim().min(1),
+  videoSource: FinalExportVideoSourceSchema,
+})
 
-// Note: FinalExportRequestPayload is complex, validate key fields only.
-// audioSource/videoSource must accept same shapes as Scan schemas (folder, file, files, playlist for audio).
-export const FinalExportRequestPayloadSchema = z.object({
-  requestId: z.string().optional(),
-  audioSource: z.union([
-    z.object({ type: z.literal('folder'), path: z.string().min(1) }),
-    z.object({ type: z.literal('file'), path: z.string().min(1) }),
-    z.object({ type: z.literal('files'), path: z.string().optional(), paths: z.array(z.string().min(1)).min(1) }),
-    z.object({ type: z.literal('playlist'), playlistId: z.string().min(1) }),
-  ]),
-  videoSource: z.union([
-    z.object({ type: z.literal('folder'), path: z.string().min(1) }),
-    z.object({ type: z.literal('file'), path: z.string().min(1) }),
-    z.object({ type: z.literal('files'), path: z.string().optional(), paths: z.array(z.string().min(1)).min(1) }),
-  ]).optional(),
+export const FinalExportScanImageSchema = z.object({
+  requestId: z.string().trim().min(1),
   imageSource: z.union([
     z.object({ type: z.literal('folder'), path: z.string().min(1) }),
     z.object({ type: z.literal('file'), path: z.string().min(1) }),
     z.object({ type: z.literal('files'), path: z.string().optional(), paths: z.array(z.string().min(1)).min(1) }),
-  ]).optional(),
+  ]),
+  perImageDurationSec: z.number().positive().optional(),
+})
+
+// Note: FinalExportRequestPayload is complex, validate key fields only.
+// Source shapes must match shared FinalExportSource and preserve strictPairing.
+export const FinalExportRequestPayloadSchema = z.object({
+  requestId: z.string().trim().min(1),
+  audioSource: FinalExportAudioSourceSchema,
+  videoSource: FinalExportVideoSourceSchema.optional(),
+  imageSource: FinalExportVideoSourceSchema.optional(),
+  priorityVideoSource: FinalExportVideoSourceSchema.optional(),
   endingAudio: z.object({
     paths: z.array(z.string().min(1)).min(1),
   }).optional(),
@@ -207,6 +241,7 @@ export const FinalExportRequestPayloadSchema = z.object({
     sensitivity: z.number().optional(),
   }).optional(),
   deleteSourceFiles: z.boolean().optional(),
+  uniqueRequired: z.boolean().optional(),
 }).passthrough()
 
 // ========== Autopilot Schemas ==========
@@ -230,6 +265,7 @@ export const AutopilotConfigSchema = z.object({
     autoCreateDailySubfolder: z.boolean().optional().default(true), // Legacy config có thể thiếu
     priorityMusicFolder: z.string().optional(),
     randomMusicFolder: z.string().optional(),
+    openingMusicFolder: z.string().optional(),
     priorityVideoFolder: z.string().optional(),
     endingAudioPaths: z.array(z.string().min(1)).optional(),
     minVideoClipsTarget: z.coerce.number().int().min(100).max(100000).optional(), // 100–100000, coerce string từ input

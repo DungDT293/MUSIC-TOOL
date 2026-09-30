@@ -165,18 +165,38 @@ export async function runFfmpeg(opts: FfmpegExecOptions): Promise<{
   })
 }
 
-export async function runFfprobe(args: string[], timeoutMs = 30_000): Promise<string> {
+export async function runFfprobe(
+  args: string[],
+  timeoutMs = 30_000,
+  options?: { signal?: AbortSignal; requestId?: string },
+): Promise<string> {
   const paths = getFfmpegPaths()
-
-  // Xử lý Windows long path
   let ffprobePath = paths.ffprobe
   if (process.platform === 'win32' && ffprobePath.match(/^[A-Z]:\\.*$/) && ffprobePath.length > 240) {
-    if (!ffprobePath.startsWith('\\\\?\\')) {
-      ffprobePath = '\\\\?\\' + ffprobePath
-    }
+    if (!ffprobePath.startsWith('\\\\?\\')) ffprobePath = '\\\\?\\' + ffprobePath
+  }
+
+  const { signal, requestId } = options ?? {}
+  if (signal?.aborted || (requestId && videoJobManager.isCancelled(requestId))) {
+    throw new Error('Đã dừng bởi người dùng')
   }
 
   return new Promise((resolve, reject) => {
+    let settled = false
+    let timeoutId: NodeJS.Timeout | null = null
+    const finish = (error?: Error, output?: string) => {
+      if (settled) return
+      settled = true
+      if (timeoutId) clearTimeout(timeoutId)
+      signal?.removeEventListener('abort', onAbort)
+      error ? reject(error) : resolve(output ?? '')
+    }
+
+    const onAbort = () => {
+      try { if (!child.killed) child.kill(process.platform === 'win32' ? 'SIGKILL' : 'SIGTERM') } catch {}
+      finish(new Error('Đã dừng bởi người dùng'))
+    }
+
     const chunks: Buffer[] = []
     const stderrChunks: Buffer[] = []
 
@@ -185,15 +205,18 @@ export async function runFfprobe(args: string[], timeoutMs = 30_000): Promise<st
       windowsHide: true, // FIX M16: Prevent CMD flash on Windows
     })
 
-    // Bug #30 fix: add timeout so a hung ffprobe never blocks forever
-    const timeoutId = setTimeout(() => {
+    if (requestId) videoJobManager.registerJob(requestId, child)
+    signal?.addEventListener('abort', onAbort, { once: true })
+    if (signal?.aborted || (requestId && videoJobManager.isCancelled(requestId))) onAbort()
+
+    timeoutId = setTimeout(() => {
       try {
         child.kill('SIGTERM')
         setTimeout(() => {
           try { if (!child.killed) child.kill('SIGKILL') } catch {}
         }, 2000)
       } catch {}
-      reject(new Error(`ffprobe timed out after ${timeoutMs}ms`))
+      finish(new Error(`ffprobe timed out after ${timeoutMs}ms`))
     }, timeoutMs)
 
     child.stdout?.on('data', (chunk: Buffer) => {
@@ -204,30 +227,24 @@ export async function runFfprobe(args: string[], timeoutMs = 30_000): Promise<st
       stderrChunks.push(chunk)
     })
 
-    child.on('error', (err) => {
-      clearTimeout(timeoutId)
-      reject(err)
-    })
+    child.on('error', (err) => finish(err))
 
     child.on('close', (code) => {
-      clearTimeout(timeoutId)
       const stdout = Buffer.concat(chunks).toString('utf-8')
       const stderr = Buffer.concat(stderrChunks).toString('utf-8')
 
+      if (signal?.aborted || (requestId && videoJobManager.isCancelled(requestId))) {
+        finish(new Error('Đã dừng bởi người dùng'))
+        return
+      }
+
       if (code !== 0) {
-        reject(new Error(`ffprobe exited with code ${code}. stderr: ${stderr.slice(-500)}`))
+        finish(new Error(`ffprobe exited with code ${code}. stderr: ${stderr.slice(-500)}`))
       } else {
-        resolve(stdout)
+        finish(undefined, stdout)
       }
     })
   })
 }
-
-
-
-
-
-
-
 
 

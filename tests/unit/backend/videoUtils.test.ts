@@ -58,6 +58,12 @@ describe('validateInputFiles', () => {
 
     expect(result.valid).toEqual([])
     expect(result.invalid).toEqual(['C:/videos/audio-only.mp4'])
+    expect(result.invalidDetails).toEqual([
+      {
+        path: 'C:/videos/audio-only.mp4',
+        reason: 'Video không có stream hình ảnh hợp lệ (thiếu width/height/codec).',
+      },
+    ])
   })
 
   it('rejects files with non-positive duration even if dimensions exist', async () => {
@@ -77,5 +83,20 @@ describe('validateInputFiles', () => {
 
     expect(result.valid).toEqual([])
     expect(result.invalid).toEqual(['C:/videos/broken.mp4'])
+    expect(result.invalidDetails[0]?.reason).toContain('duration hợp lệ')
+  })
+
+  it('keeps probe failure reason with exact video path', async () => {
+    vi.mocked(getVideoFileInfo).mockRejectedValue(new Error('ffprobe timeout'))
+
+    const result = await validateInputFiles(['E:/nguon/clip loi.mp4'], 1)
+
+    expect(result.valid).toEqual([])
+    expect(result.invalidDetails).toEqual([
+      {
+        path: 'E:/nguon/clip loi.mp4',
+        reason: 'Không probe được video sau 2 lần: ffprobe timeout',
+      },
+    ])
   })
 })

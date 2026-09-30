@@ -20,7 +20,32 @@ function formatDurationShort(seconds: number): string {
 }
 
 const SCAN_RESULT_STORAGE_KEY = 'scanResultV1'
+const SCAN_CONFIG_STORAGE_KEY = 'scanMusicConfigV1'
 let scanGenreCounter = 1
+
+function loadSavedGenres(): MusicScanGenre[] {
+  try {
+    const raw = localStorage.getItem(SCAN_CONFIG_STORAGE_KEY)
+    if (!raw) return [createDefaultGenre()]
+    const parsed = JSON.parse(raw)
+    const savedGenres = Array.isArray(parsed?.genres) ? parsed.genres : parsed
+    return Array.isArray(savedGenres) && savedGenres.length > 0
+      ? savedGenres.map((genre: MusicScanGenre, index: number) => ({
+          ...createDefaultGenre(`Thể loại ${index + 1}`),
+          ...genre,
+          priorityFolders: Array.isArray(genre.priorityFolders) ? genre.priorityFolders : [],
+          randomFolders: Array.isArray(genre.randomFolders) ? genre.randomFolders : [],
+          openingFolders: Array.isArray(genre.openingFolders) ? genre.openingFolders : [],
+        }))
+      : [createDefaultGenre()]
+  } catch {
+    return [createDefaultGenre()]
+  }
+}
+
+function persistGenres(genres: MusicScanGenre[]): void {
+  localStorage.setItem(SCAN_CONFIG_STORAGE_KEY, JSON.stringify({ version: 1, genres }))
+}
 
 function createDefaultGenre(name = 'Mặc định'): MusicScanGenre {
   return {
@@ -28,6 +53,7 @@ function createDefaultGenre(name = 'Mặc định'): MusicScanGenre {
     name,
     priorityFolders: [],
     randomFolders: [],
+    openingFolders: [],
   }
 }
 
@@ -52,28 +78,70 @@ function mergeFolders(current: string[], selected: string[]): string[] {
   return result
 }
 
+function normalizeWindowsFolder(folder: string): string | null {
+  const normalized = folder.trim().replace(/\//g, '\\').replace(/\\+$/, '')
+  if (!/^[a-z]:\\/i.test(normalized)) return null
+  return normalized
+}
+
+function isInsideWindowsFolder(candidate: string, folder: string): boolean {
+  const candidateKey = candidate.toLowerCase()
+  const folderKey = folder.toLowerCase()
+  return candidateKey === folderKey || candidateKey.startsWith(`${folderKey}\\`)
+}
+
+function getAutoNormalizeOutputFolder(genres: MusicScanGenre[], fallbackFile: string): string | null {
+  const roots = genres
+    .flatMap((genre) => [...genre.priorityFolders, ...genre.randomFolders, ...genre.openingFolders])
+    .map(normalizeWindowsFolder)
+    .filter((folder): folder is string => !!folder)
+
+  const sourceRoots = roots.length > 0 ? roots : [normalizeWindowsFolder(fallbackFile.replace(/[\\/][^\\/]+$/, ''))].filter((folder): folder is string => !!folder)
+  if (sourceRoots.length === 0) return null
+
+  const segments = sourceRoots.map((folder) => folder.split('\\'))
+  if (segments.some((parts) => parts[0]?.toLowerCase() !== segments[0][0]?.toLowerCase())) return null
+
+  const common = [...segments[0]]
+  while (common.length > 1 && segments.some((parts) => parts[common.length - 1]?.toLowerCase() !== common[common.length - 1]?.toLowerCase())) {
+    common.pop()
+  }
+
+  const parent = common.length > 1 ? common.slice(0, -1).join('\\') : `${common[0]}\\`
+  const candidate = `${parent.replace(/\\+$/, '')}\\aac_chuanhoa`
+  return sourceRoots.some((folder) => isInsideWindowsFolder(candidate, folder)) ? null : candidate
+}
+
 function cleanupGenres(genres: MusicScanGenre[]): MusicScanGenre[] {
   return genres.map((genre, index) => ({
     id: genre.id || `genre-${index + 1}`,
     name: genre.name.trim() || `Thể loại ${index + 1}`,
     priorityFolders: mergeFolders([], genre.priorityFolders ?? []),
     randomFolders: mergeFolders([], genre.randomFolders ?? []),
-  })).filter((genre) => genre.priorityFolders.length > 0 || genre.randomFolders.length > 0)
+    openingFolders: mergeFolders([], genre.openingFolders ?? []),
+  })).filter((genre) => genre.priorityFolders.length > 0 || genre.randomFolders.length > 0 || genre.openingFolders.length > 0)
 }
 
 function genresFromResult(result: ScanMusicResult | null): MusicScanGenre[] {
   const genres = result?.config?.genres
-  return Array.isArray(genres) && genres.length > 0 ? genres : [createDefaultGenre()]
+  if (!Array.isArray(genres) || genres.length === 0) return [createDefaultGenre()]
+  return genres.map((genre, index) => ({
+    id: genre.id || `genre-${index + 1}`,
+    name: genre.name || `Thể loại ${index + 1}`,
+    priorityFolders: Array.isArray(genre.priorityFolders) ? genre.priorityFolders : [],
+    randomFolders: Array.isArray(genre.randomFolders) ? genre.randomFolders : [],
+    openingFolders: Array.isArray(genre.openingFolders) ? genre.openingFolders : [],
+  }))
 }
 
 function ScanMusicPage() {
   console.log('[ScanMusicPage] Component mounted/rendered')
 
-  const [genres, setGenres] = useState<MusicScanGenre[]>(() => [createDefaultGenre()])
+  const [genres, setGenres] = useState<MusicScanGenre[]>(() => loadSavedGenres())
   const [result, setResult] = useState<ScanMusicResult | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-
+  const [configSavedAt, setConfigSavedAt] = useState<string | null>(null)
   // Normalize audio states
   const [normalizeMode, setNormalizeMode] = useState<'files' | 'folder'>('files')
   const [normalizeFiles, setNormalizeFiles] = useState<string[]>([])
@@ -112,7 +180,9 @@ function ScanMusicPage() {
           const saved = await window.api.getLastScanResult()
           if (!disposed && saved?.tracks?.length) {
             setResult(saved)
-            setGenres(genresFromResult(saved))
+            if (!localStorage.getItem(SCAN_CONFIG_STORAGE_KEY)) {
+              setGenres(genresFromResult(saved))
+            }
             localStorage.setItem(SCAN_RESULT_STORAGE_KEY, JSON.stringify(saved))
             window.dispatchEvent(new CustomEvent('musicScanCompleted', { detail: saved }))
           }
@@ -167,7 +237,7 @@ function ScanMusicPage() {
     setError(null)
   }
 
-  const handleSelectGenreFolders = async (id: string, field: 'priorityFolders' | 'randomFolders') => {
+  const handleSelectGenreFolders = async (id: string, field: 'priorityFolders' | 'randomFolders' | 'openingFolders') => {
     try {
       const dialogResult = await window.api.dialog?.openFile?.({
         title: 'Chọn thư mục nhạc',
@@ -209,7 +279,7 @@ function ScanMusicPage() {
         return
       }
       setResult(res)
-      if (res.config?.genres?.length) setGenres(res.config.genres)
+      if (res.config?.genres?.length) setGenres(genresFromResult(res))
     } catch (e: any) {
       const message = e?.message || 'Có lỗi xảy ra khi quét nhạc.'
       setError(scanGenres.length > 1 && message.includes('No folders provided')
@@ -220,21 +290,34 @@ function ScanMusicPage() {
     }
   }
 
-  // Lưu kết quả vào localStorage và dispatch custom event
+  // Persist scan result separately from editable folder configuration.
   useEffect(() => {
     if (result) {
       localStorage.setItem(SCAN_RESULT_STORAGE_KEY, JSON.stringify(result))
-      
-      // Dispatch custom event để Tab 2 biết có scan mới
       window.dispatchEvent(new CustomEvent('musicScanCompleted', { detail: result }))
     }
   }, [result])
+
+  const handleSaveConfig = () => {
+    try {
+      const cleaned = cleanupGenres(genres)
+      if (cleaned.length === 0) {
+        setError('Vui lòng chọn ít nhất 1 thư mục trước khi lưu.')
+        return
+      }
+      persistGenres(cleaned)
+      setGenres(cleaned)
+      setConfigSavedAt(new Date().toLocaleTimeString('vi-VN'))
+      setError(null)
+    } catch (saveError: any) {
+      setError(`Không lưu được cấu hình thư mục: ${saveError?.message || 'Lỗi localStorage'}`)
+    }
+  }
 
   // Listen for normalize audio progress
   useEffect(() => {
     const unsubscribe = window.api.music.onNormalizeAudioProgress?.((progress: any) => {
       setNormalizeProgress(progress)
-      // Reset loading khi hoàn thành hoặc hủy
       if (progress.status === 'completed' || progress.status === 'cancelled' || progress.status === 'error') {
         setNormalizeLoading(false)
       }
@@ -282,18 +365,16 @@ function ScanMusicPage() {
 
   /**
    * Tự động điền danh sách file non-AAC vào phần Chuẩn hóa.
-   * Output folder = subfolder "aac_chuanhoa" bên trong folder cha của file đầu tiên.
+   * Output folder nằm ngoài các folder đang scan để lần quét sau không thấy bản AAC như file mới.
    */
   const handleAutoFillNonAac = () => {
     if (!result?.nonAacFiles || result.nonAacFiles.length === 0) return
 
-    // Lấy folder cha từ file đầu tiên để tạo subfolder output
-    const firstFile = result.nonAacFiles[0]
-    // Tách folder cha theo path separator (Windows và Unix)
-    const parts = firstFile.replace(/\\/g, '/').split('/')
-    parts.pop() // bỏ tên file
-    const parentFolder = parts.join('\\') // Windows path
-    const autoOutputFolder = parentFolder + '\\aac_chuanhoa'
+    const autoOutputFolder = getAutoNormalizeOutputFolder(genres, result.nonAacFiles[0])
+    if (!autoOutputFolder) {
+      setError('Không xác định được thư mục AAC riêng ngoài các folder đang quét. Hãy chọn Thư mục xuất thủ công.')
+      return
+    }
 
     setNormalizeMode('files')
     setNormalizeFiles(result.nonAacFiles)
@@ -358,8 +439,6 @@ function ScanMusicPage() {
   const handleCancelNormalize = async () => {
     try {
       await window.api.music.cancelNormalizeAudio?.()
-      // Progress sẽ được cập nhật qua progress handler với status 'cancelled'
-      // Nhưng reset loading ngay để UI phản hồi nhanh
       setNormalizeLoading(false)
     } catch (err) {
       console.error('Cancel normalize error:', err)
@@ -371,16 +450,13 @@ function ScanMusicPage() {
     try {
       let folderToOpen: string | null = null
 
-      // Ưu tiên: dùng outputFolder nếu có
       if (outputFolder) {
         folderToOpen = outputFolder
       } else if (normalizeResult && normalizeResult.outputFiles.length > 0) {
-        // Nếu không có outputFolder, lấy thư mục của file đầu tiên
         const firstOutputFile = normalizeResult.outputFiles[0]
-        // Parse path thủ công (không dùng Node.js path trong renderer)
         const pathParts = firstOutputFile.split(/[/\\]/)
-        pathParts.pop() // Bỏ tên file
-        folderToOpen = pathParts.join('\\') // Windows path separator
+        pathParts.pop()
+        folderToOpen = pathParts.join('\\')
       }
 
       if (!folderToOpen) {
@@ -419,6 +495,14 @@ function ScanMusicPage() {
           >
             + Thêm thể loại
           </button>
+          <button
+            onClick={handleSaveConfig}
+            disabled={loading}
+            style={{ padding: '10px 14px', backgroundColor: loading ? '#555' : '#374151', color: '#fff', border: '1px solid #4b5563', borderRadius: '6px', cursor: loading ? 'not-allowed' : 'pointer', fontSize: '13px', fontWeight: 'bold' }}
+          >
+            Lưu cấu hình
+          </button>
+          {configSavedAt && <span style={{ color: '#86efac', fontSize: '12px' }}>Đã lưu {configSavedAt}</span>}
           <button
             onClick={() => handleScan(false)}
             disabled={loading || !canScan}
@@ -484,6 +568,7 @@ function ScanMusicPage() {
             {([
               ['priorityFolders', 'Nhạc ưu tiên'],
               ['randomFolders', 'Nhạc random'],
+              ['openingFolders', 'Nhạc mở đầu'],
             ] as const).map(([field, label]) => (
               <div key={field} style={{ display: 'grid', gridTemplateColumns: '110px minmax(0, 1fr) auto auto', gap: '8px', alignItems: 'start', marginBottom: '8px' }}>
                 <label style={{ color: '#9ca3af', fontSize: '12px', paddingTop: '8px' }}>{label}</label>
@@ -537,7 +622,7 @@ function ScanMusicPage() {
             </div>
             <div style={{ fontSize: '13px', color: '#c8a060', lineHeight: '1.5' }}>
               Các file .mp3, .wav, .flac... cần được chuẩn hóa sang AAC (.m4a) để xuất playlist nhanh hơn (stream copy, không mã hóa lại).
-              File xuất sẽ được lưu vào thư mục con <strong style={{ color: '#f0c040' }}>aac_chuanhoa</strong> bên trong folder gốc, giữ nguyên tên file.
+              File xuất sẽ được lưu vào thư mục riêng <strong style={{ color: '#f0c040' }}>aac_chuanhoa</strong> bên ngoài các folder đang quét, giữ nguyên tên file để lần quét sau không bị trùng bản.
             </div>
           </div>
           <button
@@ -1006,6 +1091,7 @@ function ScanMusicPage() {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '10px' }}>
               {[
                 ['Tổng', result.summary.totalCount, result.summary.totalDuration, '#93c5fd'],
+                ['Mở đầu', result.summary.openingCount ?? 0, result.summary.openingDuration ?? 0, '#38bdf8'],
                 ['Ưu tiên', result.summary.priorityCount, result.summary.priorityDuration, '#fbbf24'],
                 ['Random', result.summary.randomCount, result.summary.randomDuration, '#a78bfa'],
               ].map(([label, count, duration, color]) => (
@@ -1065,7 +1151,7 @@ function ScanMusicPage() {
                         <td style={{ padding: '10px', color: '#ccc' }}>{index + 1}</td>
                         <td style={{ padding: '10px', color: '#ccc' }}>{track.fileName}</td>
                         <td style={{ padding: '10px', color: '#ccc' }}>
-                          {track.folderType === 'priority' ? 'Ưu tiên' : 'Random'}
+                          {track.folderType === 'opening' ? 'Mở đầu' : track.folderType === 'priority' ? 'Ưu tiên' : 'Random'}
                         </td>
                         <td style={{ padding: '10px', color: '#ccc' }}>
                           {track.genreName || 'Mặc định'}

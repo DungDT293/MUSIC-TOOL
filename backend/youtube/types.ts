@@ -14,6 +14,35 @@ export interface DownloadVideoRequest {
   createChannelFolder?: boolean; // Tạo folder theo tên kênh (default: true, giống tool Python)
 }
 
+export interface SpotifyDownloadTrack {
+  id: string;
+  name: string;
+  artists: string[];
+  albumName?: string;
+  durationMs?: number;
+}
+
+export interface SpotifyYouTubeDownloadRequest {
+  tracks: SpotifyDownloadTrack[];
+  outputDir: string;
+  audioFormat?: 'mp3' | 'wav';
+  createZip?: boolean;
+  cookiesFile?: string;
+  cookiesFromBrowser?: 'auto' | 'chrome' | 'firefox' | 'edge' | 'opera' | 'safari' | 'brave' | 'chromium' | 'vivaldi';
+}
+
+export interface SpotifyYouTubeDownloadFailure {
+  track: SpotifyDownloadTrack;
+  error: string;
+}
+
+export interface SpotifyYouTubeDownloadResult {
+  downloaded: string[];
+  failed: SpotifyYouTubeDownloadFailure[];
+  zipPath?: string;
+  cancelled?: boolean;
+}
+
 export type Quality = 'best' | '4320' | '2160' | '1440' | '1080' | '720' | '480' | '360';
 
 export interface VideoInfo {

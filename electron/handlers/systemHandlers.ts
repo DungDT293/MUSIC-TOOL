@@ -407,6 +407,7 @@ export function registerSystemHandlers(getMainWindow: () => Electron.BrowserWind
       const paths = Array.isArray(filePaths) ? filePaths.filter(isValidAbsolutePath) : []
       const valid: Array<VideoFileInfo & { path: string }> = []
       const invalid: string[] = []
+      const invalidDetails: Array<{ path: string; reason: string }> = []
 
       // Concurrent probe với limit = 8
       const queue = [...paths]
@@ -421,19 +422,27 @@ export function registerSystemHandlers(getMainWindow: () => Electron.BrowserWind
             if (hasUsableDuration && hasUsableVideoStream) {
               valid.push({ ...info, path: p })
             } else {
+              const reason = !hasUsableDuration
+                ? 'Video không có duration hợp lệ.'
+                : 'Video không có stream hình ảnh hợp lệ (thiếu width/height/codec).'
               invalid.push(p)
+              invalidDetails.push({ path: p, reason })
             }
-          } catch {
+          } catch (error) {
             invalid.push(p)
+            invalidDetails.push({
+              path: p,
+              reason: `Không probe được video: ${error instanceof Error ? error.message : String(error)}`,
+            })
           }
         }
       })
       await Promise.all(workers)
 
-      return { valid, invalid }
+      return { valid, invalid, invalidDetails }
     } catch (err) {
       console.error('[IPC] video:auditFolder error', err)
-      return { valid: [], invalid: [] }
+      return { valid: [], invalid: [], invalidDetails: [] }
     }
   })
 

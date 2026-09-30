@@ -36,6 +36,8 @@ export class JobQueue extends EventEmitter {
   private running = new Map<string, Promise<any>>()
   private abortControllers = new Map<string, AbortController>()
   private pendingQueue: Array<{ jobId: string; fn: () => void }> = []
+  private pendingRejecters = new Map<string, (error: Error) => void>()
+  private cancelCallbacks = new Map<string, () => void>()
   private maxConcurrent: number
   // Bug #4 fix: auto-evict completed/failed/cancelled jobs after 30 min to prevent Map growth
   private readonly JOB_TTL_MS = 30 * 60 * 1000
@@ -70,9 +72,19 @@ export class JobQueue extends EventEmitter {
   private drainPending(): void {
     while (this.pendingQueue.length > 0 && this.runningCount < this.maxConcurrent) {
       const next = this.pendingQueue.shift()!
-      // Skip cancelled pending jobs
       const info = this.jobs.get(next.jobId)
-      if (info?.status === 'cancelled') continue
+      if (info?.status === 'cancelled') {
+        this.pendingRejecters.get(next.jobId)?.(new Error('Job cancelled before starting'))
+        this.pendingRejecters.delete(next.jobId)
+        this.cancelCallbacks.delete(next.jobId)
+        continue
+      }
+      if (!info) {
+        this.pendingRejecters.get(next.jobId)?.(new Error('Job was removed before starting'))
+        this.pendingRejecters.delete(next.jobId)
+        this.cancelCallbacks.delete(next.jobId)
+        continue
+      }
       next.fn()
     }
   }
@@ -91,6 +103,7 @@ export class JobQueue extends EventEmitter {
     }
 
     this.jobs.set(jobId, jobInfo)
+    this.cancelCallbacks.set(jobId, () => job.onCancel?.(jobId))
     this.emit('update', jobInfo)
 
     const context: JobContext = {
@@ -121,6 +134,9 @@ export class JobQueue extends EventEmitter {
 
           const result = await job.task(context)
 
+          if (abortController.signal.aborted || jobInfo.status === 'cancelled') {
+            throw new Error('Job cancelled')
+          }
           jobInfo.status = 'completed'
           jobInfo.completedAt = Date.now()
           jobInfo.progress = 100
@@ -148,6 +164,8 @@ export class JobQueue extends EventEmitter {
         } finally {
           this.running.delete(jobId)
           this.abortControllers.delete(jobId)
+          this.pendingRejecters.delete(jobId)
+          this.cancelCallbacks.delete(jobId)
           // Start next pending job (if any)
           this.drainPending()
         }
@@ -163,10 +181,11 @@ export class JobQueue extends EventEmitter {
       taskPromise = runTask() as Promise<T>
     } else {
       taskPromise = new Promise<T>((resolve, reject) => {
+        this.pendingRejecters.set(jobId, reject)
         this.pendingQueue.push({
           jobId,
           fn: () => {
-            // If job was cancelled while pending, skip execution
+            this.pendingRejecters.delete(jobId)
             const info = this.jobs.get(jobId)
             if (info?.status === 'cancelled') {
               reject(new Error('Job cancelled before starting'))
@@ -176,6 +195,8 @@ export class JobQueue extends EventEmitter {
           },
         })
       })
+
+      taskPromise.catch(() => {})
     }
 
     return {
@@ -183,9 +204,6 @@ export class JobQueue extends EventEmitter {
       result: taskPromise,
       cancel: async () => {
         await this.cancelJob(jobId)
-        if (job.onCancel) {
-          job.onCancel(jobId)
-        }
       },
     }
   }
@@ -199,19 +217,18 @@ export class JobQueue extends EventEmitter {
 
     if (jobInfo.status === 'running' || jobInfo.status === 'pending') {
       const abortController = this.abortControllers.get(jobId)
-      if (abortController) {
-        abortController.abort()
-      }
-
+      if (abortController) abortController.abort()
       jobInfo.status = 'cancelled'
       jobInfo.completedAt = Date.now()
       this.jobs.set(jobId, jobInfo)
       this.emit('update', jobInfo)
-
-      // Remove cancelled job from pending queue so it is not started when a slot opens
       this.pendingQueue = this.pendingQueue.filter((entry) => entry.jobId !== jobId)
-      // Cleanup abortController to avoid memory leak
+      this.pendingRejecters.get(jobId)?.(new Error('Job cancelled before starting'))
+      this.pendingRejecters.delete(jobId)
+      this.cancelCallbacks.get(jobId)?.()
+      this.cancelCallbacks.delete(jobId)
       this.abortControllers.delete(jobId)
+      this.drainPending()
     }
   }
 
@@ -236,6 +253,10 @@ export class JobQueue extends EventEmitter {
     this.jobs.delete(jobId)
     this.running.delete(jobId)
     this.abortControllers.delete(jobId)
+    this.pendingRejecters.get(jobId)?.(new Error('Job was removed'))
+    this.pendingRejecters.delete(jobId)
+    this.cancelCallbacks.delete(jobId)
+    this.pendingQueue = this.pendingQueue.filter((entry) => entry.jobId !== jobId)
   }
 }
 

@@ -5,6 +5,7 @@ export const VIDEO_FINAL_EXPORT_ERROR = 'video:final-export:error'
 export const VIDEO_FINAL_EXPORT_SCAN_AUDIO = 'video:final-export:scan-audio'
 export const VIDEO_FINAL_EXPORT_SCAN_VIDEO = 'video:final-export:scan-video'
 export const VIDEO_FINAL_EXPORT_SCAN_IMAGE = 'video:final-export:scan-image'
+export const VIDEO_FINAL_EXPORT_CANCEL = 'video:final-export:cancel'
 
 // ========================================
 // ✅ V2.2: EXPORT QUALITY PRESETS
@@ -190,6 +191,8 @@ export interface FinalExportRequestPayload {
   audioVisualizer?: FinalExportVisualizerOptions
 
   deleteSourceFiles?: boolean // Xóa file audio và video sau khi xuất xong (tùy chọn)
+  /** Autopilot unique mode: fail before FFmpeg if source duration cannot cover all jobs without reuse. */
+  uniqueRequired?: boolean
 
   // ✅ Slideshow (pure images + music) parameters
   perImageDurationSec?: number
@@ -217,6 +220,15 @@ export interface FinalExportProgressPayload {
   currentOutputFilename?: string
 }
 
+export interface FinalExportAudioFailure {
+  path: string
+  stage: 'validate-path' | 'probe' | 'duration'
+  detail: string
+  repairHint: string
+  durationSec?: number
+  codecName?: string | null
+}
+
 export interface FinalExportDonePayload {
   requestId: string
   outputs: {
@@ -226,13 +238,24 @@ export interface FinalExportDonePayload {
     durationSec: number
     tracklistFile?: string
   }[]
+  /** Audio files rejected before jobs were created. */
+  audioFailures?: FinalExportAudioFailure[]
+  requestedAudioCount?: number
+  acceptedAudioCount?: number
   /** Jobs that failed during export (remaining jobs still completed) */
   failedJobs?: {
     jobIndex: number
     fileName: string
     error: string
+    audioFile?: string
+    outputPath?: string
+    stage?: string
+    repairHint?: string
+    sourceVideoPaths?: string[]
   }[]
   warnings?: string[]
+  /** Full source playlist occurrences for each successful output, including repeats. */
+  videoSequences?: { jobIndex: number; videoPaths: string[]; clipIds?: string[] }[]
 }
 
 export interface FinalExportErrorPayload {

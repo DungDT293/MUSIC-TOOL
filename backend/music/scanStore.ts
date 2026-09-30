@@ -1,7 +1,17 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
+import { createHash } from 'node:crypto'
 import type { ScanMusicConfig, ScanMusicResult } from './scanMusic'
+
+function isCurrentTrackId(track: ScanMusicResult['tracks'][number]): boolean {
+  try {
+    const canonicalPath = fs.realpathSync(track.path)
+    return track.id === createHash('md5').update(canonicalPath).digest('hex')
+  } catch {
+    return false
+  }
+}
 
 const STORE_DIR = path.join(os.homedir(), '.93-media-tool-mix-nhac')
 const STORE_FILE = path.join(STORE_DIR, 'music-scan-result.json')
@@ -34,6 +44,7 @@ export function scanConfigKey(config?: ScanMusicConfig): string {
       name: genre.name,
       priorityFolders: [...(genre.priorityFolders ?? [])].map((f) => f.trim()).filter(Boolean).sort((a, b) => a.localeCompare(b)),
       randomFolders: [...(genre.randomFolders ?? [])].map((f) => f.trim()).filter(Boolean).sort((a, b) => a.localeCompare(b)),
+      openingFolders: [...(genre.openingFolders ?? [])].map((f) => f.trim()).filter(Boolean).sort((a, b) => a.localeCompare(b)),
     })).sort((a, b) => a.id.localeCompare(b.id)),
   })
 }
@@ -41,10 +52,13 @@ export function scanConfigKey(config?: ScanMusicConfig): string {
 export function isScanResultUsable(result: ScanMusicResult | null | undefined, config?: ScanMusicConfig): result is ScanMusicResult {
   if (!result || !Array.isArray(result.tracks)) return false
   if (config && scanConfigKey(result.config) !== scanConfigKey(config)) return false
+  const seenIds = new Set<string>()
   for (const track of result.tracks) {
-    if (!track?.path || !path.isAbsolute(track.path) || !fs.existsSync(track.path)) {
+    if (!track?.path || !path.isAbsolute(track.path) || !fs.existsSync(track.path) || !isCurrentTrackId(track)) {
       return false
     }
+    if (seenIds.has(track.id)) return false
+    seenIds.add(track.id)
   }
   return true
 }

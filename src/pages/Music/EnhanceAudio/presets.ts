@@ -7,6 +7,44 @@ import type {
   NoiseGateSettings, LimiterSettings, ExciterSettings, NoiseReductionSettings,
 } from '../../../types/ipc'
 
+export interface EnhanceAudioSettings {
+  eq: EQSettings
+  compressor: CompressorSettings
+  loudnorm: LoudnormSettings
+  stereo: StereoSettings
+  noiseGate: NoiseGateSettings
+  limiter: LimiterSettings
+  exciter: ExciterSettings
+  noiseReduction: NoiseReductionSettings
+}
+
+export interface EnhanceAudioPresetSettings {
+  eq?: Partial<EQSettings>
+  compressor?: Partial<CompressorSettings>
+  loudnorm?: Partial<LoudnormSettings>
+  stereo?: Partial<StereoSettings>
+  noiseGate?: Partial<NoiseGateSettings>
+  limiter?: Partial<LimiterSettings>
+  exciter?: Partial<ExciterSettings>
+  noiseReduction?: Partial<NoiseReductionSettings>
+}
+
+export function applyPresetDefaults(
+  partial: EnhanceAudioPresetSettings,
+  defaults: EnhanceAudioSettings,
+): EnhanceAudioSettings {
+  return {
+    eq: { ...defaults.eq, ...(partial.eq ?? {}) },
+    compressor: { ...defaults.compressor, ...(partial.compressor ?? {}) },
+    loudnorm: { ...defaults.loudnorm, ...(partial.loudnorm ?? {}) },
+    stereo: { ...defaults.stereo, ...(partial.stereo ?? {}) },
+    noiseGate: { ...defaults.noiseGate, ...(partial.noiseGate ?? {}) },
+    limiter: { ...defaults.limiter, ...(partial.limiter ?? {}) },
+    exciter: { ...defaults.exciter, ...(partial.exciter ?? {}) },
+    noiseReduction: { ...defaults.noiseReduction, ...(partial.noiseReduction ?? {}) },
+  }
+}
+
 export interface MasterPreset {
   name: string
   description: string

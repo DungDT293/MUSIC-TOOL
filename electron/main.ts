@@ -15,7 +15,6 @@
  */
 
 import { app, BrowserWindow, protocol, net } from 'electron'
-import * as path from 'path'
 import * as fs from 'fs'
 import { getAutoUpdater } from './autoUpdaterSingleton'
 import { getFfmpegPaths } from '../backend/ffmpeg/config'
@@ -26,8 +25,11 @@ import { initTamperDetection, checkTampering } from '../backend/security/tamperD
 import { initSecurityMonitoring } from '../backend/security/securityMonitoring'
 import { getAuthServerBase } from '../backend/licenseServerConfig'
 import { cleanupYouTubeHandlers } from './youtube/youtubeHandlers'
+import { videoJobManager } from '../backend/video/videoJobManager'
+import { jobQueue } from '../backend/jobQueue/jobQueue'
+import { isValidAbsolutePath } from './authState'
 import * as windowManager from './windowManager'
-import { createWindow, loadErrorPage } from './windowManager'
+import { createWindow, loadErrorPage, requestAppExit, clearForcedAppExit } from './windowManager'
 import {
   registerAllHandlers,
   refreshLicenseState,
@@ -230,9 +232,17 @@ app.whenReady()
               console.warn('[Protocol] Missing path parameter in URL:', request.url.slice(0, 100))
               return new Response('Missing path parameter', { status: 400 })
             }
-            const decodedPath = decodeURIComponent(filePath)
+            // URLSearchParams.get() already percent-decodes query values.
+            const decodedPath = filePath
+            if (!isValidAbsolutePath(decodedPath)) {
+              return new Response('Invalid file path', { status: 400 })
+            }
             // Security: chỉ cho phép đọc file thực sự tồn tại
-            if (!fs.existsSync(decodedPath)) {
+            let stat: fs.Stats | null = null
+            try {
+              stat = fs.statSync(decodedPath)
+            } catch {}
+            if (!stat?.isFile()) {
               const isUNC = decodedPath.startsWith('\\\\') || decodedPath.startsWith('//')
               console.warn(`[Protocol] File not found${isUNC ? ' (network path)' : ''}:`, decodedPath)
               return new Response(
@@ -459,22 +469,32 @@ app.on('window-all-closed', () => {
 })
 
 // ─── Graceful shutdown ────────────────────────────────────────────────────────
-app.on('before-quit', async (e) => {
-  // FIX 1.2: Warn if an export is active — prevent accidental data loss
-  if (_hasActiveExport) {
-    console.warn('[App] before-quit: export is active — proceeding with quit but logging warning')
-    // NOTE: We log but don't block quit here. The renderer-side export guard
-    // should have already warned the user via onbeforeunload or a dialog.
-    // Blocking quit in before-quit with e.preventDefault() can cause the app
-    // to become unkillable if the export hangs. The critical guard is in
-    // app:installUpdate where we CAN reject the action.
+app.on('before-quit', () => {
+  // Never await or prevent quit here. Async shutdown hooks can leave Electron stuck.
+  if (_hasActiveExport) console.warn('[App] before-quit: cancelling active export jobs')
+
+  if (diskInfoRefreshInterval) clearInterval(diskInfoRefreshInterval)
+  if (licenseCheckInterval) clearInterval(licenseCheckInterval)
+
+  try {
+    for (const job of jobQueue.getJobs()) {
+      if (job.status === 'pending' || job.status === 'running') void jobQueue.cancelJob(job.id)
+    }
+    videoJobManager.cancelAll()
+  } catch (error) {
+    console.warn('[App] Failed to cancel queued jobs during shutdown:', error)
   }
 
-  // Cancel autopilot
-  try {
-    const { cancelAutopilot } = await import('../backend/autopilot/autopilotRunner')
-    cancelAutopilot?.()
-  } catch (_) {}
+  import('../backend/autopilot/autopilotRunner')
+    .then(({ cancelAutopilot }) => cancelAutopilot?.())
+    .catch(() => {})
+})
+
+process.on('SIGTERM', () => requestAppExit())
+process.on('SIGINT', () => requestAppExit())
+
+app.on('will-quit', () => {
+  clearForcedAppExit()
 })
 
 // ─── Auto-updater ─────────────────────────────────────────────────────────────

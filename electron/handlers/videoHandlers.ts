@@ -8,13 +8,13 @@ import { ipcMain } from 'electron'
 import { randomUUID } from 'crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import { createHash } from 'node:crypto'
 import { getVideoFileInfo } from '../../backend/video/videoInfo'
 import { cutVideoIntoSegmentsSimple, type CutSingleSimpleRequest } from '../../backend/video/cutSingleSimple'
 import { splitManyVideosSimple, type SplitManySimpleRequest } from '../../backend/video/splitManySimple'
 import { mergeVideosSimple, type MergeVideosSimpleRequest } from '../../backend/video/mergeVideosSimple'
 import { muteVideoAudio, type MuteVideoAudioRequest } from '../../backend/video/muteVideoAudio'
 import { normalizeVideo, type NormalizeVideoRequest } from '../../backend/video/normalizeVideo'
+import { extractAudioBatch, type ExtractAudioRequest } from '../../backend/video/extractAudio'
 import { videoJobManager } from '../../backend/video/videoJobManager'
 import { jobQueue } from '../../backend/jobQueue/jobQueue'
 import { isValidAbsolutePath } from '../authState'
@@ -24,12 +24,15 @@ const VIDEO_PROGRESS_CHANNEL = 'video:progress'
 const AUDIO_VISUALIZER_PRESETS = new Set(['bars-spectrum', 'line-waveform', 'mirror-waveform', 'neon-waveform'])
 
 let activeMergeRequestId: string | null = null
+let activeMergeOwner: string | null = null
 let activeMuteRequestId: string | null = null
 let activeNormalizeRequestId: string | null = null
+let activeExtractAudioRequestId: string | null = null
 
 export function getActiveMergeRequestId() { return activeMergeRequestId }
 export function getActiveMuteRequestId() { return activeMuteRequestId }
 export function getActiveNormalizeRequestId() { return activeNormalizeRequestId }
+export function getActiveExtractAudioRequestId() { return activeExtractAudioRequestId }
 
 function validateAudioVisualizerPreviewOptions(options: any): string | null {
   if (!options || typeof options !== 'object') return 'audioVisualizer is required'
@@ -183,44 +186,33 @@ export function registerVideoHandlers() {
   ipcMain.handle('video:mergeSimple', async (event, req: MergeVideosSimpleRequest) => {
     const sender = event.sender
     const requestId = req.requestId || randomUUID()
+    const owner = randomUUID()
+    const rejected = (error: string) => ({ requestId, outputPaths: [], totalDurationSec: 0, success: false, error })
+    if (activeMergeOwner) {
+      return rejected('Đã có một job ghép video đang chạy. Vui lòng đợi job hiện tại hoàn thành hoặc hủy trước khi chạy job mới.')
+    }
+    activeMergeOwner = owner
     try {
-      if (activeMergeRequestId && activeMergeRequestId !== requestId) {
-        return {
-          requestId,
-          outputPaths: [],
-          totalDurationSec: 0,
-          success: false,
-          error: 'Đã có một job ghép video đang chạy. Vui lòng đợi job hiện tại hoàn thành hoặc hủy trước khi chạy job mới.',
-        }
-      }
-
       const proceed = await confirmResourcesForVideoJob('merge', req.outputDir)
-      if (!proceed) {
-        return {
-          requestId,
-          outputPaths: [],
-          totalDurationSec: 0,
-          success: false,
-          error: 'Job đã bị hủy sau cảnh báo tài nguyên.',
-        }
-      }
+      if (!proceed) return rejected('Job đã bị hủy sau cảnh báo tài nguyên.')
 
       activeMergeRequestId = requestId
-      try {
-        return await mergeVideosSimple(
-          { ...req, requestId },
-          (progress) => {
-            if (!sender.isDestroyed()) {
-              sender.send(VIDEO_PROGRESS_CHANNEL, { ...progress, requestId, mode: 'merge' as const })
-            }
+      return await mergeVideosSimple(
+        { ...req, requestId },
+        (progress) => {
+          if (!sender.isDestroyed()) {
+            sender.send(VIDEO_PROGRESS_CHANNEL, { ...progress, requestId, mode: 'merge' as const })
           }
-        )
-      } finally {
-        activeMergeRequestId = null
-      }
+        }
+      )
     } catch (err) {
       console.error('[IPC] video:mergeSimple error', err)
       throw err
+    } finally {
+      if (activeMergeOwner === owner) {
+        activeMergeOwner = null
+        activeMergeRequestId = null
+      }
     }
   })
 
@@ -342,7 +334,49 @@ export function registerVideoHandlers() {
     return null
   })
 
-  ipcMain.handle('video:cancelJob', async (_event, requestId: string) => {
+  ipcMain.handle('video:extractAudioBatch', async (event, req: ExtractAudioRequest) => {
+    const sender = event.sender
+    const requestId = req?.requestId || randomUUID()
+    const failed = (error: string) => ({ requestId, outputPaths: [], failures: [], success: false, error, processed: 0, failed: 0 })
+    if (activeExtractAudioRequestId) {
+      return failed('Đã có một job tách âm thanh đang chạy.')
+    }
+    if (typeof requestId !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(requestId)) return failed('requestId không hợp lệ.')
+    if (videoJobManager.hasJob(requestId)) return failed('requestId đang được sử dụng.')
+    if (!req || !Array.isArray(req.inputFiles) || req.inputFiles.length === 0 || req.inputFiles.length > 500) {
+      return failed('Danh sách video không hợp lệ.')
+    }
+    if (!req.inputFiles.every((filePath) => typeof filePath === 'string' && isValidAbsolutePath(filePath))) {
+      return failed('Đường dẫn video không hợp lệ.')
+    }
+    if (req.mp4Only && !req.inputFiles.every((filePath) => path.extname(filePath).toLowerCase() === '.mp4')) {
+      return failed('Chức năng này chỉ nhận file MP4.')
+    }
+    if (!isValidAbsolutePath(req.outputDir)) return failed('Đường dẫn thư mục xuất không hợp lệ.')
+    if (req.audioFormat !== 'mp3' && req.audioFormat !== 'wav') return failed('Định dạng âm thanh không hợp lệ.')
+
+    activeExtractAudioRequestId = requestId
+    const onSenderDestroyed = () => videoJobManager.cancelJob(requestId)
+    sender.once('destroyed', onSenderDestroyed)
+    try {
+      return await extractAudioBatch(
+        { ...req, requestId },
+        (progress) => {
+          if (!sender.isDestroyed()) sender.send(VIDEO_PROGRESS_CHANNEL, { ...progress, requestId, mode: 'extract-audio' })
+        },
+      )
+    } catch (err: any) {
+      return failed(err?.message || 'Tách âm thanh thất bại.')
+    } finally {
+      sender.removeListener('destroyed', onSenderDestroyed)
+      if (activeExtractAudioRequestId === requestId) activeExtractAudioRequestId = null
+    }
+  })
+
+  ipcMain.handle('video:getActiveExtractAudioJobId', async () => activeExtractAudioRequestId)
+
+  ipcMain.handle('video:cancelJob',
+ async (_event, requestId: string) => {
     try { videoJobManager.cancelJob(requestId); return { success: true } }
     catch (err) { console.error('[IPC] video:cancelJob error', err); return { success: false, error: String(err) } }
   })
@@ -369,20 +403,12 @@ export function registerVideoHandlers() {
 
   ipcMain.handle('video:pool-mark-used', async (_event, filePaths: string[]) => {
     try {
-      const { generateClipId, markClipsUsed } = await import('../../backend/autopilot/videoPool')
-      const clipIds: string[] = []
-      for (const fp of filePaths) {
-        if (!isValidAbsolutePath(fp)) continue
-        try {
-          const size = fs.statSync(fp).size
-          const id = generateClipId(path.basename(fp), size)
-          clipIds.push(id)
-        } catch {}
-      }
+      if (!Array.isArray(filePaths)) throw new Error('filePaths must be an array')
+      const validPaths = filePaths.filter((fp): fp is string => typeof fp === 'string' && isValidAbsolutePath(fp))
+      const { markFilePathsUsed } = await import('../../backend/autopilot/videoPool')
       const dateCode = new Date().toISOString().slice(0, 10).replace(/-/g, '')
-      const fingerprint = createHash('sha256').update(clipIds.join(',')).digest('hex').slice(0, 16)
-      markClipsUsed(clipIds, dateCode, fingerprint)
-      return { ok: true, marked: clipIds.length }
+      const result = await markFilePathsUsed(validPaths, dateCode)
+      return { ok: true, marked: result.clipIds.length }
     } catch (err: any) {
       console.error('[IPC] video:pool-mark-used error', err)
       return { ok: false, error: err?.message }
@@ -393,6 +419,9 @@ export function registerVideoHandlers() {
     if (!isValidAbsolutePath(folderPath)) {
       return { ok: false, error: 'Invalid folder path', filePaths: [] }
     }
+    if (!Number.isSafeInteger(count) || count < 0) {
+      return { ok: false, error: 'Count must be a non-negative integer', filePaths: [] }
+    }
     try {
       const { pickClipsLRU } = await import('../../backend/autopilot/videoPool')
       const VIDEO_EXTS = new Set(['.mp4', '.mkv', '.mov', '.avi', '.webm', '.m4v'])
@@ -400,15 +429,9 @@ export function registerVideoHandlers() {
         .filter((f) => VIDEO_EXTS.has(path.extname(f).toLowerCase()))
         .map((f) => path.join(folderPath, f))
       const result = await pickClipsLRU(files, count)
-      return {
-        ok: true,
-        filePaths: result.filePaths,
-        reusedCount: result.reusedCount,
-        totalAvailable: result.totalAvailable,
-      }
+      return { ok: true, filePaths: result.filePaths, reusedCount: result.reusedCount, totalAvailable: result.totalAvailable }
     } catch (err: any) {
-      console.error('[IPC] video:pool-pick-lru error', err)
-      return { ok: false, error: err?.message, filePaths: [] }
+      return { ok: false, error: err?.message || 'Pool pick failed', filePaths: [] }
     }
   })
 

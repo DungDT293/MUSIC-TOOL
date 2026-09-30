@@ -5,17 +5,18 @@ import { createHash } from 'crypto'
 import { probeFile } from '../ffmpeg/probe'
 import { loadReusableScanResult, saveScanResult } from './scanStore'
 
-export type MusicFolderType = 'priority' | 'random'
+export type MusicFolderType = 'priority' | 'random' | 'opening'
 
 export interface MusicScanGenre {
   id: string
   name: string
   priorityFolders: string[]
   randomFolders: string[]
+  openingFolders?: string[]
 }
 
 export interface ScanMusicConfig {
-  version: 2
+  version: 2 | 3
   genres: MusicScanGenre[]
 }
 
@@ -36,18 +37,22 @@ export interface ScannedTrack {
 export interface GenreScanSummary {
   genreId: string
   genreName: string
+  openingCount?: number
   priorityCount: number
   randomCount: number
   totalCount: number
+  openingDuration?: number
   priorityDuration: number
   randomDuration: number
   totalDuration: number
 }
 
 export interface ScanSummary {
+  openingCount?: number
   priorityCount: number
   randomCount: number
   totalCount: number
+  openingDuration?: number // seconds
   priorityDuration: number // seconds
   randomDuration: number // seconds
   totalDuration: number // seconds
@@ -60,7 +65,7 @@ export interface ScanMusicResult {
   scannedAt?: number
   config?: ScanMusicConfig
   cacheStatus?: 'scanned' | 'reused' | 'loaded'
-  /** Các file audio KHÔNG phải chuẩn AAC (.m4a / .aac). Cần chuẩn hóa. */
+  /** Các file có codec thật không phải AAC. Nên chuẩn hóa sang AAC trước khi export M4A. */
   nonAacFiles?: string[]
 }
 
@@ -70,6 +75,7 @@ export interface ScanMusicPayload {
   genres?: MusicScanGenre[]
   forceRescan?: boolean
   persist?: boolean
+  openingFolders?: string[]
 }
 
 export interface ScanMusicProgress {
@@ -88,7 +94,6 @@ export interface ScanMusicOptions {
 }
 
 const SUPPORTED_AUDIO_EXTENSIONS = ['.mp3', '.wav', '.flac', '.aac', '.m4a', '.ogg']
-const AAC_EXTENSIONS = new Set(['.m4a', '.aac'])
 const DISCOVER_PROGRESS_STEP = 25
 const DISCOVER_YIELD_EVERY_DIRS = 25
 
@@ -120,12 +125,13 @@ export function normalizeScanPayload(payload: ScanMusicPayload): ScanMusicConfig
     name: String(genre.name || `Thể loại ${index + 1}`).trim() || `Thể loại ${index + 1}`,
     priorityFolders: normalizeFolderList(genre.priorityFolders),
     randomFolders: normalizeFolderList(genre.randomFolders),
-  })).filter((genre) => genre.priorityFolders.length > 0 || genre.randomFolders.length > 0)
+    openingFolders: normalizeFolderList(genre.openingFolders ?? payload.openingFolders),
+  })).filter((genre) => genre.priorityFolders.length > 0 || genre.randomFolders.length > 0 || genre.openingFolders.length > 0)
 
   if (genres.length > 0) {
     const usedIds = new Set<string>()
     return {
-      version: 2,
+      version: 3,
       genres: genres.map((genre, index) => {
         let id = genre.id
         if (usedIds.has(id)) id = `${id}-${index + 1}`
@@ -143,9 +149,9 @@ export function normalizeScanPayload(payload: ScanMusicPayload): ScanMusicConfig
     : []
 
   return {
-    version: 2,
+    version: 3,
     genres: legacyPriority.length > 0 || legacyRandom.length > 0
-      ? [{ id: 'default', name: 'Mặc định', priorityFolders: legacyPriority, randomFolders: legacyRandom }]
+      ? [{ id: 'default', name: 'Mặc định', priorityFolders: legacyPriority, randomFolders: legacyRandom, openingFolders: [] }]
       : [],
   }
 }
@@ -164,6 +170,7 @@ async function yieldToEventLoop(): Promise<void> {
 async function getAllAudioFiles(
   dir: string,
   folderType: MusicFolderType,
+  sharedRealFiles: Set<string>,
   options: ScanMusicOptions = {},
 ): Promise<string[]> {
   const files: string[] = []
@@ -228,12 +235,13 @@ async function getAllAudioFiles(
         continue
       }
 
-      if (visitedFiles.has(realFile)) {
+      if (visitedFiles.has(realFile) || sharedRealFiles.has(realFile)) {
         console.warn(`[ScanMusic] Duplicate file via symlink, skipping: ${fullPath} -> ${realFile}`)
         continue
       }
 
       visitedFiles.add(realFile)
+      sharedRealFiles.add(realFile)
       files.push(fullPath)
 
       if (files.length === 1 || files.length % DISCOVER_PROGRESS_STEP === 0) {
@@ -311,7 +319,8 @@ async function scanSingleFile(
       return null
     }
 
-    const id = createHash('md5').update(filePath).digest('hex')
+    const canonicalPath = await fsp.realpath(filePath)
+    const id = createHash('md5').update(canonicalPath).digest('hex')
     const fileName = path.basename(filePath)
     const duration = probeResult.format.duration || 0
     const minDurationSeconds = 5
@@ -373,38 +382,23 @@ export async function scanAudioFilesAsTracks(
   return tracks.filter((track): track is ScannedTrack => track !== null)
 }
 
-async function addUniqueFiles(
-  target: string[],
-  files: string[],
-  globalSeenRealPaths: Set<string>,
-): Promise<void> {
-  for (const filePath of files) {
-    let realFile: string
-    try {
-      realFile = await fsp.realpath(filePath)
-    } catch {
-      realFile = filePath
-    }
-    const key = realFile.toLowerCase()
-    if (globalSeenRealPaths.has(key)) continue
-    globalSeenRealPaths.add(key)
-    target.push(filePath)
-  }
-}
-
 function buildSummary(tracks: ScannedTrack[], config: ScanMusicConfig): ScanSummary {
+  const openingTracks = tracks.filter((track) => track.folderType === 'opening')
   const priorityTracks = tracks.filter((track) => track.folderType === 'priority')
   const randomTracks = tracks.filter((track) => track.folderType === 'random')
   const genres = config.genres.map((genre) => {
     const genreTracks = tracks.filter((track) => track.genreId === genre.id)
+    const genreOpening = genreTracks.filter((track) => track.folderType === 'opening')
     const genrePriority = genreTracks.filter((track) => track.folderType === 'priority')
     const genreRandom = genreTracks.filter((track) => track.folderType === 'random')
     return {
       genreId: genre.id,
       genreName: genre.name,
+      openingCount: genreOpening.length,
       priorityCount: genrePriority.length,
       randomCount: genreRandom.length,
       totalCount: genreTracks.length,
+      openingDuration: genreOpening.reduce((sum, track) => sum + track.duration, 0),
       priorityDuration: genrePriority.reduce((sum, track) => sum + track.duration, 0),
       randomDuration: genreRandom.reduce((sum, track) => sum + track.duration, 0),
       totalDuration: genreTracks.reduce((sum, track) => sum + track.duration, 0),
@@ -412,9 +406,11 @@ function buildSummary(tracks: ScannedTrack[], config: ScanMusicConfig): ScanSumm
   })
 
   return {
+    openingCount: openingTracks.length,
     priorityCount: priorityTracks.length,
     randomCount: randomTracks.length,
     totalCount: tracks.length,
+    openingDuration: openingTracks.reduce((sum, track) => sum + track.duration, 0),
     priorityDuration: priorityTracks.reduce((sum, track) => sum + track.duration, 0),
     randomDuration: randomTracks.reduce((sum, track) => sum + track.duration, 0),
     totalDuration: tracks.reduce((sum, track) => sum + track.duration, 0),
@@ -441,25 +437,25 @@ export async function scanMusicFolders(
   const globalSeenRealPaths = new Set<string>()
   throwIfAborted(options.signal)
 
-  for (const genre of config.genres) {
-    for (const [folderType, folders] of [
-      ['priority', genre.priorityFolders] as const,
-      ['random', genre.randomFolders] as const,
-    ]) {
+  // Scan priority roots before random roots so shared physical files retain priority ownership.
+  for (const folderType of ['priority', 'random', 'opening'] as const) {
+    for (const genre of config.genres) {
+      const folders = folderType === 'priority'
+        ? genre.priorityFolders
+        : folderType === 'random' ? genre.randomFolders : genre.openingFolders ?? []
       for (const folder of folders) {
         throwIfAborted(options.signal)
         if (!fs.existsSync(folder)) {
-          throw new Error(`${folderType === 'priority' ? 'Priority' : 'Random'} folder does not exist: ${folder}`)
+          const label = folderType === 'priority' ? 'Priority' : folderType === 'random' ? 'Random' : 'Opening'
+          throw new Error(`${label} folder does not exist: ${folder}`)
         }
 
         console.log(`[ScanMusic] Scanning ${folderType} folder (${genre.name}): ${folder}`)
-        const discoveredFiles = await getAllAudioFiles(folder, folderType, options)
-        const uniqueFiles: string[] = []
-        await addUniqueFiles(uniqueFiles, discoveredFiles, globalSeenRealPaths)
-        console.log(`[ScanMusic] ${folderType} files (${genre.name}): ${uniqueFiles.length}/${discoveredFiles.length}`)
+        const discoveredFiles = await getAllAudioFiles(folder, folderType, globalSeenRealPaths, options)
+        console.log(`[ScanMusic] ${folderType} files (${genre.name}): ${discoveredFiles.length}`)
 
         const tracks = await runWithConcurrency(
-          uniqueFiles,
+          discoveredFiles,
           5,
           (filePath) => scanSingleFile(filePath, folderType, {
             genreId: genre.id,
@@ -496,9 +492,9 @@ export async function scanMusicFolders(
     scannedAt: Date.now(),
     config,
     cacheStatus: 'scanned',
-    // Danh sách file không phải chuẩn AAC (.m4a/.aac) — cần chuẩn hóa
+    // Danh sách file codec thật không phải AAC — đuôi .m4a/.aac không đủ tin cậy.
     nonAacFiles: allTracks
-      .filter((track) => !AAC_EXTENSIONS.has(path.extname(track.path).toLowerCase()))
+      .filter((track) => track.codec?.toLowerCase() !== 'aac')
       .map((track) => track.path),
   }
 

@@ -3,14 +3,18 @@ import * as path from 'path';
 import * as fsSync from 'fs';
 import * as fs from 'fs/promises';
 import { EventEmitter } from 'events';
-// import { getFfmpegPaths } from '../ffmpeg/config'; // Reserved for future upscale feature
+import JSZip from 'jszip';
+import { getFfmpegPaths } from '../ffmpeg/config' // Shared bundled FFmpeg/ffprobe location
 import {
   DownloadVideoRequest,
   VideoInfo,
   VideoFormat,
   DownloadProgress,
   BatchDownloadProgress,
-  Quality
+  Quality,
+  SpotifyYouTubeDownloadRequest,
+  SpotifyYouTubeDownloadResult,
+  SpotifyDownloadTrack,
 } from './types';
 import { detectTracklist, formatTracklistForFile } from './tracklistDetector';
 import { SafeFolderManager } from './SafeFolderManager';
@@ -35,10 +39,11 @@ const DEFAULT_COOKIE_BROWSERS: SupportedBrowser[] = [
 export class YouTubeDownloader extends EventEmitter {
 
   private ytDlpPath: string;
-  // private ffmpegPath: string; // Reserved for future upscale feature
+  private ffmpegPath: string;
   // Fix P0-07: dùng Map<jobId, ChildProcess> thay vì single currentProcess
   // để hỗ trợ concurrent downloads và cancel đúng process
   private activeProcesses: Map<string, ChildProcess> = new Map();
+  private cancellationGeneration = 0;
   private folderManager: SafeFolderManager | null = null;
   private facebookScraper: FacebookScraper;
   private cookieManager: CookieManager;
@@ -104,9 +109,9 @@ export class YouTubeDownloader extends EventEmitter {
       console.log('[YouTubeDownloader] Auto-loaded Facebook cookies from CookieManager');
     }
 
-    // Get FFmpeg path (reserved for future upscale feature)
-    // const ffmpegPaths = getFfmpegPaths();
-    // this.ffmpegPath = ffmpegPaths.ffmpeg;
+    // yt-dlp post-processors must use app-bundled ffmpeg/ffprobe in dev and packaged builds.
+    const { ffmpeg } = getFfmpegPaths();
+    this.ffmpegPath = path.dirname(ffmpeg);
   }
 
   /**
@@ -513,6 +518,13 @@ export class YouTubeDownloader extends EventEmitter {
    * Detect URL type
    */
   detectUrlType(url: string): 'video' | 'channel' | 'playlist' | 'unknown' {
+    // TikTok must be checked before generic /@ channel detection below.
+    if (url.includes('tiktok.com/') || url.includes('vm.tiktok.com/')) {
+      if (url.includes('/video/') || url.match(/\/t\/[A-Za-z0-9]+/)) return 'video';
+      if (url.includes('/@')) return 'channel';
+      return 'video';
+    }
+
     // YouTube
     if (url.includes('/watch?v=') || url.includes('youtu.be/')) {
       return 'video';
@@ -766,9 +778,11 @@ export class YouTubeDownloader extends EventEmitter {
 
     const usesSavedYoutubeCookies =
       this.getCookiePlatformForUrl(url) === 'youtube' && this.cookieManager.hasCookies('youtube');
-    const clientsToTry = usesSavedYoutubeCookies
-      ? ['tv', 'web_safari']
-      : ['tv,android_vr,web_safari', 'android,web'];
+    const clientsToTry = this.isTikTokUrl(url)
+      ? ['tiktok', 'tiktok-default']
+      : usesSavedYoutubeCookies
+        ? ['tv', 'web_safari']
+        : ['tv,android_vr,web_safari', 'android,web'];
 
     let lastError: any = null;
     for (const client of clientsToTry) {
@@ -779,7 +793,10 @@ export class YouTubeDownloader extends EventEmitter {
         lastError = error;
         const message = error?.message || '';
 
-        if (this.isExpiredCookieError(message)) {
+        if (
+          this.isExpiredCookieError(message) ||
+          (this.isTikTokUrl(url) && !YouTubeDownloader.isTikTokExtractorFallbackError(message))
+        ) {
           throw error;
         }
 
@@ -812,6 +829,11 @@ export class YouTubeDownloader extends EventEmitter {
     } else if (isFacebook) {
       args.push('--referer', 'https://www.facebook.com/');
       args.push('--no-check-certificates');
+    } else if (this.isTikTokUrl(url)) {
+      args.push('--referer', 'https://www.tiktok.com/');
+      if (client !== 'tiktok-default') {
+        args.push('--extractor-args', 'tiktok:webpage_url_basename=t');
+      }
     } else {
       args.push('--referer', 'https://www.google.com/');
     }
@@ -1042,6 +1064,7 @@ export class YouTubeDownloader extends EventEmitter {
    * Cancel ongoing download
    */
   cancelDownload(): void {
+    this.cancellationGeneration++;
     // Fix P0-07: Kill ALL active processes, not just the last one
     if (this.activeProcesses.size > 0) {
       console.log(`[YouTubeDownloader] Cancelling ${this.activeProcesses.size} active download(s)...`);
@@ -1070,6 +1093,90 @@ export class YouTubeDownloader extends EventEmitter {
   /** Helper: remove a tracked process (called on completion) */
   private removeProcess(jobId: string): void {
     this.activeProcesses.delete(jobId);
+  }
+
+  private static extractOutputPathsFromLog(text: string): string[] {
+    const finalPaths: string[] = [];
+    const postProcessedPaths: string[] = [];
+    const paths: string[] = [];
+    for (const line of text.split(/\r?\n/)) {
+      const finalPath = line.match(/^__YT_DLP_FINAL__(.+)$/);
+      const destination = line.match(/\[download\]\s+Destination:\s*(.+)$/i);
+      const postProcessed = line.match(/\[ExtractAudio\]\s+Destination:\s*(.+)$/i) ??
+        line.match(/\[Merger\]\s+Merging formats into\s+"([^"]+)"/i);
+      const raw = finalPath?.[1] ?? postProcessed?.[1] ?? destination?.[1];
+      if (!raw) continue;
+      const clean = raw.trim().replace(/^(["'])(.*)\1$/, '$2');
+      if (clean) {
+        if (finalPath) finalPaths.push(clean);
+        else if (postProcessed) postProcessedPaths.push(clean);
+        else paths.push(clean);
+      }
+    }
+    return [...finalPaths, ...paths, ...postProcessedPaths];
+  }
+
+  static extractOutputPaths(text: string): string[] {
+    return YouTubeDownloader.extractOutputPathsFromLog(text);
+  }
+
+  private async resolveDownloadOutput(
+    candidates: string[],
+    outputDir: string,
+    audioOnly: boolean,
+    audioFormat: 'mp3' | 'wav',
+    startedAt = 0,
+  ): Promise<string | null> {
+    const outputRoot = path.resolve(outputDir);
+    const seen = new Set<string>();
+    const orderedCandidates = [
+      ...candidates.filter((candidate) => /\.(?:mp3|wav|mp4|mkv|webm|mov|avi|flv)$/i.test(candidate)),
+      ...candidates,
+    ];
+    for (const candidate of orderedCandidates) {
+      const resolved = path.isAbsolute(candidate)
+        ? path.resolve(candidate)
+        : path.resolve(outputRoot, candidate);
+      if (seen.has(resolved)) continue;
+      seen.add(resolved);
+
+      const relative = path.relative(outputRoot, resolved);
+      if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) continue;
+      if (audioOnly && path.extname(resolved).toLowerCase() !== `.${audioFormat}`) continue;
+
+      try {
+        const stat = await fs.stat(resolved);
+        if (stat.isFile() && stat.size > 0) return resolved;
+      } catch {
+        // yt-dlp can report an intermediate destination before post-processing.
+      }
+    }
+
+    // yt-dlp console output can replace Unicode file names with replacement characters.
+    // Fall back only to a fresh, extension-matching output beneath this request's folder.
+    if (audioOnly && startedAt > 0) {
+      const matches: Array<{ path: string; mtimeMs: number }> = [];
+      const scan = async (dir: string): Promise<void> => {
+        const entries = await fs.readdir(dir, { withFileTypes: true });
+        for (const entry of entries) {
+          const filePath = path.join(dir, entry.name);
+          if (entry.isDirectory()) {
+            await scan(filePath);
+          } else if (entry.isFile() && path.extname(entry.name).toLowerCase() === `.${audioFormat}`) {
+            const stat = await fs.stat(filePath);
+            if (stat.size > 0 && stat.mtimeMs >= startedAt) matches.push({ path: filePath, mtimeMs: stat.mtimeMs });
+          }
+        }
+      };
+      try {
+        await scan(outputRoot);
+        matches.sort((a, b) => b.mtimeMs - a.mtimeMs);
+        return matches[0]?.path ?? null;
+      } catch {
+        return null;
+      }
+    }
+    return null;
   }
 
   /**
@@ -1133,6 +1240,31 @@ export class YouTubeDownloader extends EventEmitter {
   /**
    * Download single video với tự động thử các browser nếu cookies fail
    */
+  private isTikTokUrl(url: string): boolean {
+    return /(^|\.)tiktok\.com\//i.test(url) || /(^|\.)vm\.tiktok\.com\//i.test(url);
+  }
+
+  static isTikTokExtractorFallbackError(message: string): boolean {
+    const lower = message.toLowerCase();
+    return lower.includes('unable to extract universal data for rehydration') ||
+      lower.includes('unexpected response from webpage request');
+  }
+
+  static isTikTokRehydrationError(message: string): boolean {
+    return YouTubeDownloader.isTikTokExtractorFallbackError(message);
+  }
+
+  private getTikTokForcedOptions(audioOnly: boolean): string[] {
+    const args = [
+      '--extractor-args', 'tiktok:webpage_url_basename=t',
+      '--sleep-interval', '1',
+    ];
+    if (!audioOnly) {
+      args.push('--format', 'download_addr-0+bestaudio/bestvideo+bestaudio/best');
+    }
+    return args;
+  }
+
   /**
    * Download single video - VIẾT LẠI HOÀN TOÀN giống hệt tool Python
    * Logic cực kỳ đơn giản: CHỈ dùng android,web client, KHÔNG cookies, KHÔNG phức tạp
@@ -1164,6 +1296,7 @@ export class YouTubeDownloader extends EventEmitter {
     });
 
     const { outputDir, url, quality, downloadSubtitles, downloadThumbnail, audioOnly = false, audioFormat = 'mp3' } = request;
+    const useTikTokFallback = this.isTikTokUrl(url);
 
     // Build output template - Giống hệt tool Python
     let outputTemplate: string;
@@ -1177,7 +1310,7 @@ export class YouTubeDownloader extends EventEmitter {
     // Tool Python: format selector → output template → thumbnail → subtitles → headers/extractor args → retry → URL
     const cmd = [
       this.ytDlpPath,
-      '-f', audioOnly ? 'bestaudio/best' : this.getQualityFormat(quality),  // Format selector (giống tool Python)
+      '-f', audioOnly ? 'bestaudio/best' : (useTikTokFallback ? 'best' : this.getQualityFormat(quality)),
       '-o', outputTemplate,  // Output template (giống tool Python)
     ];
 
@@ -1191,22 +1324,12 @@ export class YouTubeDownloader extends EventEmitter {
       cmd.push('--write-subs', '--sub-langs', 'vi,en,zh', '--convert-subs', 'srt');
     }
 
-    // Headers và extractor args - GIỐNG HỆT TOOL PYTHON
+    // Headers và extractor args - YouTube-only options must not leak into TikTok.
     cmd.push(
       '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      '--referer', 'https://www.youtube.com/',
       '--add-header', 'Accept-Language:vi-VN,vi;q=0.9,en;q=0.8',
-      '--add-header', 'Accept:text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      '--add-header', 'Sec-Fetch-Dest:document',
-      '--add-header', 'Sec-Fetch-Mode:navigate',
-      '--add-header', 'Sec-Fetch-Site:none',
-      '--add-header', 'Sec-Fetch-User:?1',
       '--no-check-certificate',
       '--no-warnings',
-      // Fix: Dùng tv,android_vr làm primary — không cần PO token, không bị SABR,
-      // có thể lấy DASH 4K. web_safari fallback cho HLS 1080p.
-      // (Theo yt-dlp docs 2025: web/android đã bị SABR/broken)
-      '--extractor-args', 'youtube:player_client=tv,android_vr,web_safari',
       '--fragment-retries', '30',
       '--retries', '15',
       '--retry-sleep', 'http:3',
@@ -1216,6 +1339,21 @@ export class YouTubeDownloader extends EventEmitter {
       '--sleep-interval', '1',
       '--max-sleep-interval', '5'
     );
+    if (useTikTokFallback) {
+      cmd.push('--add-header', 'Referer:https://www.tiktok.com/');
+    } else {
+      cmd.push(
+        '--referer', 'https://www.youtube.com/',
+        '--add-header', 'Accept:text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        '--add-header', 'Sec-Fetch-Dest:document',
+        '--add-header', 'Sec-Fetch-Mode:navigate',
+        '--add-header', 'Sec-Fetch-Site:none',
+        '--add-header', 'Sec-Fetch-User:?1',
+        // Fix: Dùng tv,android_vr làm primary — không cần PO token, không bị SABR,
+        // có thể lấy DASH 4K. web_safari fallback cho HLS 1080p.
+        '--extractor-args', 'youtube:player_client=tv,android_vr,web_safari'
+      );
+    }
 
     // Cookies: thêm nếu user yêu cầu, nhưng KHÔNG crash nếu fail
     // (Chrome lock DB khi đang chạy — phải graceful fallback)
@@ -1235,32 +1373,39 @@ export class YouTubeDownloader extends EventEmitter {
     if (!audioOnly) {
       cmd.push('--merge-output-format', 'mp4');
     }
-    cmd.push('--newline', '--progress', '--no-playlist');
+    cmd.push(
+      '--ffmpeg-location', this.ffmpegPath,
+      '--print', 'after_move:__YT_DLP_FINAL__%(filepath)s',
+      '--newline', '--progress', '--no-playlist',
+    );
 
-    // URL
-    cmd.push(url);
+    const cancellationGeneration = this.cancellationGeneration;
 
-    console.log(`[YouTubeDownloader] Command: ${cmd.join(' ')}`);
+    const runAttempt = (withTikTokForcedOptions: boolean) => new Promise<{
+      file?: string;
+      stderr: string;
+      error?: Error;
+    }>((resolve) => {
+      const attemptStartedAt = Date.now();
+      const attemptCmd = [
+        ...cmd,
+        ...(withTikTokForcedOptions ? this.getTikTokForcedOptions(audioOnly) : []),
+        url,
+      ];
+      console.log(`[YouTubeDownloader] Command: ${attemptCmd.join(' ')}`);
 
-    // Execute - GIỐNG HỆT TOOL PYTHON (chỉ gọi một lần, không retry phức tạp)
-    return new Promise((resolve, reject) => {
-      const proc = spawn(cmd[0], cmd.slice(1));
-      const _procId = `dl-${Date.now()}`
-      this.addProcess(_procId, proc);
+      const proc = spawn(attemptCmd[0], attemptCmd.slice(1));
+      const procId = `dl-${Date.now()}`;
+      this.addProcess(procId, proc);
 
-      let downloadedFile = '';
+      let outputBuffer = '';
       let stderrBuffer = '';
 
       proc.stdout.on('data', (data) => {
         const output = data.toString();
+        outputBuffer += output;
         console.log('[yt-dlp]', output.trim());
         this.parseDownloadProgress(output, '');
-
-        const destMatch = output.match(/\[download\] Destination: (.+)/);
-        if (destMatch) downloadedFile = destMatch[1].trim();
-
-        const mergeMatch = output.match(/\[Merger\] Merging formats into "(.+)"/);
-        if (mergeMatch) downloadedFile = mergeMatch[1].trim();
       });
 
       proc.stderr.on('data', (data) => {
@@ -1271,40 +1416,59 @@ export class YouTubeDownloader extends EventEmitter {
       });
 
       proc.on('close', async (code) => {
-        this.removeProcess(_procId);
-        cookieContext.cleanup()
+        this.removeProcess(procId);
 
         if (code === 0) {
-          if (!downloadedFile) {
-            // Try to find file in output directory
-            try {
-              const files = await fs.readdir(outputDir);
-              const videoFile = files.find(f => /\.(mp4|webm|mkv|avi|flv)$/i.test(f));
-              if (videoFile) {
-                downloadedFile = path.join(outputDir, videoFile);
-              }
-            } catch {}
-          }
-
-          if (downloadedFile) {
-            resolve(downloadedFile);
+          const outputFile = await this.resolveDownloadOutput(
+            YouTubeDownloader.extractOutputPathsFromLog(`${outputBuffer}\n${stderrBuffer}`),
+            outputDir,
+            audioOnly,
+            audioFormat,
+            attemptStartedAt,
+          );
+          if (outputFile) {
+            resolve({ file: outputFile, stderr: stderrBuffer });
           } else {
-            reject(new Error('Download completed but file not found'));
+            resolve({ stderr: stderrBuffer, error: new Error('Download completed but output file was not found') });
           }
-        } else {
-          reject(new Error(this.formatYtDlpFailure(
-            stderrBuffer,
-            `yt-dlp failed with exit code ${code}`
-          )));
+          return;
         }
+
+        resolve({
+          stderr: stderrBuffer,
+          error: new Error(this.formatYtDlpFailure(stderrBuffer, `yt-dlp failed with exit code ${code}`)),
+        });
       });
 
       proc.on('error', (err) => {
-        this.removeProcess(_procId);
-        cookieContext.cleanup()
-        reject(new Error(`Failed to start yt-dlp: ${err.message}`));
+        this.removeProcess(procId);
+        resolve({ stderr: stderrBuffer, error: new Error(`Failed to start yt-dlp: ${err.message}`) });
       });
     });
+
+    try {
+      const firstAttempt = await runAttempt(useTikTokFallback);
+      if (firstAttempt.file) return firstAttempt.file;
+
+      if (
+        useTikTokFallback &&
+        this.cancellationGeneration === cancellationGeneration &&
+        YouTubeDownloader.isTikTokExtractorFallbackError(firstAttempt.stderr)
+      ) {
+        this.emit('progress', {
+          type: 'info',
+          message: 'TikTok đổi dữ liệu; đang thử lại không dùng tùy chọn TikTok ép buộc...',
+        } as DownloadProgress);
+
+        const fallbackAttempt = await runAttempt(false);
+        if (fallbackAttempt.file) return fallbackAttempt.file;
+        throw fallbackAttempt.error;
+      }
+
+      throw firstAttempt.error;
+    } finally {
+      cookieContext.cleanup();
+    }
   }
 
   /**
@@ -1467,6 +1631,150 @@ export class YouTubeDownloader extends EventEmitter {
     });
   }
 
+  private static normalizeSearchText(value: string): string[] {
+    return value
+      .toLowerCase()
+      .normalize('NFKD')
+      .replace(/[̀-ͯ]/g, '')
+      .replace(/[^a-z0-9]+/g, ' ')
+      .split(/\s+/)
+      .filter((token) => token.length > 1)
+  }
+
+  static scoreSpotifyYouTubeResult(track: SpotifyDownloadTrack, title: string, uploader = ''): number {
+    const titleTokens = new Set(this.normalizeSearchText(track.name))
+    const candidateTokens = new Set(this.normalizeSearchText(`${title} ${uploader}`))
+    const artistTokens = this.normalizeSearchText(track.artists.join(' '))
+    const titleOverlap = [...titleTokens].filter((token) => candidateTokens.has(token)).length
+    const artistOverlap = artistTokens.filter((token) => candidateTokens.has(token)).length
+    if (titleTokens.size === 0 || artistTokens.length === 0 || titleOverlap / titleTokens.size < 0.6 || artistOverlap === 0) return 0
+
+    let score = (titleOverlap / titleTokens.size) * 70 + Math.min(1, artistOverlap / artistTokens.length) * 30
+    const lower = `${title} ${uploader}`.toLowerCase()
+    if (/(\blive\b|\bcover\b|karaoke|slowed|reverb|nightcore)/i.test(lower)) score -= 35
+    if (/official audio|official music video/i.test(lower)) score += 10
+    if (/\btopic\b/i.test(uploader)) score += 10
+    return Math.max(0, Math.min(100, Math.round(score)))
+  }
+
+  private async searchSpotifyTrack(track: SpotifyDownloadTrack, request: SpotifyYouTubeDownloadRequest): Promise<string> {
+    const query = `${track.artists.join(' ')} - ${track.name}`
+    const cookieContext = await this.resolveCookieArgsForYtDlp('youtube', request)
+    const args = [
+      '--flat-playlist', '--dump-json', '--skip-download', '--no-playlist',
+      '--playlist-end', '5', '--no-warnings',
+      ...cookieContext.args, `ytsearch5:${query}`,
+    ]
+
+    try {
+      const result = await new Promise<any>((resolve, reject) => {
+        const proc = spawn(this.ytDlpPath, args)
+        const procId = `spotify-search-${Date.now()}`
+        this.addProcess(procId, proc)
+        let stdout = ''
+        let stderr = ''
+        proc.stdout.on('data', (data) => { stdout += data.toString() })
+        proc.stderr.on('data', (data) => { stderr += data.toString() })
+        proc.on('error', (error) => {
+          this.removeProcess(procId)
+          reject(error)
+        })
+        proc.on('close', (code) => {
+          this.removeProcess(procId)
+          if (code !== 0) return reject(new Error(this.formatYtDlpFailure(stderr, `yt-dlp search failed with exit code ${code}`)))
+          const entries = stdout.split(/\r?\n/).filter(Boolean).flatMap((line) => {
+            try { return [JSON.parse(line)] } catch { return [] }
+          })
+          resolve(entries)
+        })
+      })
+
+      let best: { url: string; score: number } | null = null
+      for (const entry of result) {
+        const score = YouTubeDownloader.scoreSpotifyYouTubeResult(track, entry.title || '', entry.uploader || entry.channel || '')
+        const id = typeof entry.id === 'string' ? entry.id : ''
+        const url = typeof entry.webpage_url === 'string' && entry.webpage_url.startsWith('https://www.youtube.com/')
+          ? entry.webpage_url
+          : /^[A-Za-z0-9_-]{11}$/.test(id) ? `https://www.youtube.com/watch?v=${id}` : ''
+        if (url && score >= 60 && (!best || score > best.score)) best = { url, score }
+      }
+      if (!best) throw new Error(`Không tìm thấy nguồn YouTube khớp cho: ${query}`)
+      return best.url
+    } finally {
+      cookieContext.cleanup()
+    }
+  }
+
+  async downloadSpotifyTracks(request: SpotifyYouTubeDownloadRequest): Promise<SpotifyYouTubeDownloadResult> {
+    if (!Array.isArray(request.tracks) || request.tracks.length === 0) throw new Error('Spotify không có track để tải.')
+    if (!path.isAbsolute(request.outputDir) || request.outputDir.includes('\0')) throw new Error('Thư mục lưu không hợp lệ.')
+    if (request.audioFormat !== undefined && request.audioFormat !== 'mp3' && request.audioFormat !== 'wav') throw new Error('Định dạng audio không hợp lệ.')
+    await this.validateDownloadRequest(request.outputDir)
+
+    const downloaded: string[] = []
+    const failed: SpotifyYouTubeDownloadResult['failed'] = []
+    const audioFormat = request.audioFormat ?? 'mp3'
+    const total = request.tracks.length
+    const cancellationGeneration = this.cancellationGeneration
+    for (let index = 0; index < total; index += 1) {
+      const track = request.tracks[index]
+      if (this.cancellationGeneration !== cancellationGeneration) return { downloaded, failed, cancelled: true }
+      this.emit('batch-progress', {
+        currentVideoIndex: index, totalVideos: total,
+        currentVideoTitle: `${track.artists.join(', ')} - ${track.name}`,
+        currentVideoPercent: 0, completedVideos: downloaded.length,
+        failedVideos: failed.length, overallPercent: (index / total) * 100, errors: [],
+      } as BatchDownloadProgress)
+
+      try {
+        const sourceUrl = await this.searchSpotifyTrack(track, request)
+        const outputFile = await this.downloadVideo({
+          url: sourceUrl, outputDir: request.outputDir, quality: 'best',
+          downloadSubtitles: false, downloadThumbnail: false, audioOnly: true,
+          audioFormat, createChannelFolder: false,
+          cookiesFile: request.cookiesFile,
+          cookiesFromBrowser: request.cookiesFromBrowser === 'auto' ? undefined : request.cookiesFromBrowser,
+        })
+        const safeName = FacebookScraper.sanitizeFilename(`${String(index + 1).padStart(2, '0')} - ${track.artists.join(', ')} - ${track.name}`) || `track-${index + 1}`
+        const outputRoot = path.resolve(request.outputDir)
+        const baseTarget = path.join(outputRoot, `${safeName}.${audioFormat}`)
+        const relative = path.relative(outputRoot, baseTarget)
+        if (relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('Tên file track không hợp lệ.')
+        let target = baseTarget
+        let suffix = 1
+        while (fsSync.existsSync(target)) {
+          target = path.join(outputRoot, `${safeName} (${suffix}).${audioFormat}`)
+          suffix += 1
+        }
+        await fs.rename(outputFile, target)
+        downloaded.push(target)
+      } catch (error: unknown) {
+        failed.push({ track, error: error instanceof Error ? error.message : String(error) })
+      }
+    }
+
+    let zipPath: string | undefined
+    if (request.createZip && downloaded.length > 0) {
+      const zip = new JSZip()
+      for (const file of downloaded) zip.file(path.basename(file), await fs.readFile(file))
+      const archive = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' })
+      const outputRoot = path.resolve(request.outputDir)
+      zipPath = path.join(outputRoot, 'spotify-playlist.zip')
+      let suffix = 1
+      while (fsSync.existsSync(zipPath)) {
+        zipPath = path.join(outputRoot, `spotify-playlist (${suffix}).zip`)
+        suffix += 1
+      }
+      await fs.writeFile(zipPath, archive, { flag: 'wx' })
+    }
+    this.emit('batch-progress', {
+      currentVideoIndex: total, totalVideos: total, currentVideoTitle: '', currentVideoPercent: 100,
+      completedVideos: downloaded.length, failedVideos: failed.length, overallPercent: 100,
+      errors: failed.map((item) => ({ videoTitle: item.track.name, error: item.error })),
+    } as BatchDownloadProgress)
+    return { downloaded, failed, zipPath }
+  }
+
   /**
    * Get channel info - FIXED VERSION (extract from URL + first video)
    */
@@ -1532,9 +1840,12 @@ export class YouTubeDownloader extends EventEmitter {
 
           // Build correct URL based on platform
           const isFacebook = url.includes('facebook.com') || url.includes('fb.watch');
+          const isTikTok = this.isTikTokUrl(url);
           const firstVideoUrl = isFacebook
             ? `https://www.facebook.com/reel/${firstVideoId}`
-            : `https://www.youtube.com/watch?v=${firstVideoId}`;
+            : isTikTok
+              ? this.buildVideoUrl(firstVideoId, url)
+              : `https://www.youtube.com/watch?v=${firstVideoId}`;
 
           console.log(`[YouTubeDownloader] Getting full info for first video: ${firstVideoUrl}`);
 
@@ -1882,8 +2193,10 @@ export class YouTubeDownloader extends EventEmitter {
   ): Promise<string> {
     const outputTemplate = path.join(videosFolder, '%(title)s [%(id)s].%(ext)s');
 
+    const isTikTok = this.isTikTokUrl(url);
     const args = [
       '-o', outputTemplate,
+      '--print', 'after_move:__YT_DLP_FINAL__%(filepath)s',
       '--newline',
       '--progress',
       '--no-playlist',
@@ -1892,12 +2205,18 @@ export class YouTubeDownloader extends EventEmitter {
       '--retry-sleep', 'http:3',
       '--retry-sleep', 'fragment:3',
       '--http-chunk-size', '10M',
+      '--ffmpeg-location', this.ffmpegPath,
       '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      '--referer', 'https://www.youtube.com/',
       '--add-header', 'Accept-Language:en-US,en;q=0.9',
-      '--extractor-args', 'youtube:player_client=tv,android_vr,web_safari', // Dùng tv+android_vr để lấy đủ format cao
       '--continue', // Resume interrupted downloads
     ];
+    if (isTikTok) {
+      args.push('--referer', 'https://www.tiktok.com/');
+      args.push('--extractor-args', 'tiktok:webpage_url_basename=t');
+    } else {
+      args.push('--referer', 'https://www.youtube.com/');
+      args.push('--extractor-args', 'youtube:player_client=tv,android_vr,web_safari');
+    }
 
     if (audioOnly) {
       args.push(
@@ -1942,28 +2261,20 @@ export class YouTubeDownloader extends EventEmitter {
     }
 
     args.push(url);
+    const startedAt = Date.now();
 
     return new Promise((resolve, reject) => {
       const proc = spawn(this.ytDlpPath, args);
       const _procId = `dl-folder-${Date.now()}`
       this.addProcess(_procId, proc);
 
-      let downloadedFile = '';
+      let outputBuffer = '';
       let stderrBuffer = '';
 
       proc.stdout.on('data', (data) => {
         const output = data.toString();
+        outputBuffer += output;
         this.parseDownloadProgress(output, '');
-
-        const destMatch = output.match(/\[download\] Destination: (.+)/);
-        if (destMatch) {
-          downloadedFile = destMatch[1].trim();
-        }
-
-        const mergeMatch = output.match(/\[Merger\] Merging formats into "(.+)"/);
-        if (mergeMatch) {
-          downloadedFile = mergeMatch[1].trim();
-        }
       });
 
       proc.stderr.on('data', (data) => {
@@ -1972,11 +2283,22 @@ export class YouTubeDownloader extends EventEmitter {
         this.parseDownloadProgress(output, '');
       });
 
-      proc.on('close', (code) => {
+      proc.on('close', async (code) => {
         this.removeProcess(_procId);
 
         if (code === 0) {
-          resolve(downloadedFile);
+          const outputFile = await this.resolveDownloadOutput(
+            YouTubeDownloader.extractOutputPathsFromLog(`${outputBuffer}\n${stderrBuffer}`),
+            videosFolder,
+            audioOnly,
+            audioFormat,
+            startedAt,
+          );
+          if (outputFile) {
+            resolve(outputFile);
+          } else {
+            reject(new Error('Download completed but output file was not found'));
+          }
         } else {
           reject(new Error(this.formatYtDlpFailure(
             stderrBuffer,

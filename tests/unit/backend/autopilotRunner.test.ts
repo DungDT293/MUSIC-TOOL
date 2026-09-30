@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   __autopilotTestUtils,
   getRecentAutopilotLogs,
+  isAutopilotAudioDurationValid,
+  splitFolderLines,
   validateAutopilotStartConfig,
   validateDateCode,
 } from '../../../backend/autopilot/autopilotRunner'
@@ -19,12 +21,14 @@ async function makeAutopilotConfig(autoCreateDailySubfolder: boolean) {
   const videoDir = path.join(tempRoot, 'video')
   const finalDir = path.join(tempRoot, 'final')
   const priorityDir = path.join(tempRoot, 'priority')
+  const openingDir = path.join(tempRoot, 'opening')
 
   await Promise.all([
     fsp.mkdir(audioDir, { recursive: true }),
     fsp.mkdir(videoDir, { recursive: true }),
     fsp.mkdir(finalDir, { recursive: true }),
     fsp.mkdir(priorityDir, { recursive: true }),
+    fsp.mkdir(openingDir, { recursive: true }),
   ])
 
   return {
@@ -59,8 +63,31 @@ async function makeAutopilotConfig(autoCreateDailySubfolder: boolean) {
       priorityMusicFolder: priorityDir,
       autoCreateDailySubfolder,
     },
+    openingDir,
   }
 }
+
+describe('autopilotRunner.splitFolderLines', () => {
+  it('supports newline, CRLF, and semicolon delimiters', () => {
+    expect(splitFolderLines('C:\\\\one; C:\\\\two\r\nC:\\\\three')).toEqual([
+      'C:\\\\one',
+      'C:\\\\two',
+      'C:\\\\three',
+    ])
+  })
+})
+
+describe('autopilotRunner audio duration validation', () => {
+  it('rejects a partial audio output but accepts valid Crossfade overlap', () => {
+    expect(isAutopilotAudioDurationValid(174, 3900)).toBe(false)
+    expect(isAutopilotAudioDurationValid(3902, 3900)).toBe(true)
+    expect(isAutopilotAudioDurationValid(3970, 3972)).toBe(true)
+    expect(isAutopilotAudioDurationValid(3900, 3972)).toBe(true)
+    expect(isAutopilotAudioDurationValid(300, 3600)).toBe(false)
+    expect(isAutopilotAudioDurationValid(3841, 3836, 0.9)).toBe(true) // rendered duration uses 90% minimum; small probe drift remains valid
+    expect(isAutopilotAudioDurationValid(300, 3600, 0.9)).toBe(false) // partial output stays invalid
+  })
+})
 
 describe('autopilotRunner.validateDateCode', () => {
   it('accepts leap day even when current year is not leap year', () => {
@@ -143,11 +170,45 @@ describe('autopilotRunner.validateAutopilotStartConfig', () => {
     )
   })
 
-  it('allows repeated titles when each day writes into its own subfolder', async () => {
+  it('allows semicolon and CRLF video roots when at least one exists', async () => {
     const config = await makeAutopilotConfig(true)
+    const missingVideoDir = path.join(path.dirname(config.folders.rootVideo), 'missing-video')
+    config.folders.rootVideo = `${missingVideoDir};\r\n${config.folders.rootVideo}`
 
     await expect(validateAutopilotStartConfig(config as any)).resolves.toMatchObject({
       validPlans: expect.any(Array),
     })
+  })
+
+  it('validates and returns optional opening folder', async () => {
+    const config = await makeAutopilotConfig(true)
+    config.folders.openingMusicFolder = config.openingDir
+
+    await expect(validateAutopilotStartConfig(config as any)).resolves.toMatchObject({
+      openingFolder: config.openingDir,
+    })
+  })
+
+  it('rejects missing opening folder with actionable label', async () => {
+    const config = await makeAutopilotConfig(true)
+    config.folders.openingMusicFolder = path.join(path.dirname(config.openingDir), 'missing-opening')
+
+    await expect(validateAutopilotStartConfig(config as any)).rejects.toThrow('Thu muc nhac mo dau')
+  })
+
+  it('keeps opening folder optional for old configs', async () => {
+    const config = await makeAutopilotConfig(true)
+
+    await expect(validateAutopilotStartConfig(config as any)).resolves.toMatchObject({
+      openingFolder: null,
+    })
+  })
+
+  it('rejects video roots when every delimited path is invalid', async () => {
+    const config = await makeAutopilotConfig(true)
+    const missingRoot = path.dirname(config.folders.rootVideo)
+    config.folders.rootVideo = `${path.join(missingRoot, 'missing-one')};${path.join(missingRoot, 'missing-two')}`
+
+    await expect(validateAutopilotStartConfig(config as any)).rejects.toThrow('Thư mục gốc Video đã cắt')
   })
 })

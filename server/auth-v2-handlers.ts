@@ -645,6 +645,9 @@ export async function handleValidateToken(request: Request, env: Env): Promise<R
     const verification = await verifyToken(device_token, env)
     
     if (!verification.valid || !verification.payload) {
+      if (verification.error === 'JWT_SECRET_NOT_CONFIGURED') {
+        return json({ valid: false, error: 'JWT service chưa được cấu hình.' }, 503)
+      }
       return json({ valid: false, error: verification.error || 'Token không hợp lệ.' })
     }
 

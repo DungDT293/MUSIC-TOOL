@@ -6,11 +6,10 @@
  *   - Ưu tiên clip chưa dùng → dùng lâu nhất (LRU-first)
  *   - Nếu pool không đủ target → fill bằng LRU (không crash)
  *
- * Layer 2 — Session Sequence:
- *   - Mỗi session export = 1 fingerprint = hash(50 clip IDs đầu tiên theo thứ tự)
- *   - Lưu 500 sessions gần nhất vào JSON
- *   - Shuffle cho đến khi fingerprint chưa được dùng → đảm bảo sequence mới
- *   - Với 3000 clips, xác suất collision ≈ 0
+ * Layer 2 — Output Sequence:
+ *   - Mỗi output thành công = SHA-256 của toàn bộ clip IDs theo đúng thứ tự
+ *   - Lưu 500 output gần nhất vào JSON
+ *   - Autopilot planner chặn sequence đã có trước khi chạy FFmpeg
  */
 
 import crypto from 'node:crypto'
@@ -21,21 +20,23 @@ import path from 'node:path'
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface VideoPoolEntry {
-  id: string           // hash(basename + fileSize) — 12 hex chars
-  filePath: string     // absolute path (best effort, cập nhật nếu move)
-  basename: string     // tên file để matching
-  fileSize: number     // bytes
-  lastUsedAt: number | null  // timestamp ms, null = chưa bao giờ dùng
-  useCount: number           // tổng số lần dùng
-  addedAt: number            // khi nào lần đầu discover
+  id: string           // hash(canonical physical path) — 12 hex chars
+  filePath: string     // original readable path
+  basename: string
+  fileSize: number
+  lastUsedAt: number | null
+  useCount: number
+  addedAt: number
 }
 
 export interface VideoPoolSession {
   sessionId: string
   timestamp: number
   dateCode: string
-  sequenceFingerprint: string  // hash 16 hex của 50 clip IDs đầu theo thứ tự
+  sequenceFingerprint: string  // SHA-256 của toàn bộ clip IDs theo thứ tự
   totalClips: number
+  /** Legacy entries hashed only a prefix and cannot establish full-sequence equality. */
+  fullSequence?: boolean
 }
 
 interface VideoPoolStore {
@@ -63,8 +64,32 @@ export interface PoolStats {
 const POOL_VERSION = 1
 const SESSION_VERSION = 1
 const MAX_SESSIONS = 500
-const FINGERPRINT_LENGTH = 50  // số clip IDs đầu để tạo fingerprint
-const PRUNE_AFTER_MS = 30 * 24 * 60 * 60 * 1000 // 30 ngày — xóa entries không còn file trên disk
+const PRUNE_AFTER_MS = 30 * 24 * 60 * 60 * 1000
+let poolWriteChain: Promise<void> = Promise.resolve()
+
+function withPoolLock<T>(operation: () => Promise<T>): Promise<T> {
+  const run = poolWriteChain.then(operation)
+  poolWriteChain = run.then(() => undefined, () => undefined)
+  return run
+}
+
+function normalizeCanonicalPath(filePath: string): string {
+  return filePath.replace(/\\/g, '/').toLowerCase()
+}
+
+async function getPhysicalFile(fp: string): Promise<{ originalPath: string; canonicalPath: string; size: number }> {
+  const stats = await fsp.stat(fp)
+  const canonicalPath = await fsp.realpath(fp)
+  return { originalPath: fp, canonicalPath: normalizeCanonicalPath(canonicalPath), size: stats.size }
+}
+
+function generateClipIdFromCanonicalPath(canonicalPath: string): string {
+  return crypto.createHash('md5').update(canonicalPath).digest('hex').slice(0, 12)
+}
+
+export interface VideoPoolSyncOptions {
+  completeSnapshot?: boolean
+}
 
 // ── Storage paths ─────────────────────────────────────────────────────────────
 
@@ -129,30 +154,47 @@ function loadSessionStore(): VideoSessionStore {
 
 /** Atomic write: ghi vào file .tmp rồi rename → tránh corrupt khi crash giữa chừng */
 function saveSessionStore(store: VideoSessionStore): void {
-  try {
-    ensureDir()
-    // Giữ chỉ MAX_SESSIONS sessions gần nhất
-    if (store.sessions.length > MAX_SESSIONS) {
-      store.sessions = store.sessions.slice(-MAX_SESSIONS)
-    }
-    const target = getSessionPath()
-    const tmp = target + '.tmp'
-    fs.writeFileSync(tmp, JSON.stringify(store, null, 2), 'utf8')
-    fs.renameSync(tmp, target)
-  } catch (err) {
-    console.warn('[VideoPool] Failed to save session store:', err)
+  ensureDir()
+  // Giữ chỉ MAX_SESSIONS sessions gần nhất
+  if (store.sessions.length > MAX_SESSIONS) {
+    store.sessions = store.sessions.slice(-MAX_SESSIONS)
   }
+  const target = getSessionPath()
+  const tmp = target + '.tmp'
+  fs.writeFileSync(tmp, JSON.stringify(store, null, 2), 'utf8')
+  fs.renameSync(tmp, target)
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 export function generateClipId(basename: string, fileSize: number): string {
+  // Legacy callers cannot resolve a path; keep deterministic fallback for IPC compatibility.
   return crypto.createHash('md5').update(`${basename}:${fileSize}`).digest('hex').slice(0, 12)
 }
 
+export async function generateClipIdForFile(filePath: string): Promise<string> {
+  const physical = await getPhysicalFile(filePath)
+  return generateClipIdFromCanonicalPath(physical.canonicalPath)
+}
+
+async function resolveUniqueFiles(filePaths: string[]): Promise<Array<{ fp: string; id: string; size: number }>> {
+  const seen = new Set<string>()
+  const resolved: Array<{ fp: string; id: string; size: number }> = []
+  for (const fp of filePaths) {
+    try {
+      const physical = await getPhysicalFile(fp)
+      if (seen.has(physical.canonicalPath)) continue
+      seen.add(physical.canonicalPath)
+      resolved.push({ fp: physical.originalPath, id: generateClipIdFromCanonicalPath(physical.canonicalPath), size: physical.size })
+    } catch {
+      // Missing/unreadable files stay out of pool selection.
+    }
+  }
+  return resolved
+}
+
 function generateFingerprint(clipIds: string[]): string {
-  const sample = clipIds.slice(0, FINGERPRINT_LENGTH).join(',')
-  return crypto.createHash('sha256').update(sample).digest('hex').slice(0, 16)
+  return crypto.createHash('sha256').update(clipIds.join(',')).digest('hex')
 }
 
 function shuffleInPlace<T>(arr: T[]): T[] {
@@ -198,62 +240,46 @@ function pruneStaleEntries(store: VideoPoolStore, currentFileIds: Set<string>): 
 export async function syncPoolWithFiles(
   filePaths: string[],
   onProgress?: (current: number, total: number) => void,
+  options: VideoPoolSyncOptions = {},
 ): Promise<{ added: number; updated: number; pruned: number; total: number }> {
-  const store = loadPoolStore()
-  let added = 0
-  let updated = 0
+  return withPoolLock(async () => {
+    const store = loadPoolStore()
+    let added = 0
+    let updated = 0
+    const resolved = await resolveUniqueFiles(filePaths)
+    const currentFileIds = new Set(resolved.map((file) => file.id))
 
-  const BATCH_SIZE = 50
-  const currentFileIds = new Set<string>()
-
-  for (let batchStart = 0; batchStart < filePaths.length; batchStart += BATCH_SIZE) {
-    const batch = filePaths.slice(batchStart, batchStart + BATCH_SIZE)
-
-    if (onProgress && batchStart % 200 === 0) onProgress(batchStart, filePaths.length)
-
-    const statResults = await Promise.allSettled(
-      batch.map(async (fp) => {
-        const stats = await fsp.stat(fp)
-        return { fp, size: stats.size }
-      })
-    )
-
-    for (const result of statResults) {
-      if (result.status !== 'fulfilled') continue
-      const { fp, size: fileSize } = result.value
-
-      const basename = path.basename(fp)
-      const id = generateClipId(basename, fileSize)
-      currentFileIds.add(id)
-
-      if (!store.entries[id]) {
-        store.entries[id] = {
-          id,
-          filePath: fp,
-          basename,
-          fileSize,
-          lastUsedAt: null,
-          useCount: 0,
-          addedAt: Date.now(),
-        }
-        added++
-      } else {
-        // Cập nhật path nếu clip đã move sang thư mục khác
-        if (store.entries[id].filePath !== fp) {
-          store.entries[id].filePath = fp
+    for (let i = 0; i < resolved.length; i += 50) {
+      const batch = resolved.slice(i, i + 50)
+      if (onProgress && i % 200 === 0) onProgress(i, resolved.length)
+      for (const { fp, id, size: fileSize } of batch) {
+        const basename = path.basename(fp)
+        const entry = store.entries[id]
+        if (!entry) {
+          store.entries[id] = {
+            id,
+            filePath: fp,
+            basename,
+            fileSize,
+            lastUsedAt: null,
+            useCount: 0,
+            addedAt: Date.now(),
+          }
+          added++
+        } else if (entry.filePath !== fp || entry.fileSize !== fileSize) {
+          entry.filePath = fp
+          entry.basename = basename
+          entry.fileSize = fileSize
           updated++
         }
       }
     }
-  }
 
-  if (onProgress) onProgress(filePaths.length, filePaths.length)
-
-  // Prune: xóa entries không còn file trên disk sau 30 ngày
-  const pruned = pruneStaleEntries(store, currentFileIds)
-
-  savePoolStore(store)
-  return { added, updated, pruned, total: Object.keys(store.entries).length }
+    if (onProgress) onProgress(resolved.length, resolved.length)
+    const pruned = options.completeSnapshot ? pruneStaleEntries(store, currentFileIds) : 0
+    savePoolStore(store)
+    return { added, updated, pruned, total: Object.keys(store.entries).length }
+  })
 }
 
 /**
@@ -271,29 +297,12 @@ export async function pickClipsLRU(
   availableFilePaths: string[],
   targetCount: number,
 ): Promise<{ clipIds: string[]; filePaths: string[]; reusedCount: number; totalAvailable: number }> {
-  const store = loadPoolStore()
-
-  // Build id→filepath từ available files (async batched)
-  const BATCH_SIZE = 50
-  const pathMap = new Map<string, string>()
-
-  for (let batchStart = 0; batchStart < availableFilePaths.length; batchStart += BATCH_SIZE) {
-    const batch = availableFilePaths.slice(batchStart, batchStart + BATCH_SIZE)
-    const statResults = await Promise.allSettled(
-      batch.map(async (fp) => {
-        const stats = await fsp.stat(fp)
-        return { fp, size: stats.size }
-      })
-    )
-
-    for (const result of statResults) {
-      if (result.status !== 'fulfilled') continue
-      const { fp, size } = result.value
-      const id = generateClipId(path.basename(fp), size)
-      pathMap.set(id, fp)
-    }
+  if (!Number.isSafeInteger(targetCount) || targetCount < 0) {
+    throw new Error('Video pool targetCount must be a non-negative integer')
   }
-
+  const store = loadPoolStore()
+  const resolved = await resolveUniqueFiles(availableFilePaths)
+  const pathMap = new Map(resolved.map((file) => [file.id, file.fp]))
   const allIds = Array.from(pathMap.keys())
   const neverUsed: string[] = []
   const usedBefore: string[] = []
@@ -344,11 +353,10 @@ export async function pickClipsLRU(
 }
 
 /**
- * Chọn clips LRU + shuffle để tạo sequence UNIQUE so với các session trước.
+ * Chọn thứ tự LRU đa dạng trước planner output sequence.
  *
- * - Fingerprint = hash của 50 clip IDs đầu tiên theo thứ tự xuất
- * - Shuffle tối đa maxAttempts lần cho đến khi unique
- * - Nếu vẫn không unique sau maxAttempts → dùng kết quả cuối cùng (xác suất collision ≈ 0)
+ * Planner final export mới kiểm full ordered sequence thực tế cho từng output;
+ * hàm này không được dùng để cấp guarantee history nữa.
  */
 export async function pickUniqueSequence(
   availableFilePaths: string[],
@@ -400,10 +408,9 @@ export async function pickUniqueSequence(
   }
 
   if (!isUnique) {
-    // Xác suất collision cực kỳ thấp → vẫn dùng, chỉ log warning
     console.warn(
-      `[VideoPool] Không tìm được sequence unique sau ${maxAttempts} lần shuffle. ` +
-      `Fingerprint ${fingerprint} có thể đã dùng. Tiếp tục với sequence hiện tại.`
+      `[VideoPool] Không tìm được thứ tự pool mới sau ${maxAttempts} lần shuffle. ` +
+      'Final export sẽ kiểm full sequence từng output trước FFmpeg.'
     )
   }
 
@@ -422,48 +429,130 @@ export async function pickUniqueSequence(
  * Đánh dấu clips đã dùng và lưu session sau khi export thành công.
  * Gọi hàm này SAU KHI export xong (không phải khi bắt đầu).
  */
-export function markClipsUsed(clipIds: string[], dateCode: string, fingerprint: string): void {
+export async function markClipsUsed(clipIds: string[], dateCode: string, fingerprint: string): Promise<void> {
   if (clipIds.length === 0) return
-
-  const store = loadPoolStore()
-  const now = Date.now()
-
-  for (const id of clipIds) {
-    if (store.entries[id]) {
+  await withPoolLock(async () => {
+    const store = loadPoolStore()
+    const now = Date.now()
+    const knownIds = clipIds.filter((id) => !!store.entries[id])
+    for (const id of knownIds) {
       store.entries[id].lastUsedAt = now
-      store.entries[id].useCount++
-    } else {
-      // Clip chưa được sync vào pool → add mới
-      store.entries[id] = {
-        id,
-        filePath: '',
-        basename: '',
-        fileSize: 0,
-        lastUsedAt: now,
-        useCount: 1,
-        addedAt: now,
-      }
+      store.entries[id].useCount += 1
+    }
+    if (knownIds.length === 0) return
+    savePoolStore(store)
+    const sessionStore = loadSessionStore()
+    sessionStore.sessions.push({
+      sessionId: `${dateCode}-${now}`,
+      timestamp: now,
+      dateCode,
+      sequenceFingerprint: fingerprint,
+      totalClips: clipIds.length,
+      fullSequence: true,
+    })
+    saveSessionStore(sessionStore)
+    console.log(`[VideoPool] Đánh dấu ${knownIds.length} clip đã dùng. Session fingerprint: ${fingerprint}.`)
+  })
+}
+
+export async function markClipIdsUsed(clipIds: string[]): Promise<void> {
+  if (clipIds.length === 0) return
+  await withPoolLock(async () => {
+    const store = loadPoolStore()
+    const now = Date.now()
+    for (const id of clipIds) {
+      const entry = store.entries[id]
+      if (!entry) continue
+      entry.lastUsedAt = now
+      entry.useCount += 1
+    }
+    savePoolStore(store)
+  })
+}
+
+export async function markFilePathsUsed(
+  filePaths: string[],
+  dateCode: string,
+  allowedClipIds?: ReadonlySet<string>,
+): Promise<{ clipIds: string[]; fingerprint: string }> {
+  const ids: string[] = []
+  for (const filePath of filePaths) {
+    try {
+      const id = await generateClipIdForFile(filePath)
+      if (!allowedClipIds || allowedClipIds.has(id)) ids.push(id)
+    } catch {
+      // Ignore files removed after export.
     }
   }
+  const fingerprint = generateFingerprint(ids)
+  await markClipsUsed(ids, dateCode, fingerprint)
+  return { clipIds: ids, fingerprint }
+}
 
-  savePoolStore(store)
+export function fingerprintClipIds(clipIds: string[]): string {
+  return generateFingerprint(clipIds)
+}
 
-  // Lưu session
-  const sessionStore = loadSessionStore()
-  sessionStore.sessions.push({
-    sessionId: `${dateCode}-${now}`,
-    timestamp: now,
-    dateCode,
-    sequenceFingerprint: fingerprint,
-    totalClips: clipIds.length,
-  })
-  saveSessionStore(sessionStore)
-
-  console.log(
-    `[VideoPool] Đánh dấu ${clipIds.length} clip đã dùng. ` +
-    `Session fingerprint: ${fingerprint}. ` +
-    `Tổng sessions: ${sessionStore.sessions.length}`
+export function getUsedSequenceFingerprints(): Set<string> {
+  return new Set(
+    loadSessionStore().sessions
+      .filter((session) => session.fullSequence === true)
+      .map((session) => session.sequenceFingerprint),
   )
+}
+
+export function hasLegacySequenceHistory(): boolean {
+  return loadSessionStore().sessions.some((session) => session.fullSequence !== true)
+}
+
+export async function recordOutputSequences(
+  sequences: Array<{ dateCode: string; clipIds: string[] }>,
+): Promise<void> {
+  if (sequences.length === 0) return
+  await withPoolLock(async () => {
+    const sessionStore = loadSessionStore()
+    const existing = new Set(sessionStore.sessions.map((session) => session.sequenceFingerprint))
+    const now = Date.now()
+    for (const sequence of sequences) {
+      const fingerprint = generateFingerprint(sequence.clipIds)
+      if (!sequence.clipIds.length || existing.has(fingerprint)) continue
+      sessionStore.sessions.push({
+        sessionId: `${sequence.dateCode}-${now}-${sessionStore.sessions.length}`,
+        timestamp: now,
+        dateCode: sequence.dateCode,
+        sequenceFingerprint: fingerprint,
+        totalClips: sequence.clipIds.length,
+        fullSequence: true,
+      })
+      existing.add(fingerprint)
+    }
+    saveSessionStore(sessionStore)
+    const persisted = getUsedSequenceFingerprints()
+    const missing = sequences.some((sequence) => {
+      if (sequence.clipIds.length === 0) return false
+      return !persisted.has(generateFingerprint(sequence.clipIds))
+    })
+    if (missing) throw new Error('Không thể lưu Video Pool sequence history; dừng trước khi xác nhận guarantee.')
+  })
+}
+
+export function hasSequenceFingerprint(fingerprint: string, pending: ReadonlySet<string> = new Set()): boolean {
+  return getUsedSequenceFingerprints().has(fingerprint) || pending.has(fingerprint)
+}
+
+
+export function clearPool(): void {
+  poolWriteChain = poolWriteChain.then(async () => {
+    try {
+      const poolFile = getPoolPath()
+      const sessionFile = getSessionPath()
+      if (fs.existsSync(poolFile)) fs.unlinkSync(poolFile)
+      if (fs.existsSync(sessionFile)) fs.unlinkSync(sessionFile)
+      console.log('[VideoPool] Pool cleared.')
+    } catch (err) {
+      console.warn('[VideoPool] Failed to clear pool:', err)
+    }
+  })
 }
 
 /**
@@ -488,20 +577,5 @@ export function getPoolStats(): PoolStats {
     usedInLast7d,
     totalSessions: sessionStore.sessions.length,
     lastSessionAt: lastSession?.timestamp ?? null,
-  }
-}
-
-/**
- * Reset toàn bộ pool (xóa file JSON)
- */
-export function clearPool(): void {
-  try {
-    const poolFile = getPoolPath()
-    const sessionFile = getSessionPath()
-    if (fs.existsSync(poolFile)) fs.unlinkSync(poolFile)
-    if (fs.existsSync(sessionFile)) fs.unlinkSync(sessionFile)
-    console.log('[VideoPool] Pool cleared.')
-  } catch (err) {
-    console.warn('[VideoPool] Failed to clear pool:', err)
   }
 }

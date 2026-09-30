@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import NumericDraftInput from '../components/NumericDraftInput'
+import AutopilotVideoRepairActions from '../components/AutopilotVideoRepairActions'
 
 export type DayPresetId = 'tomorrowland' | 'partymix' | 'custom'
 
@@ -44,6 +45,7 @@ export interface AutopilotFoldersConfig {
   autoCreateDailySubfolder: boolean
   priorityMusicFolder: string
   randomMusicFolder: string
+  openingMusicFolder?: string
   priorityVideoFolder?: string
   /** File nhạc nối cuối mỗi playlist/video. */
   endingAudioPaths?: string[]
@@ -1119,9 +1121,7 @@ function FoldersAndSourcesSection({ foldersConfig, onChange, videoSelectionInfo 
   const previewAudio = foldersConfig.rootAudio
     ? `${foldersConfig.rootAudio.replace(/[/\\\\]$/, '')}${foldersConfig.autoCreateDailySubfolder ? `\\${today.code}` : ''}`
     : ''
-  const previewVideo = foldersConfig.rootVideo
-    ? `${foldersConfig.rootVideo.replace(/[/\\\\]$/, '')}${foldersConfig.autoCreateDailySubfolder ? `\\${today.code}` : ''}`
-    : ''
+  const previewVideo = foldersConfig.rootVideo || ''
   const previewFinal = foldersConfig.rootFinal
     ? `${foldersConfig.rootFinal.replace(/[/\\\\]$/, '')}${foldersConfig.autoCreateDailySubfolder ? `\\${today.code}` : ''}`
     : ''
@@ -1137,9 +1137,12 @@ function FoldersAndSourcesSection({ foldersConfig, onChange, videoSelectionInfo 
 
         const current = foldersConfig[key] || ''
         const merged =
-          current && current.trim().length > 0 ? `${current.trim()}\n${selected}` : selected
+          key === 'rootVideo' && current && current.trim().length > 0
+            ? `${current.trim()}\n${selected}`
+            : selected
 
         onChange({ [key]: merged } as Partial<AutopilotFoldersConfig>)
+
         return
       } catch (err) {
         console.warn('[AutopilotPage] selectFolder error, fallback prompt:', err)
@@ -1150,7 +1153,9 @@ function FoldersAndSourcesSection({ foldersConfig, onChange, videoSelectionInfo 
     const current = foldersConfig[key] || ''
     // eslint-disable-next-line no-alert
     const next = window.prompt(
-      `Nhập một hoặc nhiều thư mục cho ${key}.\n- Có thể dán nhiều đường dẫn, cách nhau bằng dấu ; hoặc xuống dòng.\n- Ví dụ: D:\\\\AUDIO_1;D:\\\\AUDIO_2`,
+      key === 'rootVideo'
+        ? 'Nhập một hoặc nhiều thư mục video, cách nhau bằng dấu ; hoặc xuống dòng.\nVí dụ: D:\\\\VIDEO_1;D:\\\\VIDEO_2'
+        : `Nhập một thư mục cho ${key}.`,
       current,
     )
     if (next != null) {
@@ -1158,7 +1163,7 @@ function FoldersAndSourcesSection({ foldersConfig, onChange, videoSelectionInfo 
     }
   }
 
-  const handleChooseMusicFolder = async (key: 'priorityMusicFolder' | 'randomMusicFolder') => {
+  const handleChooseMusicFolder = async (key: 'priorityMusicFolder' | 'randomMusicFolder' | 'openingMusicFolder') => {
     const w = window
 
     if (w.api?.selectFolder) {
@@ -1175,7 +1180,7 @@ function FoldersAndSourcesSection({ foldersConfig, onChange, videoSelectionInfo 
     const current = foldersConfig[key] || ''
     // eslint-disable-next-line no-alert
     const next = window.prompt(
-      `Nhập đường dẫn thư mục cho ${key === 'priorityMusicFolder' ? 'nhạc ưu tiên' : 'nhạc random'}.`,
+      `Nhập đường dẫn thư mục cho ${key === 'priorityMusicFolder' ? 'nhạc ưu tiên' : key === 'randomMusicFolder' ? 'nhạc random' : 'nhạc mở đầu'}.`,
       current,
     )
     if (next != null) {
@@ -1231,6 +1236,7 @@ function FoldersAndSourcesSection({ foldersConfig, onChange, videoSelectionInfo 
             <FolderRow
               label="Thư mục gốc Video đã cắt"
               value={foldersConfig.rootVideo}
+              onChange={(rootVideo) => onChange({ rootVideo })}
               onChoose={() => handleChooseFolder('rootVideo')}
               onClear={() => onChange({ rootVideo: '' })}
             />
@@ -1394,11 +1400,18 @@ function FoldersAndSourcesSection({ foldersConfig, onChange, videoSelectionInfo 
               onClear={() => onChange({ randomMusicFolder: '' })}
             />
             <MusicFolderRow
+              label="Thư mục nhạc mở đầu (tùy chọn)"
+              value={foldersConfig.openingMusicFolder || ''}
+              onChoose={() => handleChooseMusicFolder('openingMusicFolder')}
+              onClear={() => onChange({ openingMusicFolder: '' })}
+            />
+            <MusicFolderRow
               label="Nhạc nối cuối (tùy chọn)"
               value={(foldersConfig.endingAudioPaths ?? []).join('\n')}
               onChoose={handleChooseEndingAudio}
               onClear={() => onChange({ endingAudioPaths: [] })}
             />
+
           </div>
           <span style={{ display: 'block', marginTop: '10px', fontSize: '11px', color: '#9ca3af', lineHeight: 1.5 }}>
             - Nhạc ưu tiên sẽ luôn được ưu tiên mở đầu playlist (65–80% thời lượng).<br />
@@ -1415,18 +1428,20 @@ function FoldersAndSourcesSection({ foldersConfig, onChange, videoSelectionInfo 
 interface FolderRowProps {
   label: string
   value: string
+  onChange?: (value: string) => void
   onChoose: () => void
   onClear: () => void
 }
 
-function FolderRow({ label, value, onChoose, onClear }: FolderRowProps) {
+function FolderRow({ label, value, onChange, onChoose, onClear }: FolderRowProps) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
       <span>{label}</span>
       <div style={{ display: 'flex', gap: '8px' }}>
         <textarea
-          readOnly
+          readOnly={!onChange}
           value={value}
+          onChange={onChange ? (event) => onChange(event.target.value) : undefined}
           placeholder="Chưa chọn thư mục"
           rows={2}
           style={{
@@ -1704,9 +1719,29 @@ function AutopilotControlSection({
           <span style={{ fontSize: '12px', color: '#e5e7eb' }}>{runProgress.message}</span>
         )}
         {runProgress.error && (
-          <span style={{ fontSize: '12px', color: '#f87171', fontWeight: 'bold', whiteSpace: 'pre-wrap' }}>
-            {getAutopilotStepLabel(runProgress.currentStep)} — {runProgress.error}
-          </span>
+          <div
+            style={{
+              fontSize: '12px',
+              color: '#fecaca',
+              fontWeight: 'bold',
+              whiteSpace: 'pre-wrap',
+              overflowWrap: 'anywhere',
+              maxHeight: '420px',
+              overflowY: 'auto',
+              padding: '8px',
+              border: '1px solid rgba(248,113,113,0.35)',
+              borderRadius: '4px',
+              backgroundColor: 'rgba(127,29,29,0.25)',
+            }}
+          >
+            {getAutopilotStepLabel(runProgress.currentStep)}
+            {'\n'}
+            {runProgress.error}
+            <AutopilotVideoRepairActions
+              error={runProgress.error}
+              rootVideo={config.folders.rootVideo}
+            />
+          </div>
         )}
       </div>
 
@@ -1950,6 +1985,7 @@ function AutopilotPageLegacy() {
     autoCreateDailySubfolder: true,
     priorityMusicFolder: '',
     randomMusicFolder: '',
+    openingMusicFolder: '',
         priorityVideoFolder: '',
       }
     }
@@ -1963,6 +1999,7 @@ function AutopilotPageLegacy() {
           autoCreateDailySubfolder: true,
           priorityMusicFolder: '',
           randomMusicFolder: '',
+          openingMusicFolder: '',
         }
       }
       const parsed = JSON.parse(raw) as AutopilotConfig
@@ -1976,6 +2013,7 @@ function AutopilotPageLegacy() {
             : true,
         priorityMusicFolder: parsed?.folders?.priorityMusicFolder || '',
         randomMusicFolder: parsed?.folders?.randomMusicFolder || '',
+        openingMusicFolder: parsed?.folders?.openingMusicFolder || '',
         priorityVideoFolder: parsed?.folders?.priorityVideoFolder || '',
         endingAudioPaths: Array.isArray(parsed?.folders?.endingAudioPaths) ? parsed.folders.endingAudioPaths : [],
         minVideoClipsTarget: typeof parsed?.folders?.minVideoClipsTarget === 'number' ? parsed.folders.minVideoClipsTarget : 1000,
@@ -1988,6 +2026,7 @@ function AutopilotPageLegacy() {
         autoCreateDailySubfolder: true,
         priorityMusicFolder: '',
         randomMusicFolder: '',
+        openingMusicFolder: '',
         priorityVideoFolder: '',
       }
     }
@@ -2194,19 +2233,43 @@ function AutopilotPageLegacy() {
     )
   }
 
-  // Lưu cấu hình Autopilot (dayPlans + folders) vào localStorage để lần sau mở app không phải chọn lại
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const [savedConfigSignature, setSavedConfigSignature] = useState<string | null>(null)
+  const initialConfigSignatureSetRef = useRef(false)
+  const configPayload: AutopilotConfig = { dayPlans, folders: foldersConfig }
+  const configSignature = JSON.stringify(configPayload)
+  const isConfigDirty = savedConfigSignature !== configSignature
+
   useEffect(() => {
-    if (typeof window === 'undefined') return
+    if (initialConfigSignatureSetRef.current) return
+    initialConfigSignatureSetRef.current = true
     try {
-      const payload: AutopilotConfig = {
-        dayPlans,
-        folders: foldersConfig,
-      }
-      window.localStorage.setItem(AUTOPILOT_STORAGE_KEY, JSON.stringify(payload))
+      const raw = window.localStorage.getItem(AUTOPILOT_STORAGE_KEY)
+      setSavedConfigSignature(raw || configSignature)
     } catch {
-      // ignore
+      setSavedConfigSignature(null)
     }
-  }, [dayPlans, foldersConfig])
+  }, [configSignature])
+
+  useEffect(() => {
+    if (!isConfigDirty) return
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault()
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload)
+  }, [isConfigDirty])
+
+  const handleSaveConfig = () => {
+    try {
+      window.localStorage.setItem(AUTOPILOT_STORAGE_KEY, configSignature)
+      setSavedConfigSignature(configSignature)
+      setSaveError(null)
+    } catch (error: any) {
+      setSaveError(error?.message || 'Không lưu được cấu hình Autopilot.')
+    }
+  }
 
   const simulateStartAutopilot = () => {
     // Chặn double-click race condition
@@ -2351,13 +2414,42 @@ function AutopilotPageLegacy() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', padding: '12px', color: '#e5e7eb' }}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-        <h2 style={{ margin: 0 }}>Autopilot</h2>
-        <p style={{ margin: 0, color: '#cbd5e1', fontSize: '13px', lineHeight: 1.6 }}>
-          Lập kế hoạch sản xuất theo ngày, cấu hình thư mục và chạy Autopilot để quét nhạc, tạo playlist, ghép video, xuất
-          video hoàn chỉnh. Đảm bảo đã chọn đủ thư mục và kế hoạch trước khi chạy.
-        </p>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'flex-start' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+          <h2 style={{ margin: 0 }}>Autopilot</h2>
+          <p style={{ margin: 0, color: '#cbd5e1', fontSize: '13px', lineHeight: 1.6 }}>
+            Lập kế hoạch sản xuất theo ngày, cấu hình thư mục và chạy Autopilot để quét nhạc, tạo playlist, ghép video, xuất
+            video hoàn chỉnh. Đảm bảo đã chọn đủ thư mục và kế hoạch trước khi chạy.
+          </p>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px' }}>
+          <button
+            type="button"
+            onClick={handleSaveConfig}
+            disabled={!isConfigDirty}
+            style={{
+              padding: '7px 12px',
+              borderRadius: '5px',
+              border: '1px solid #2563eb',
+              backgroundColor: isConfigDirty ? '#1d4ed8' : '#1e293b',
+              color: isConfigDirty ? '#fff' : '#94a3b8',
+              cursor: isConfigDirty ? 'pointer' : 'not-allowed',
+              fontSize: '12px',
+            }}
+          >
+            Lưu cấu hình
+          </button>
+          <span style={{ fontSize: '11px', color: saveError ? '#f87171' : isConfigDirty ? '#fbbf24' : '#4ade80' }}>
+            {saveError || (isConfigDirty ? 'Chưa lưu thay đổi' : 'Đã lưu')}
+          </span>
+        </div>
       </div>
+
+      {saveError && (
+        <div style={{ color: '#fecaca', fontSize: '12px', whiteSpace: 'pre-wrap' }}>
+          Lưu cấu hình thất bại. Kiểm tra quyền localStorage rồi thử lại.
+        </div>
+      )}
 
       <div
         ref={layoutRef}

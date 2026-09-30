@@ -14,6 +14,11 @@ export interface ValidatedInputFile {
   sizeBytes?: number
 }
 
+export interface InvalidInputFile {
+  path: string
+  reason: string
+}
+
 /**
  * Validate input files by probing them with ffprobe
  * Returns valid files and list of invalid file paths
@@ -21,9 +26,15 @@ export interface ValidatedInputFile {
 export async function validateInputFiles(
   paths: string[],
   concurrency: number = 10
-): Promise<{ valid: ValidatedInputFile[]; invalid: string[] }> {
+): Promise<{ valid: ValidatedInputFile[]; invalid: string[]; invalidDetails: InvalidInputFile[] }> {
   const valid: ValidatedInputFile[] = []
   const invalid: string[] = []
+  const invalidDetails: InvalidInputFile[] = []
+
+  const addInvalid = (filePath: string, reason: string) => {
+    invalid.push(filePath)
+    invalidDetails.push({ path: filePath, reason })
+  }
 
   // FIX PERF-5: Sliding window concurrency — slot trống được lấp ngay lập tức
   // thay vì đợi cả batch hoàn tất rồi mới bắt đầu batch mới
@@ -49,16 +60,20 @@ export async function validateInputFiles(
           })
           return
         } else {
-          invalid.push(filePath)
+          const reason = !hasUsableDuration
+            ? 'Video không có duration hợp lệ.'
+            : 'Video không có stream hình ảnh hợp lệ (thiếu width/height/codec).'
+          addInvalid(filePath, reason)
           console.warn(
-            `[validateInputFiles] Invalid file (missing usable duration/video stream): ${filePath}`
+            `[validateInputFiles] Invalid file: ${filePath} — ${reason}`
           )
           return
         }
       } catch (error) {
         retryCount++
         if (retryCount > maxRetries) {
-          invalid.push(filePath)
+          const reason = `Không probe được video sau ${maxRetries + 1} lần: ${error instanceof Error ? error.message : String(error)}`
+          addInvalid(filePath, reason)
           console.warn(`[validateInputFiles] Failed to probe ${filePath} after ${maxRetries + 1} attempt(s):`, error)
           return
         }
@@ -87,18 +102,18 @@ export async function validateInputFiles(
   // Log summary
   console.log(`[validateInputFiles] Summary: total=${paths.length}, valid=${valid.length}, invalid=${invalid.length}`)
   
-  if (invalid.length > 0) {
+  if (invalidDetails.length > 0) {
     const maxLog = 10
-    const invalidToLog = invalid.slice(0, maxLog)
+    const detailsToLog = invalidDetails.slice(0, maxLog)
     console.log(`[validateInputFiles] Invalid files (showing max ${maxLog}):`)
-    invalidToLog.forEach((path, idx) => {
-      console.log(`  ${idx + 1}. ${path}`)
+    detailsToLog.forEach((item, idx) => {
+      console.log(`  ${idx + 1}. ${item.path} — ${item.reason}`)
     })
-    if (invalid.length > maxLog) {
-      console.log(`  ... and ${invalid.length - maxLog} more`)
+    if (invalidDetails.length > maxLog) {
+      console.log(`  ... and ${invalidDetails.length - maxLog} more`)
     }
   }
 
-  return { valid, invalid }
+  return { valid, invalid, invalidDetails }
 }
 

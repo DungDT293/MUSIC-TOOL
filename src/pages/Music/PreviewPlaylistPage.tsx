@@ -117,10 +117,8 @@ function PreviewPlaylistPage() {
         }
       }
 
-      // Fallback: file:// URL (may fail in dev due to CSP)
-      const normalized = filePath.replace(/\\/g, '/')
-      const encoded = normalized.split('/').map(seg => encodeURIComponent(seg)).join('/')
-      return `file:///${encoded.replace(/^\/+/, '')}`
+      // file:// is blocked in sandboxed packaged renderers; app:// streams local and UNC files.
+      return `app://local-file/?path=${encodeURIComponent(filePath)}`
     } catch (err) {
       console.error('[PreviewPlaylist] getFileUrl error', filePath, err)
       return ''
@@ -288,6 +286,10 @@ function PreviewPlaylistPage() {
   }
 
   const currentTrack = selectedPlaylist?.tracks[currentIndex] || null
+  const genreSettings = selectedPlaylist?.genreSettings
+  const genreConfigText = genreSettings
+    ? `${genreSettings.smoothTransitions ? `Crossfade ${genreSettings.crossfadeDurationSec ?? 4}s` : 'Crossfade tắt'} · ${genreSettings.normalizeLoudness ? 'Loudnorm bật' : 'Loudnorm tắt'}`
+    : null
 
   return (
     <div style={{ padding: '20px', display: 'flex', gap: '20px', height: 'calc(100vh - 100px)' }}>
@@ -316,11 +318,14 @@ function PreviewPlaylistPage() {
               Chưa có playlist nào. Vui lòng tạo playlist ở mục "Tạo playlist".
             </div>
           ) : (
-            playlists.map((playlist) => {
+            playlists.map((playlist, index) => {
               const isSelected = playlist.id === selectedPlaylistId
+              const showGenre = !!playlist.genreId && playlist.genreId !== playlists[index - 1]?.genreId
               return (
+                <div key={`${playlist.genreId || 'legacy'}-group-${playlist.id}`}>
+                  {showGenre && <div style={{ color: '#60a5fa', fontWeight: 700, padding: '6px 2px' }}>{playlist.genreName}</div>}
                 <div
-                  key={playlist.id}
+                  key={`${playlist.genreId || 'legacy'}-${playlist.id}`}
                   onClick={() => setSelectedPlaylistId(playlist.id)}
                   style={{
                     padding: '15px',
@@ -340,6 +345,7 @@ function PreviewPlaylistPage() {
                     bài • Ưu tiên: {getPriorityPercent(playlist)}%, Random:{' '}
                     {getRandomPercent(playlist)}%
                   </div>
+                </div>
                 </div>
               )
             })
@@ -382,6 +388,7 @@ function PreviewPlaylistPage() {
                 Thời lượng: {formatDuration(selectedPlaylist.totalDurationSec)} • Số bài:{' '}
                 {selectedPlaylist.tracks.length} • Ưu tiên: {getPriorityPercent(selectedPlaylist)}%,
                 Random: {getRandomPercent(selectedPlaylist)}%
+                {genreConfigText && <><br /><span style={{ color: '#60a5fa' }}>Cấu hình genre: {genreConfigText}</span></>}
               </div>
             </div>
 

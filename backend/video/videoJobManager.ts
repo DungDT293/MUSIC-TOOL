@@ -2,10 +2,24 @@
  * Video Job Manager - Quản lý đơn giản các FFmpeg processes để có thể cancel
  */
 
-import { type ChildProcess } from 'child_process'
+import { execFile, type ChildProcess } from 'child_process'
 
 /** Max number of cancelled job IDs to retain (prevent unbounded memory growth) */
 const MAX_CANCELLED_HISTORY = 200
+
+function killProcessTree(proc: ChildProcess): void {
+  if (!proc.pid) return
+  if (process.platform === 'win32') {
+    execFile('taskkill.exe', ['/PID', String(proc.pid), '/T', '/F'], { windowsHide: true }, (error) => {
+      if (error) console.warn(`[VideoJobManager] taskkill failed for PID ${proc.pid}:`, error.message)
+    })
+  }
+  try {
+    if (!proc.killed) proc.kill(process.platform === 'win32' ? 'SIGKILL' : 'SIGTERM')
+  } catch (error) {
+    console.warn('[VideoJobManager] fallback kill failed:', error)
+  }
+}
 
 class VideoJobManager {
   private jobs = new Map<string, ChildProcess>()
@@ -70,27 +84,7 @@ class VideoJobManager {
       return
     }
 
-    try {
-      if (!proc.killed) {
-        const initialSignal = process.platform === 'win32' ? 'SIGKILL' : 'SIGTERM'
-        proc.kill(initialSignal)
-        // FIX BUG 17: Lưu timer reference và clear khi process thoát
-        const killTimer = setTimeout(() => {
-          if (!proc.killed && proc.pid) {
-            // Chỉ kill nếu process vẫn còn sống
-            try {
-              proc.kill('SIGKILL')
-            } catch (err) {
-              // Ignore errors khi kill (process có thể đã tự exit)
-            }
-          }
-        }, 2000)
-        // Clear timer khi process thoát sớm — tránh timer leak
-        proc.once('close', () => clearTimeout(killTimer))
-      }
-    } catch (error) {
-      console.warn(`[VideoJobManager] Error killing process:`, error)
-    }
+    killProcessTree(proc)
 
     // Không xóa job khỏi Map ngay lập tức - để process.on('close') tự cleanup
   }

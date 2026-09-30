@@ -1,5 +1,6 @@
 import os from 'node:os'
 import path from 'node:path'
+import { createHash } from 'node:crypto'
 import fsp from 'node:fs/promises'
 import { afterEach, describe, expect, it } from 'vitest'
 import { isScanResultUsable, scanConfigKey } from '../../../backend/music/scanStore'
@@ -14,6 +15,7 @@ const config: ScanMusicConfig = {
     name: 'House',
     priorityFolders: ['E:/Music/House/Priority'],
     randomFolders: ['E:/Music/House/Random'],
+    openingFolders: [],
   }],
 }
 
@@ -45,7 +47,7 @@ describe('scanStore helpers', () => {
     const result: ScanMusicResult = {
       config,
       tracks: [{
-        id: 'ok',
+        id: createHash('md5').update(existing).digest('hex'),
         path: existing,
         fileName: 'ok.m4a',
         folderType: 'priority',

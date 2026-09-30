@@ -43,20 +43,16 @@ function base64UrlDecode(data: string): string {
 }
 
 /**
- * Get JWT secret from environment
+ * Get JWT secret from environment.
+ *
+ * JWT signing must fail closed. A shipped fallback lets anyone mint tokens.
  */
 function getJWTSecret(env: { JWT_SECRET?: string }): string {
-  if (env.JWT_SECRET) {
-    return env.JWT_SECRET
+  const secret = env.JWT_SECRET?.trim()
+  if (!secret || secret === 'CHANGE_ME_IN_PRODUCTION_JWT_SECRET') {
+    throw new Error('JWT_SECRET_NOT_CONFIGURED')
   }
-  
-  // Fallback to a default (should be set in production)
-  const defaultSecret = 'CHANGE_ME_IN_PRODUCTION_JWT_SECRET'
-  if (defaultSecret === 'CHANGE_ME_IN_PRODUCTION_JWT_SECRET') {
-    console.warn('[JWT] JWT_SECRET not set, using weak default. Set JWT_SECRET environment variable for production.')
-  }
-  
-  return defaultSecret
+  return secret
 }
 
 /**
@@ -125,8 +121,14 @@ export async function verifyToken(
   token: string,
   env: { JWT_SECRET?: string }
 ): Promise<{ valid: boolean; payload?: JWTPayload; error?: string }> {
+  let secret: string
   try {
-    const secret = getJWTSecret(env)
+    secret = getJWTSecret(env)
+  } catch (err: any) {
+    return { valid: false, error: err?.message || 'JWT_SECRET_NOT_CONFIGURED' }
+  }
+
+  try {
     const parts = token.split('.')
     
     if (parts.length !== 3) {

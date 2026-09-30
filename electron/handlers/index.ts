@@ -11,6 +11,7 @@ import { registerMusicHandlers } from './musicHandlers'
 import { registerVideoHandlers } from './videoHandlers'
 import { registerVideoFinalExportHandlers } from './videoFinalExportHandlers'
 import { registerAutopilotHandlers } from './autopilotHandlers'
+import { registerSongNhacHandlers } from './songNhacHandlers'
 
 export function registerAllHandlers(
   _mainWindow: BrowserWindow | null,
@@ -22,6 +23,7 @@ export function registerAllHandlers(
   registerVideoHandlers()
   registerVideoFinalExportHandlers(getMainWindow)
   registerAutopilotHandlers(getMainWindow)
+  registerSongNhacHandlers(getMainWindow)
 }
 
 // Re-export helper utilities needed by main.ts

@@ -223,24 +223,53 @@ describe('PlaylistEngine — edge cases', () => {
     expect(playlists[0].tracks.length).toBeGreaterThan(0)
   })
 
-  test('reuse enabled when required duration > library duration', async () => {
+  test('creates unique ordered signatures when variants exist', async () => {
     const { buildPlaylists } = await import('../../backend/music/playlistEngine')
-    // 2 tracks × 60s = 120s library
+    const { playlists } = buildPlaylists({
+      tracks: [makePriorityTrack('a', 60), makePriorityTrack('b', 60)],
+      pinnedTrackIds: [],
+      playlistCount: 2,
+      targetDurationMinutes: 1,
+    })
+
+    expect(new Set(playlists.map((playlist) => playlist.tracks.map((track) => track.id).join('|'))).size).toBe(2)
+  })
+
+  test('throws when requested playlist count exceeds unique ordered signatures', async () => {
+    const { buildPlaylists } = await import('../../backend/music/playlistEngine')
+    expect(() => buildPlaylists({
+      tracks: [makePriorityTrack('only', 60)],
+      pinnedTrackIds: [],
+      playlistCount: 2,
+      targetDurationMinutes: 1,
+    })).toThrow(/Không thể tạo đủ/)
+  })
+
+  test('fails clearly when reuse cannot produce unique playlist signatures', async () => {
+    const { buildPlaylists } = await import('../../backend/music/playlistEngine')
+    // 2 tracks × 60s = 120s library; fixed priority → random group order
+    // cannot produce two different sequences for this long target.
     const tracks = [makePriorityTrack('a', 60), makeRandomTrack('b', 60)]
 
-    // Need 2 × 30min = 3600s but only have 120s
-    const { playlists } = buildPlaylists({
+    expect(() => buildPlaylists({
       tracks,
       pinnedTrackIds: [],
       playlistCount: 2,
       targetDurationMinutes: 30,
+    })).toThrow(/Không thể tạo đủ/)
+  })
+
+  test('preserves single-playlist reuse when uniqueness is not required', async () => {
+    const { buildPlaylists } = await import('../../backend/music/playlistEngine')
+    const { playlists } = buildPlaylists({
+      tracks: [makePriorityTrack('only', 120)],
+      pinnedTrackIds: [],
+      playlistCount: 1,
+      targetDurationMinutes: 5,
     })
 
-    // Should still produce 2 playlists without crashing
-    expect(playlists.length).toBe(2)
-    // Each playlist should have tracks (reused)
+    expect(playlists).toHaveLength(1)
     expect(playlists[0].tracks.length).toBeGreaterThan(0)
-    expect(playlists[1].tracks.length).toBeGreaterThan(0)
   })
 })
 

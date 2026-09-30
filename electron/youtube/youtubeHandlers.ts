@@ -6,13 +6,25 @@ import {
   VideoInfo, 
   Quality,
   DownloadProgress,
-  BatchDownloadProgress
+  BatchDownloadProgress,
+  SpotifyYouTubeDownloadRequest,
 } from '../../backend/youtube/types';
+import { isValidAbsolutePath } from '../authState';
+import type { CookieEntry } from '../../backend/youtube/cookieManager';
 
 // Global downloader instance
 let downloader: YouTubeDownloader | null = null;
 let currentYoutubeJobId: string | null = null;
 let youtubeHandlersRegistered = false; // FIX M20: Guard against double-registration
+
+export function getSpotifyCookieString(): string | undefined {
+  const cookies = downloader?.getCookieManager().getCookieString('spotify');
+  return cookies || undefined;
+}
+
+export function getSpotifyCookies(): CookieEntry[] {
+  return downloader?.getCookieManager().getCookies('spotify') ?? [];
+}
 
 const RETRYABLE_YTDLP_ERROR_PATTERNS = [
   /bytes read,\s*\d+\s*more expected/i,
@@ -287,6 +299,48 @@ export function setupYouTubeHandlers(mainWindow: BrowserWindow) {
     }
   });
   
+  // ============================================
+  // Handler: Download Spotify metadata matches from accessible YouTube sources
+  // ============================================
+  ipcMain.handle('youtube:download-spotify', async (_event, request: SpotifyYouTubeDownloadRequest) => {
+    try {
+      if (!downloader) throw new Error('Downloader not initialized');
+      if (!request || !isValidAbsolutePath(request.outputDir)) throw new Error('Invalid output directory path');
+      if (request.cookiesFile && !isValidAbsolutePath(request.cookiesFile)) throw new Error('Invalid cookies file path');
+      if (request.cookiesFromBrowser && !['auto', 'chrome', 'firefox', 'edge', 'opera', 'safari', 'brave', 'chromium', 'vivaldi'].includes(request.cookiesFromBrowser)) {
+        throw new Error('Invalid browser cookie source');
+      }
+      if (!Array.isArray(request.tracks) || request.tracks.length === 0 || request.tracks.length > 500 || request.tracks.some((track) =>
+        !track || typeof track.id !== 'string' || track.id.length > 200 || typeof track.name !== 'string' || track.name.length > 500 ||
+        !Array.isArray(track.artists) || track.artists.length > 20 || track.artists.some((artist) => typeof artist !== 'string' || artist.length > 200)
+      )) {
+        throw new Error('Spotify track list must contain 1-500 valid tracks');
+      }
+      const activeDownloader = downloader;
+      const jobHandle = jobQueue.enqueue({
+        type: 'youtube:download-spotify',
+        payload: { trackCount: request.tracks.length },
+        onCancel: () => activeDownloader.cancelDownload(),
+        task: async (ctx) => {
+          const progressListener = (progress: BatchDownloadProgress) => {
+            ctx.updateProgress(progress.overallPercent, progress.currentVideoTitle || 'Spotify download');
+          };
+          activeDownloader.on('batch-progress', progressListener);
+          try {
+            return await activeDownloader.downloadSpotifyTracks(request);
+          } finally {
+            activeDownloader.off('batch-progress', progressListener);
+          }
+        },
+      });
+      const result = await jobHandle.result;
+      return { success: true, result };
+    } catch (error: any) {
+      console.error('[IPC] youtube:download-spotify error:', error?.message || 'unknown error');
+      return { success: false, error: error?.message || 'Spotify download failed' };
+    }
+  });
+
   // ============================================
   // Handler: Download channel
   // ============================================
@@ -579,6 +633,7 @@ export function cleanupYouTubeHandlers() {
     'youtube:get-channel-videos',
     'youtube:estimate-channel-size',
     'youtube:download-video',
+    'youtube:download-spotify',
     'youtube:download-channel',
     'youtube:cancel-download',
     'youtube:update-ytdlp',

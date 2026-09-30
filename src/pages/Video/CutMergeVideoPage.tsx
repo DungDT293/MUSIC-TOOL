@@ -4,9 +4,10 @@ import MultiCutTab from './MultiCutTab'
 import MergeTab from './MergeTab'
 import MuteAudioTab from './MuteAudioTab'
 import NormalizeVideoTab from './NormalizeVideoTab'
+import ExtractAudioTab from './ExtractAudioTab'
 import AuditFilesTab from './AuditFilesTab'
 
-type VideoTab = 'single' | 'multi' | 'merge' | 'mute' | 'normalize' | 'audit'
+type VideoTab = 'single' | 'multi' | 'merge' | 'mute' | 'normalize' | 'extract-audio' | 'audit'
 
 function CutMergeVideoPage() {
   console.log('[CutMergeVideoPage] Component mounted/rendered')
@@ -109,6 +110,22 @@ function CutMergeVideoPage() {
           Chuẩn hóa video
         </button>
         <button
+          onClick={() => setActiveTab('extract-audio')}
+          style={{
+            padding: '12px 24px',
+            backgroundColor: activeTab === 'extract-audio' ? '#007acc' : '#2d2d2d',
+            color: '#fff',
+            border: 'none',
+            borderRadius: '6px 6px 0 0',
+            cursor: 'pointer',
+            fontSize: '14px',
+            fontWeight: activeTab === 'extract-audio' ? 'bold' : 'normal',
+            transition: 'all 0.2s',
+          }}
+        >
+          Tách âm thanh
+        </button>
+        <button
           onClick={() => setActiveTab('audit')}
           style={{
             padding: '12px 24px',
@@ -133,6 +150,7 @@ function CutMergeVideoPage() {
         <div style={{ display: activeTab === 'merge' ? 'block' : 'none', height: '100%' }}><MergeTab /></div>
         <div style={{ display: activeTab === 'mute' ? 'block' : 'none', height: '100%' }}><MuteAudioTab /></div>
         <div style={{ display: activeTab === 'normalize' ? 'block' : 'none', height: '100%' }}><NormalizeVideoTab /></div>
+        <div style={{ display: activeTab === 'extract-audio' ? 'block' : 'none', height: '100%' }}><ExtractAudioTab /></div>
         <div style={{ display: activeTab === 'audit' ? 'block' : 'none', height: '100%' }}><AuditFilesTab /></div>
       </div>
     </div>

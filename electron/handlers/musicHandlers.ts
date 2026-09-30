@@ -27,7 +27,10 @@ import {
 } from '../../backend/music/exportAudio'
 import { normalizeAudio, cancelNormalizeAudio, type NormalizeAudioRequest, type NormalizeAudioProgress } from '../../backend/music/normalizeAudio'
 import { enhanceAudio, cancelEnhanceAudio, renderPreviewClip, type EnhanceAudioRequest } from '../../backend/music/enhanceAudio/index'
-import { getSpotifyMeta } from '../../backend/music/spotifyMeta'
+import { getSpotifyMeta, resolveBrowserSpotifyMetadata, resolvePublicSpotifyMetadata, resolveSpotifyMetadata } from '../../backend/music/spotifyMeta'
+import { readSpotifyPlaylistWithBrowser } from '../spotifyMetadataBrowser'
+import { getSpotifyCookieString, getSpotifyCookies } from '../youtube/youtubeHandlers'
+import { SpotifyMetadataRequestSchema, type SpotifyMetadataResult } from '../../shared/ipcSchemas'
 import { getRecentHistory, deleteHistoryEntries, downloadPlaylistHistory as downloadHistoryByDates } from '../../backend/music/exportHistory'
 import { listPresets, savePreset, updatePreset, deletePreset } from '../../backend/exportPresets'
 import { jobQueue } from '../../backend/jobQueue/jobQueue'
@@ -52,6 +55,7 @@ export function registerMusicHandlers(getMainWindow: () => Electron.BrowserWindo
     for (const genre of parsed.genres ?? []) {
       for (const folder of genre.priorityFolders ?? []) validateFolder(folder, `${genre.name} priority`)
       for (const folder of genre.randomFolders ?? []) validateFolder(folder, `${genre.name} random`)
+      for (const folder of genre.openingFolders ?? []) validateFolder(folder, `${genre.name} opening`)
     }
 
     console.log('[IPC] music:scanFolders', {
@@ -76,6 +80,11 @@ export function registerMusicHandlers(getMainWindow: () => Electron.BrowserWindo
 
   // Create playlists
   ipcMain.handle('music:createPlaylists', async (_event, payload: BuildPlaylistsOptions): Promise<BuildPlaylistsResult> => {
+    for (const track of payload.openingTracks ?? []) {
+      if (track?.path && !isValidAbsolutePath(track.path)) {
+        throw new Error('Invalid opening audio path')
+      }
+    }
     for (const track of payload.endingTracks ?? []) {
       if (track?.path && !isValidAbsolutePath(track.path)) {
         throw new Error('Invalid ending audio path')
@@ -91,8 +100,18 @@ export function registerMusicHandlers(getMainWindow: () => Electron.BrowserWindo
     const endingPathSet = new Set((payload.endingTracks ?? []).map(t => t.path?.toLowerCase()).filter(Boolean))
     registerTracks((payload.tracks ?? []).filter(t => !endingPathSet.has(t.path?.toLowerCase())))
     const result = buildPlaylists(payload)
-    savePlaylists(result.playlists)
-    return result
+    const taggedPlaylists = result.playlists.map((playlist) => ({
+      ...playlist,
+      genreId: payload.genreId,
+      genreName: payload.genreName,
+      genreSettings: payload.genreSettings,
+    }))
+    const existing = getPlaylists()
+    const retained = payload.genreId
+      ? existing.filter((playlist) => playlist.genreId !== payload.genreId)
+      : payload.replaceExisting === false ? existing : []
+    savePlaylists([...retained, ...taggedPlaylists])
+    return { ...result, playlists: taggedPlaylists }
   })
 
   ipcMain.handle('music:listPlaylists', async () => getPlaylists())
@@ -308,12 +327,34 @@ export function registerMusicHandlers(getMainWindow: () => Electron.BrowserWindo
   // Spotify metadata
   ipcMain.handle('music:spotifyMeta', async (_event, spotifyUrl: string) => {
     try {
-      console.log('[IPC] music:spotifyMeta', spotifyUrl)
+      console.log('[IPC] music:spotifyMeta')
       return await getSpotifyMeta(spotifyUrl)
-    } catch (err: any) {
-      console.error('[IPC] music:spotifyMeta error', err)
-      return { success: false, error: err?.message || String(err) }
+    } catch (err: unknown) {
+      console.error('[IPC] music:spotifyMeta error', err instanceof Error ? err.message : 'unknown error')
+      return { success: false, error: err instanceof Error ? err.message : String(err) }
     }
+  })
+
+  ipcMain.handle('music:spotifyImport', async (_event, payload: unknown): Promise<SpotifyMetadataResult> => {
+    const parsed = SpotifyMetadataRequestSchema.safeParse(payload)
+    if (!parsed.success) {
+      return { success: false, error: { code: 'invalid', message: 'Invalid Spotify metadata request.' } }
+    }
+    const spotifyCookies = getSpotifyCookieString()
+    if (spotifyCookies) {
+      const browserResult = await resolveBrowserSpotifyMetadata(parsed.data.url, {
+        readTracks: async (parsedUrl) => readSpotifyPlaylistWithBrowser(parsedUrl, getSpotifyCookies()),
+      })
+      if (browserResult.success || !process.env.SPOTIFY_ACCESS_TOKEN) return browserResult
+    }
+    const publicResult = await resolvePublicSpotifyMetadata(parsed.data.url, {
+      cookieString: spotifyCookies,
+    })
+    if (publicResult.success || !process.env.SPOTIFY_ACCESS_TOKEN) return publicResult
+    return resolveSpotifyMetadata(parsed.data.url, {
+      pageLimit: parsed.data.pageLimit,
+      getAccessToken: () => process.env.SPOTIFY_ACCESS_TOKEN,
+    })
   })
 
   // Export Presets

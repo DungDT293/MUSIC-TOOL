@@ -3,12 +3,22 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { buildPlaylists, clearPlaylists, savePlaylists, type BuildPlaylistsOptions, type PlaylistDefinition } from '../music/playlistEngine'
-import { exportPlaylistToFile, type ExportPlaylistRequest } from '../music/exportAudio'
+import { exportPlaylistToFile, findMissingPlaylistTracks, isMissingAudioFailure, type ExportPlaylistRequest } from '../music/exportAudio'
 import { scanAudioFilesAsTracks, scanMusicFolders, type ScanMusicResult } from '../music/scanMusic'
 import { type FinalExportJobRequest, type FinalExportEmitter, planFinalExport, executeFinalExport } from '../video/finalExport'
+import { probeFile } from '../ffmpeg/probe'
 import { videoJobManager } from '../video/videoJobManager'
 import { getDiskSpace, formatBytes, isEnospcError } from '../utils/diskSpace'
-import { syncPoolWithFiles, pickUniqueSequence, markClipsUsed, getPoolStats } from './videoPool'
+import { writeOperationLog } from '../utils/operationLog'
+import {
+  syncPoolWithFiles,
+  pickUniqueSequence,
+  markClipIdsUsed,
+  getPoolStats,
+  hasLegacySequenceHistory,
+  getUsedSequenceFingerprints,
+  recordOutputSequences,
+} from './videoPool'
 import type { FinalExportDonePayload } from '../../shared/videoFinalExportChannels'
 
 export type DayPresetId = 'tomorrowland' | 'partymix' | 'custom'
@@ -57,6 +67,8 @@ export interface AutopilotFoldersConfig {
   autoCreateDailySubfolder: boolean
   priorityMusicFolder?: string
   randomMusicFolder?: string
+  /** Thư mục nhạc mở đầu tùy chọn, được thêm đầu mỗi playlist. */
+  openingMusicFolder?: string
   /** Thư mục video ưu tiên (tùy chọn) – các clip trong thư mục này sẽ được ưu tiên xuất hiện đầu video khi Final Export */
   priorityVideoFolder?: string
   /** Nhạc nối thêm cuối mỗi playlist audio. */
@@ -308,6 +320,49 @@ function formatDuration(seconds: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`
 }
 
+export function isAutopilotAudioDurationValid(
+  actualDurationSec: number,
+  expectedRenderedDurationSec: number,
+  minimumRatio = 0.9,
+): boolean {
+  return actualDurationSec > 0 &&
+    expectedRenderedDurationSec > 0 &&
+    actualDurationSec >= expectedRenderedDurationSec * minimumRatio
+}
+
+export interface SkippedAudioPlaylist {
+  playlistIndex: number
+  outputPath: string
+  actualDurationSec: number
+  expectedDurationSec: number
+  reason: string
+}
+
+export interface AutopilotDayResult {
+  validAudioPlaylistCount: number
+  skippedAudioPlaylists: SkippedAudioPlaylist[]
+}
+
+function describeSkippedAudioPlaylist(item: SkippedAudioPlaylist): string {
+  const percentage = item.expectedDurationSec > 0
+    ? Math.round((item.actualDurationSec / item.expectedDurationSec) * 100)
+    : 0
+  return [
+    `Playlist ${item.playlistIndex} bị bỏ qua vì audio chỉ đạt ${percentage}% thời lượng yêu cầu.`,
+    `File: ${item.outputPath}`,
+    `Thực tế: ${formatDuration(Math.round(item.actualDurationSec))}; cần tối thiểu: ${formatDuration(Math.round(item.expectedDurationSec * 0.9))}; playlist dự kiến: ${formatDuration(Math.round(item.expectedDurationSec))}.`,
+    'Cách xử lý: kiểm tra file audio output/track nguồn, xóa file ngắn hoặc lỗi, quét nhạc và chạy lại riêng playlist này. Các playlist đạt chuẩn vẫn tiếp tục ghép video.',
+  ].join('\\n')
+}
+
+function removeIncompleteAudioOutput(outputPath: string): void {
+  try {
+    if (outputPath && fs.existsSync(outputPath)) fs.unlinkSync(outputPath)
+  } catch (error) {
+    console.warn(`[Autopilot] Không thể xóa audio output ngắn: ${outputPath}`, error)
+  }
+}
+
 let ensuredLogDirPath: string | null = null
 
 function ensureLogDir(): string {
@@ -434,7 +489,8 @@ function buildAutopilotFixHint(message: string): string {
 
 function emitDetailedErrorLog(prefix: string, err: any) {
   const detail = describeAutopilotError(err)
-  emitLog('error', `${prefix}: ${detail}\n${buildAutopilotFixHint(detail)}`)
+  const hint = /cách xử lý:/i.test(detail) ? '' : `\n${buildAutopilotFixHint(detail)}`
+  emitLog('error', `${prefix}: ${detail}${hint}`)
 }
 
 function emitLog(
@@ -713,7 +769,7 @@ export async function startAutopilot(
 
   try {
     const prepared = preparedConfig ?? await validateAutopilotStartConfig(config)
-    const { validPlans, priorityFolder, randomFolder } = prepared
+    const { validPlans, priorityFolder, randomFolder, openingFolder } = prepared
     const normalizedPlans = validPlans.map((plan) => ({
       ...plan,
       dateCode: resolveAutopilotDateCode(plan.dateCode),
@@ -738,8 +794,14 @@ export async function startAutopilot(
       scanResult = await withTimeout(
         scanMusicFolders(
           {
-            priorityFolder,
-            randomFolder,
+            // Dùng genre rõ ràng để scanner giữ folderType opening thay vì bỏ qua payload legacy.
+            genres: [{
+              id: 'autopilot',
+              name: 'Autopilot',
+              priorityFolders: priorityFolder ? [priorityFolder] : [],
+              randomFolders: randomFolder ? [randomFolder] : [],
+              openingFolders: openingFolder ? [openingFolder] : [],
+            }],
             forceRescan: true,
             persist: false,
           },
@@ -805,7 +867,12 @@ export async function startAutopilot(
     })
 
     const failedDays: { dateCode: string; error: string }[] = []
+    const partialDays: { dateCode: string; skippedAudioPlaylists: SkippedAudioPlaylist[] }[] = []
     const succeededDays: string[] = []
+    const completedDays: string[] = []
+    // One Autopilot run owns one reservation set. Each day planner excludes clips
+    // committed by earlier successful days before FFmpeg starts.
+    const usedVideoClipIds = new Set<string>()
     const startTime = Date.now()
 
     for (let i = 0; i < normalizedPlans.length; i++) {
@@ -823,10 +890,15 @@ export async function startAutopilot(
       emitLog('info', `📅 Bắt đầu ngày ${plan.dateCode} (${i + 1}/${totalDays})`)
 
       try {
-        await runAutopilotForDay(plan, i, { ...config, dayPlans: normalizedPlans }, scanResult)
+        const dayResult = await runAutopilotForDay(plan, i, { ...config, dayPlans: normalizedPlans }, scanResult, usedVideoClipIds)
         const dayElapsed = Math.round((Date.now() - dayStartTime) / 1000)
         const dayElapsedStr = formatDuration(dayElapsed)
         succeededDays.push(plan.dateCode)
+        completedDays.push(plan.dateCode)
+        if (dayResult.skippedAudioPlaylists.length > 0) {
+          partialDays.push({ dateCode: plan.dateCode, skippedAudioPlaylists: dayResult.skippedAudioPlaylists })
+          emitLog('warn', `[Bước 5] Ngày ${plan.dateCode}: ${dayResult.validAudioPlaylistCount}/${normalizeNumber(plan.playlistCount as any, 0)} playlist đạt chuẩn; các playlist lỗi đã bỏ qua, video chỉ tạo cho playlist đạt chuẩn.`)
+        }
         const overallPercent = Math.round(((i + 1) / totalDays) * 100)
 
         emit({
@@ -863,6 +935,9 @@ export async function startAutopilot(
     if (failedDays.length > 0) {
       summaryLines.push(`║  ❌ ${failedDays.length} ngày thất bại (${failedDateCodes.join(', ')})`)
     }
+    if (partialDays.length > 0) {
+      summaryLines.push(`║  ⚠️  ${partialDays.length} ngày tạo video một phần (playlist audio ngắn đã bỏ qua)`)
+    }
     summaryLines.push(`║  ⏱️  Tổng thời gian: ${totalElapsedStr}`)
     if (isCancelling) {
       summaryLines.push('║  ⚠️  Đã bị huỷ bởi người dùng')
@@ -873,9 +948,16 @@ export async function startAutopilot(
       summaryLines.push('')
       summaryLines.push('📋 CHI TIẾT LỖI:')
       for (const failedDay of failedDays) {
-        summaryLines.push(`  • Ngày ${failedDay.dateCode}: ${failedDay.error.slice(0, 200)}`)
+        summaryLines.push(`  • Ngày ${failedDay.dateCode}:\n${failedDay.error.slice(0, 8000)}`)
       }
       summaryLines.push('💡 Cách xử lý: đọc dòng "Cách xử lý" ngay dưới lỗi của từng ngày; thường cần kiểm tra thư mục input/output, quyền truy cập, dung lượng ổ đĩa hoặc file media lỗi.')
+    }
+    for (const partialDay of partialDays) {
+      summaryLines.push('')
+      summaryLines.push(`📋 Ngày ${partialDay.dateCode}: playlist audio bị bỏ qua`)
+      for (const skipped of partialDay.skippedAudioPlaylists) {
+        summaryLines.push(`  • ${describeSkippedAudioPlaylist(skipped)}`)
+      }
     }
     emitLogBlock('info', summaryLines)
 
@@ -886,13 +968,19 @@ export async function startAutopilot(
         stepPercent: 0,
         message: 'Đã dừng Autopilot theo yêu cầu người dùng.',
       })
-    } else if (failedDays.length > 0) {
+    } else if (failedDays.length > 0 || partialDays.length > 0) {
+      const partialDetails = partialDays
+        .map((day) => `Ngày ${day.dateCode}:\n${day.skippedAudioPlaylists.map(describeSkippedAudioPlaylist).join('\n\n')}`)
+        .join('\n\n')
       emit({
         status: 'completed_with_errors',
         currentStep: currentProgress.currentStep,
         stepPercent: currentProgress.stepPercent,
-        message: `Autopilot hoàn tất — ${succeededDays.length}/${normalizedPlans.length} ngày thành công, ${failedDays.length} ngày lỗi (${failedDateCodes.join(', ')}). Tổng: ${totalElapsedStr}.`,
-        error: `Ngày lỗi: ${failedDateCodes.join(', ')}`,
+        message: `Autopilot hoàn tất — ${succeededDays.length}/${normalizedPlans.length} ngày chạy xong${failedDays.length > 0 ? `, ${failedDays.length} ngày lỗi (${failedDateCodes.join(', ')})` : ''}${partialDays.length > 0 ? `, ${partialDays.length} ngày tạo video một phần` : ''}. Tổng: ${totalElapsedStr}.`,
+        error: [
+          failedDays.map((day) => `Ngày ${day.dateCode}:\n${day.error.slice(0, 8000)}`).join('\n\n'),
+          partialDetails,
+        ].filter(Boolean).join('\n\n'),
       })
     } else {
       emit({
@@ -944,6 +1032,7 @@ export interface PreparedAutopilotStartContext {
   validPlans: DayPlanConfig[]
   priorityFolder: string | null
   randomFolder: string | null
+  openingFolder: string | null
 }
 
 const AUTOPILOT_RX_PIPE = /\|/g
@@ -1058,6 +1147,7 @@ export async function validateAutopilotStartConfig(
 
   const priorityFolder = pickFirstFolder(config.folders.priorityMusicFolder)
   const randomFolder = pickFirstFolder(config.folders.randomMusicFolder)
+  const openingFolder = pickFirstFolder(config.folders.openingMusicFolder)
   if (!priorityFolder && !randomFolder) {
     throw new Error('Hay chon it nhat mot thu muc nhac uu tien hoac nhac random cho Autopilot.')
   }
@@ -1067,6 +1157,9 @@ export async function validateAutopilotStartConfig(
   }
   if (randomFolder) {
     await validateFolder(randomFolder, 'Thu muc nhac random')
+  }
+  if (openingFolder) {
+    await validateFolder(openingFolder, 'Thu muc nhac mo dau')
   }
 
   await fsp.mkdir(config.folders.rootAudio, { recursive: true }).catch(() => {})
@@ -1105,6 +1198,7 @@ export async function validateAutopilotStartConfig(
     validPlans,
     priorityFolder,
     randomFolder,
+    openingFolder,
   }
 }
 
@@ -1173,10 +1267,7 @@ async function validateMultiFolder(folderPathMultiline: string, folderName: stri
     throw new Error(`Thư mục "${folderName}" chưa được chọn.`)
   }
 
-  const lines = folderPathMultiline
-    .split('\n')
-    .map(l => l.trim())
-    .filter(l => l.length > 0)
+  const lines = splitFolderLines(folderPathMultiline)
 
   if (lines.length === 0) {
     throw new Error(`Thư mục "${folderName}" chưa được chọn.`)
@@ -1390,7 +1481,7 @@ function getDayFolder(base: string, dateCode: string, autoDaily: boolean): strin
   return autoDaily ? path.join(trimmed, dateCode) : trimmed
 }
 
-function splitFolderLines(value: string | null | undefined): string[] {
+export function splitFolderLines(value: string | null | undefined): string[] {
   if (!value) return []
   return value
     .split(/[\r\n;]+/)
@@ -1959,7 +2050,8 @@ async function runExportVideoWithOptions(
   dateCode: string,
   playlists: PlaylistDefinition[],
   preferredPreTranscodeMode: 'gpu_heavy' | 'software' = 'software',
-): Promise<void> {
+  reservedVideoClipIds: ReadonlySet<string> = new Set(),
+): Promise<FinalExportDonePayload> {
   const requestId = jobRequest.requestId || randomUUID()
   let donePayload: FinalExportDonePayload | null = null
   let lastNormalProgressLogAt = 0
@@ -1970,6 +2062,20 @@ async function runExportVideoWithOptions(
   let lastVerboseProgressJobIndex = -1
   
   // Plan first
+  const sequenceHistory = jobRequest.uniqueRequired ? undefined : getUsedSequenceFingerprints()
+  writeOperationLog({
+    scope: 'autopilot',
+    operation: 'final-export-plan',
+    status: 'decision',
+    requestId,
+    message: 'Planning final export policy',
+    metadata: {
+      uniqueRequired: !!jobRequest.uniqueRequired,
+      requireUniqueSequences: !jobRequest.uniqueRequired && !!sequenceHistory,
+      retainedSequenceCount: sequenceHistory?.size ?? 0,
+      outputCount: jobRequest.outputNames?.length ?? 1,
+    },
+  })
   const plan = await planFinalExport(
     jobRequest.audioSource,
     jobRequest.videoSource,
@@ -1978,7 +2084,10 @@ async function runExportVideoWithOptions(
     jobRequest.outputNames,
     jobRequest.priorityVideoSource,
     jobRequest.imageSource,
-    jobRequest.endingAudio
+    jobRequest.endingAudio,
+    !!jobRequest.uniqueRequired,
+    reservedVideoClipIds,
+    jobRequest.uniqueRequired ? undefined : getUsedSequenceFingerprints(),
   )
   
   // Create emitter
@@ -2053,7 +2162,7 @@ async function runExportVideoWithOptions(
         })
         emitLog('warn', `[Bước 5] ⚠️ Ngày ${dateCode}: ${successCount}/${totalCount} video thành công, ${failedCount} thất bại.`)
         for (const f of payload.failedJobs!.slice(0, MAX_SUMMARY_LOG_ITEMS)) {
-          emitLog('error', `[Bước 5]   ✗ Job ${f.jobIndex + 1} (${f.fileName}): ${f.error}`)
+          emitLog('error', `[Bước 5]   ✗ Job ${f.jobIndex + 1} (${f.fileName}):\n${f.error}`)
         }
       } else {
         emit({
@@ -2070,7 +2179,7 @@ async function runExportVideoWithOptions(
       ]
       if (failedCount > 0) {
         for (const f of payload.failedJobs!.slice(0, MAX_SUMMARY_LOG_ITEMS)) {
-          reportLines.push(`   ✗ Job ${f.jobIndex + 1} — ${f.fileName}: ${f.error.slice(0, 150)}`)
+          reportLines.push(`   ✗ Job ${f.jobIndex + 1} — ${f.fileName}:\n${f.error.slice(0, 1500)}`)
         }
         if (failedCount > MAX_SUMMARY_LOG_ITEMS) {
           reportLines.push(`   ... và ${failedCount - MAX_SUMMARY_LOG_ITEMS} job lỗi khác`)
@@ -2121,7 +2230,7 @@ async function runExportVideoWithOptions(
   })
   
   // Execute final export
-  await executeFinalExport(
+  const executedDonePayload = await executeFinalExport(
     plan,
     requestId,
     emitter,
@@ -2144,6 +2253,7 @@ async function runExportVideoWithOptions(
     undefined,
     jobRequest.audioVisualizer,
   )
+  donePayload ??= executedDonePayload
 
   if (!donePayload) {
     throw new Error(`Final export không trả về kết quả hoàn tất cho ngày ${dateCode}.`)
@@ -2152,6 +2262,27 @@ async function runExportVideoWithOptions(
   const finalDonePayload = donePayload as unknown as FinalExportDonePayload
   const outputCount = finalDonePayload.outputs.length
   const failedJobs = finalDonePayload.failedJobs ?? []
+  const audioFailures = finalDonePayload.audioFailures ?? []
+
+  if (finalDonePayload.requestedAudioCount !== undefined) {
+    emitLog(
+      audioFailures.length > 0 ? 'warn' : 'info',
+      `[Bước 4] Audio final export: yêu cầu ${finalDonePayload.requestedAudioCount}, hợp lệ ${finalDonePayload.acceptedAudioCount ?? plan.totalJobs}, lỗi ${audioFailures.length}.`,
+    )
+    for (const failure of audioFailures.slice(0, MAX_SUMMARY_LOG_ITEMS)) {
+      emitLog(
+        'error',
+        `[Bước 4] Audio lỗi: ${failure.path}\nGiai đoạn: ${failure.stage}\nChi tiết: ${failure.detail}\n${failure.repairHint}`,
+      )
+    }
+  }
+
+  for (const failedJob of failedJobs.slice(0, MAX_SUMMARY_LOG_ITEMS)) {
+    emitLog(
+      'error',
+      `[Bước 4] Video lỗi: ${failedJob.fileName}\nAudio: ${failedJob.audioFile ?? '(không rõ)'}\nOutput: ${failedJob.outputPath ?? '(không rõ)'}\nGiai đoạn: ${failedJob.stage ?? 'không xác định'}\n${failedJob.repairHint ?? 'Cách xử lý: kiểm tra chi tiết FFmpeg bên trên, sửa file nguồn rồi chạy lại.'}`,
+    )
+  }
 
   if (outputCount === 0) {
     throw new Error(`Final export không tạo được video nào cho ngày ${dateCode}.`)
@@ -2178,20 +2309,27 @@ async function runExportVideoWithOptions(
     throw new Error(`Final export báo thành công nhưng file video bị thiếu hoặc rỗng: ${sample}${extra}.`)
   }
 
-  if (failedJobs.length > 0 || outputCount !== playlists.length) {
+  if (audioFailures.length > 0 || failedJobs.length > 0 || outputCount !== playlists.length) {
+    const audioFailureSample = audioFailures
+      .slice(0, MAX_SUMMARY_LOG_ITEMS)
+      .map((failure) => `${path.basename(failure.path)} [${failure.stage}]: ${failure.detail}`)
+      .join(' | ')
     const failureSample = failedJobs
       .slice(0, MAX_SUMMARY_LOG_ITEMS)
       .map((job: { fileName: string; error: string }) => `${job.fileName}: ${job.error}`)
       .join(' | ')
+    const failureParts = [audioFailureSample ? `Audio bị loại trước khi tạo job: ${audioFailureSample}` : '', failureSample].filter(Boolean)
     const failureSuffix =
       failedJobs.length > MAX_SUMMARY_LOG_ITEMS
         ? ` | ... và ${failedJobs.length - MAX_SUMMARY_LOG_ITEMS} job lỗi khác`
         : ''
-    const details = failureSample ? ` ${failureSample}${failureSuffix}` : ''
+    const details = failureParts.length > 0 ? ` ${failureParts.join(' | ')}${failureSuffix}` : ''
     throw new Error(
       `Final export chỉ tạo được ${outputCount}/${playlists.length} video cho ngày ${dateCode}.${details}`
     )
   }
+
+  return finalDonePayload
 }
 
 async function runAutopilotForDay(
@@ -2199,12 +2337,13 @@ async function runAutopilotForDay(
   index: number,
   config: AutopilotConfig,
   scan: ScanMusicResult,
-): Promise<void> {
+  reservedVideoClipIds: Set<string>,
+): Promise<AutopilotDayResult> {
   const { folders } = config
 
   // Pool tracking — set during video selection, used after export
   let _poolClipIds: string[] = []
-  let _poolFingerprint = ''
+  let executedDonePayload: FinalExportDonePayload | null = null
 
   const dateCode = resolveAutopilotDateCode(plan.dateCode)
 
@@ -2291,6 +2430,14 @@ async function runAutopilotForDay(
       })()
     : undefined
 
+  const openingTracks = scan.tracks.filter((track) => track.folderType === 'opening')
+  if (openingTracks.length > 0) {
+    const openingDurationSec = openingTracks.reduce((sum, track) => sum + track.duration, 0)
+    emitLog('info', `[Bước 2] Nhạc mở đầu: ${openingTracks.length} file (${formatDuration(Math.round(openingDurationSec))}) sẽ xoay vòng ở đầu mỗi playlist.`)
+  } else if (folders.openingMusicFolder) {
+    emitLog('warn', '[Bước 2] Không tìm thấy file nhạc hợp lệ trong thư mục nhạc mở đầu; tiếp tục không có opening.')
+  }
+
   const endingAudioPaths = Array.isArray(folders.endingAudioPaths)
     ? Array.from(new Set(folders.endingAudioPaths.filter(Boolean)))
     : []
@@ -2304,6 +2451,7 @@ async function runAutopilotForDay(
 
   const buildOptions: BuildPlaylistsOptions = {
     tracks: scan.tracks,
+    openingTracks,
     pinnedTrackIds: pinnedFromOverrides,
     endingTracks,
     playlistCount,
@@ -2338,6 +2486,10 @@ async function runAutopilotForDay(
   emitLog('info', `[Bước 2] Ngày ${dateCode}: Xuất ${playlists.length} playlist → audio... (${crossfadeLabel})`)
 
   const maxAudioExportAttempts = 2
+  const exportedAudioPaths: string[] = []
+  const exportedPlaylists: PlaylistDefinition[] = []
+  const exportedPlaylistIndexes: number[] = []
+  const skippedAudioPlaylists: SkippedAudioPlaylist[] = []
   for (let i = 0; i < playlists.length; i++) {
     throwIfCancelling()
 
@@ -2389,7 +2541,7 @@ async function runAutopilotForDay(
         audioHeartbeat.markActivity()
         // Thêm progress emitter để log real-time
         // Wrap with timeout to prevent indefinite hang from stuck FFmpeg
-        await withTimeout(
+        const audioExportResult = await withTimeout(
           exportPlaylistToFile(
             { ...req, signal: controller.signal } as ExportPlaylistRequest,
             (progress) => {
@@ -2415,6 +2567,44 @@ async function runAutopilotForDay(
           `Export audio playlist ${i + 1}/${playlists.length}`,
           () => { controller.abort() },
         )
+        if (!audioExportResult.success || !audioExportResult.outputPath) {
+          throw new Error(audioExportResult.error || `Export audio playlist ${i + 1} thất bại.`)
+        }
+        // Verify the returned output path, not a directory re-scan that can pick stale files.
+        const exportedAudioPath = audioExportResult.outputPath
+        if (!exportedAudioPath || !fs.existsSync(exportedAudioPath)) {
+          throw new Error(`Export audio playlist ${i + 1} báo thành công nhưng file output không tồn tại: ${exportedAudioPath || '(trống)'}`)
+        }
+        let actualAudioDurationSec = 0
+        try {
+          const probedAudio = await probeFile(exportedAudioPath)
+          actualAudioDurationSec = probedAudio.format?.duration ?? 0
+        } catch (probeError: any) {
+          throw new Error(`Không thể xác minh duration audio playlist ${i + 1}: ${exportedAudioPath}. Chi tiết: ${probeError?.message || String(probeError)}`)
+        }
+        const playlistDurationSec = pl.totalDurationSec
+        const renderedDurationSec = smoothTransitions
+          ? Math.max(0, pl.totalDurationSec - (crossfadeSec ?? 0) * Math.max(0, pl.tracks.length - 1))
+          : pl.totalDurationSec
+        const audioDurationDiffSec = Math.abs(actualAudioDurationSec - renderedDurationSec)
+        // AAC/MP4 duration metadata can differ by a few samples/frames after crossfade.
+        // Materially short output remains a per-playlist failure.
+        emitLog('info', `[Bước 2] Playlist ${i + 1}/${playlists.length}: path=${exportedAudioPath} | duration thực=${formatDuration(Math.round(actualAudioDurationSec))} | expected render=${formatDuration(Math.round(renderedDurationSec))} | playlist=${formatDuration(Math.round(playlistDurationSec))}`)
+        if (!isAutopilotAudioDurationValid(actualAudioDurationSec, renderedDurationSec)) {
+          skippedAudioPlaylists.push({
+            playlistIndex: i + 1,
+            outputPath: exportedAudioPath,
+            actualDurationSec: actualAudioDurationSec,
+            expectedDurationSec: renderedDurationSec,
+            reason: `Lệch ${formatDuration(Math.round(audioDurationDiffSec))}`,
+          })
+          emitLog('error', `[Bước 2] ${describeSkippedAudioPlaylist(skippedAudioPlaylists[skippedAudioPlaylists.length - 1])}`)
+          removeIncompleteAudioOutput(exportedAudioPath)
+          break
+        }
+        exportedAudioPaths.push(exportedAudioPath)
+        exportedPlaylists.push(pl)
+        exportedPlaylistIndexes.push(i)
         emitLog('info', `[Bước 2] ✓ Đã xuất xong playlist ${i + 1}/${playlists.length}: ${fileNameBase}.m4a`)
         // Verify the exported audio file actually exists
         const expectedAudioPath = path.join(audioDir, `${fileNameBase}.m4a`)
@@ -2430,7 +2620,15 @@ async function runAutopilotForDay(
         if (isCancelling || controller.signal.aborted) {
           throw err
         }
-        if (isFatalExportError(err)) {
+        const missingTracks = isMissingAudioFailure(err) ? findMissingPlaylistTracks(pl.tracks) : []
+        if (isFatalExportError(err) || missingTracks.length > 0) {
+          if (missingTracks.length > 0) {
+            throw new Error([
+              err?.message || String(err),
+              `File playlist hiện không còn tồn tại:\n${missingTracks.map((track) => `• ${track}`).join('\n')}`,
+              'Cách xử lý: kiểm tra ổ mạng hoặc sửa thư mục nhạc, sau đó bấm Sửa nhanh để quét lại và tạo playlist mới.',
+            ].join('\n'))
+          }
           throw err
         }
         emitLog('warn', `[Bước 2] Lỗi export playlist ${i + 1} (attempt ${attempt}/${maxAudioExportAttempts}): ${err?.message || err}`)
@@ -2456,6 +2654,14 @@ async function runAutopilotForDay(
   }
 
   if (isCancelling) return
+
+  if (exportedAudioPaths.length === 0) {
+    const details = skippedAudioPlaylists.map(describeSkippedAudioPlaylist).join('\n\n')
+    throw new Error(`Không có playlist audio nào đạt thời lượng tối thiểu để ghép video.\n${details}`)
+  }
+  if (skippedAudioPlaylists.length > 0) {
+    emitLog('warn', `[Bước 2] Đã bỏ qua ${skippedAudioPlaylists.length}/${playlists.length} playlist audio quá ngắn. Tiếp tục ghép video cho ${exportedAudioPaths.length} playlist đạt chuẩn.`)
+  }
 
   // Step 4: Final export videos (1-1 mapping audio-files vs video-files)
   // Khai báo videoPickPercent TRƯỚC KHI sử dụng
@@ -2504,13 +2710,17 @@ async function runAutopilotForDay(
     )
   }
 
-  if (selectedVideoPaths.length < playlists.length) {
+  if (hasLegacySequenceHistory()) {
+    emitLog('warn', '[VideoPool] Lịch sử sequence cũ chỉ có fingerprint prefix; sẽ không dùng để khẳng định full-sequence uniqueness. Các output mới được ghi full fingerprint.')
+  }
+
+  if (selectedVideoPaths.length < exportedAudioPaths.length) {
     throw new Error(
-      `Số video được chọn (${selectedVideoPaths.length}) ít hơn số playlist/audio (${playlists.length}). Hãy tăng tỉ lệ chọn hoặc bổ sung thêm video.`,
+      `Số video được chọn (${selectedVideoPaths.length}) ít hơn số playlist audio đạt chuẩn (${exportedAudioPaths.length}). Hãy tăng tỉ lệ chọn hoặc bổ sung thêm video.`,
     )
   }
 
-  await ensureVideoDiskSpaceEstimate(finalDir, selectedVideoPaths, playlists.length, 'Xuất video hoàn chỉnh (Autopilot)')
+  await ensureVideoDiskSpaceEstimate(finalDir, selectedVideoPaths, exportedAudioPaths.length, 'Xuất video hoàn chỉnh (Autopilot)')
 
   // ── Video Pool: sync + unique sequence ──────────────────────────────────────
   emitVerboseLog('info', `[Bước 3] Đang sync ${selectedVideoPaths.length} clip vào Video Pool...`)
@@ -2535,9 +2745,8 @@ async function runAutopilotForDay(
     // (poolResult.filePaths là cùng clips nhưng thứ tự LRU-shuffled unique)
     selectedVideoPaths = poolResult.filePaths
 
-    // Ghi lại pool info vào local vars để markClipsUsed sau khi export xong
+    // Keep candidate IDs only to restrict usage commits to this pool selection.
     _poolClipIds = poolResult.clipIds
-    _poolFingerprint = poolResult.fingerprint
 
     const stats = getPoolStats()
     emitVerboseLog('info',
@@ -2547,7 +2756,8 @@ async function runAutopilotForDay(
     )
   } catch (poolErr: any) {
     emitLog('warn', `[VideoPool] Lỗi pool (fallback về random): ${poolErr?.message}`)
-    // Fallback: shuffle random như cũ, không crash
+    if (poolErr?.name === 'VideoSequenceExhaustionError') throw poolErr
+    // Fallback: shuffle random chỉ khi pool I/O lỗi, không nuốt lỗi sequence trùng.
     for (let i = selectedVideoPaths.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1))
       ;[selectedVideoPaths[i], selectedVideoPaths[j]] = [selectedVideoPaths[j], selectedVideoPaths[i]]
@@ -2567,41 +2777,21 @@ async function runAutopilotForDay(
     emitVerboseLog('info', `[Bước 3]   - ${s.folder}: ${s.selectedFiles}/${s.totalFiles} video`)
   }
 
-  // Tạo danh sách audio paths theo đúng thứ tự playlists để đảm bảo mapping đúng
-  // Thay vì dùng folder (sẽ sort theo tên), dùng files với paths đã được sắp xếp đúng
-  // FIX BUG-6: Check cả .m4a và .aac — verify step (line 1869) đã check cả 2
-  // nhưng collect step chỉ check .m4a, nên .aac outputs bị drop gây length mismatch.
-  const audioPaths: string[] = []
-  for (let i = 0; i < playlists.length; i++) {
-    const fileNameBase = `${dateCode}_P${(i + 1).toString().padStart(2, '0')}`
-    const m4aPath = path.join(audioDir, `${fileNameBase}.m4a`)
-    const aacPath = path.join(audioDir, `${fileNameBase}.aac`)
-    if (fs.existsSync(m4aPath)) {
-      audioPaths.push(m4aPath)
-    } else if (fs.existsSync(aacPath)) {
-      audioPaths.push(aacPath)
-    } else {
-      console.warn(`[Autopilot] Audio file không tồn tại: ${m4aPath} (cả .aac cũng không có)`)
-    }
+  // Use paths returned and duration-verified by the export loop. Never re-scan a folder:
+  // old/partial files with the same Pxx name can otherwise be paired to the wrong video.
+  const audioPaths = exportedAudioPaths
+  const validPlaylists = exportedPlaylists
+  emitLog('info', `[Bước 3] Đã xác minh ${audioPaths.length}/${playlists.length} file audio theo đúng thứ tự playlists:`)
+  for (let i = 0; i < audioPaths.length; i++) {
+    const audioPath = audioPaths[i]
+    const expectedSec = validPlaylists[i]?.totalDurationSec ?? 0
+    const sourcePlaylistIndex = exportedPlaylistIndexes[i] ?? i
+    emitVerboseLog('info', `[Bước 3]   P${String(sourcePlaylistIndex + 1).padStart(2, '0')}: ${audioPath} | playlist=${formatDuration(Math.round(expectedSec))}`)
   }
-
-  // Validation: Kiểm tra số lượng audio files có khớp với số playlists không
-  if (audioPaths.length !== playlists.length) {
-    throw new Error(
-      `Số lượng audio files (${audioPaths.length}) không khớp với số playlists (${playlists.length}). Có thể một số playlist chưa được xuất thành công.`
-    )
-  }
-
-  if (audioPaths.length === 0) {
-    throw new Error(
-      'Không tìm thấy file audio nào trong thư mục xuất. Hãy kiểm tra lại quá trình xuất audio.'
-    )
-  }
-
-  emitVerboseLog('info', `[Bước 3] Đã tìm thấy ${audioPaths.length} file audio theo đúng thứ tự playlists`)
 
   const baseOutputName = buildBaseOutputNameFromPreset(plan.presetId)
-  
+  const validOutputNames = generateSimpleTitles(validPlaylists.length, baseOutputName, dateCode, overrides, plan.presetId)
+
   // Debug: Log overrides để kiểm tra customTitles
   if (overrides?.useCustomTitles) {
     emitVerboseLog('info', `[Bước 3] Debug: useCustomTitles=true, customTitles count=${overrides.customTitles?.length || 0}`)
@@ -2612,8 +2802,8 @@ async function runAutopilotForDay(
     emitVerboseLog('info', `[Bước 3] Debug: useCustomTitles=${overrides?.useCustomTitles || false}`)
   }
   
-  const outputNames = generateSimpleTitles(playlists.length, baseOutputName, dateCode, overrides, plan.presetId)
-  
+  const outputNames = validOutputNames
+
   // Debug: Log outputNames để kiểm tra kết quả
   if (outputNames.length > 0) {
     emitVerboseLog('info', `[Bước 3] Debug: outputNames[0]=${outputNames[0]}`)
@@ -2649,6 +2839,8 @@ async function runAutopilotForDay(
     normalizeAudio: false,
     tracklistAuto: !!overrides.generateTracklist,
     useGpuEncoding: config.runtimeOverrides?.finalExportUseGpuEncoding ?? 'auto',
+    // Autopilot may reuse footage across outputs; final-export picker still rotates clips and avoids adjacent repeats.
+    uniqueRequired: false,
     priorityVideoSource:
       config.folders.priorityVideoFolder && config.folders.priorityVideoFolder.trim().length > 0
         ? (() => {
@@ -2659,7 +2851,7 @@ async function runAutopilotForDay(
   }
 
   {
-    const step4Lines: string[] = [`[Bước 4] Ngày ${dateCode}: Xuất ${playlists.length} video hoàn chỉnh...`]
+    const step4Lines: string[] = [`[Bước 4] Ngày ${dateCode}: Xuất ${validPlaylists.length}/${playlists.length} video hoàn chỉnh...`]
     step4Lines.push(`  Output folder: ${finalDir}`)
     step4Lines.push(`  Request ID: ${requestId}`)
     step4Lines.push(`  Planned outputs: ${outputNames.length}`)
@@ -2712,20 +2904,32 @@ async function runAutopilotForDay(
     emitLogBlock('info', step4Lines)
   }
 
-  await runExportVideoWithOptions(
+  executedDonePayload = await runExportVideoWithOptions(
     jobRequest,
     dateCode,
-    playlists,
+    validPlaylists,
     config.runtimeOverrides?.gpuNormalizeMode || 'software',
+    reservedVideoClipIds,
   )
 
-  // ── Đánh dấu clips đã dùng trong Video Pool (sau khi export xong) ────────────
-  if (_poolClipIds.length > 0 && _poolFingerprint) {
+  // ── Đánh dấu clip thực sự xuất hiện trong playlist thành công ───────────────
+  if (executedDonePayload.videoSequences?.length) {
+    const actualSequences = executedDonePayload.videoSequences
+      .filter((sequence) => sequence.clipIds?.length)
+      .map((sequence) => ({ dateCode, clipIds: sequence.clipIds! }))
+    const emittedIds = actualSequences.flatMap((sequence) => sequence.clipIds)
+    for (const clipId of emittedIds) reservedVideoClipIds.add(clipId)
     try {
-      markClipsUsed(_poolClipIds, dateCode, _poolFingerprint)
-      emitVerboseLog('info', `[VideoPool] ✅ Đã ghi ${_poolClipIds.length} clip vào pool history (session: ${_poolFingerprint})`)
+      await recordOutputSequences(actualSequences)
+      await markClipIdsUsed(emittedIds)
+      emitVerboseLog('info', `[VideoPool] ✅ Đã ghi ${actualSequences.length} sequence output, ${emittedIds.length} clip occurrences.`)
     } catch (poolErr: any) {
       emitLog('warn', `[VideoPool] Không thể ghi pool history: ${poolErr?.message}`)
     }
+  }
+
+  return {
+    validAudioPlaylistCount: validPlaylists.length,
+    skippedAudioPlaylists,
   }
 }

@@ -11,6 +11,7 @@ import {
   getFriendlyAuthError,
   postJson,
   APP_VERSION,
+  isDevAuthBypassEnabled,
   writeEncryptedAuthState,
 } from '../authState'
 import {
@@ -518,6 +519,9 @@ export function registerAuthHandlers() {
 
   ipcMain.handle('auth:validateToken', async () => {
     const base = await getOrInitAuthState()
+    if (isDevAuthBypassEnabled() && base.status === 'allowed' && base.username === 'dev-local') {
+      return { valid: true, status: 'allowed', username: base.username }
+    }
     try {
       const stored = await readEncryptedAuthState()
       const persistedToken = stored?.token ?? stored?.deviceToken

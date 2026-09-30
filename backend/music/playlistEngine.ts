@@ -5,7 +5,7 @@ import { sortByLRU } from './musicPool'
 export interface PlaylistTrack extends ScannedTrack {
   order: number // vị trí trong playlist (1-based)
   cumulativeDuration: number // tổng thời lượng tính đến hết bài này (giây)
-  role?: 'ending'
+  role?: 'opening' | 'ending'
 }
 
 export interface PlaylistDefinition {
@@ -15,12 +15,21 @@ export interface PlaylistDefinition {
   totalDurationSec: number
   priorityDurationSec: number
   randomDurationSec: number
+  openingDurationSec?: number
+  openingCount?: number
   priorityCount: number
   randomCount: number
   endingDurationSec?: number
   endingCount?: number
   tracks: PlaylistTrack[]
   createdAt: number
+  genreId?: string
+  genreName?: string
+  genreSettings?: {
+    smoothTransitions: boolean
+    crossfadeDurationSec?: number
+    normalizeLoudness: boolean
+  }
 }
 
 export interface BuildPlaylistWarning {
@@ -43,22 +52,22 @@ export interface BuildPlaylistsOptions {
   targetDurationMinutes: number
   priorityRatioMin?: number // default 0.65
   priorityRatioMax?: number // default 0.8
+  openingTracks?: ScannedTrack[]
   endingTracks?: ScannedTrack[]
   /** Thời lượng crossfade (giây). Nếu có, target sẽ được inflate để sau crossfade vẫn đạt đủ thời lượng */
   crossfadeDurationSec?: number
+  /** Renderer batch flow: append instead of replacing previous genre playlists. */
+  replaceExisting?: boolean
+  genreId?: string
+  genreName?: string
+  genreSettings?: {
+    smoothTransitions: boolean
+    crossfadeDurationSec?: number
+    normalizeLoudness: boolean
+  }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-// Fisher-Yates shuffle
-function shuffle<T>(array: T[]): T[] {
-  const shuffled = [...array]
-  for (let i = shuffled.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1))
-    ;[shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]]
-  }
-  return shuffled
-}
 
 // Rotate array by offset (xoay vòng để mỗi playlist có thứ tự pinned khác nhau)
 function rotate<T>(array: T[], offset: number): T[] {
@@ -110,12 +119,19 @@ function buildSinglePlaylist(
   desiredPriorityMin: number,
   _desiredPriorityMax: number,
   allowReuse: boolean,
+  openingTrack: ScannedTrack | undefined,
   endingTracks: ScannedTrack[] = []
 ): PlaylistDefinition {
   const playlistTracks: PlaylistTrack[] = []
   const usedTrackIds = new Set<string>()
   let lastTrackId: string | null = null
   let currentTotalSec = 0
+  let currentBodySec = 0
+  if (openingTrack) {
+    const opening = pushTrack(playlistTracks, openingTrack, currentTotalSec, 'opening')
+    currentTotalSec = opening.cumulativeDuration
+    lastTrackId = openingTrack.id
+  }
   let currentPrioritySec = 0
   let currentRandomSec = 0
 
@@ -130,6 +146,7 @@ function buildSinglePlaylist(
   function add(track: ScannedTrack): void {
     const pt = pushTrack(playlistTracks, track, currentTotalSec)
     currentTotalSec = pt.cumulativeDuration
+    currentBodySec += track.duration
     lastTrackId = track.id
     if (!allowReuse) usedTrackIds.add(track.id)
     if (track.folderType === 'priority') {
@@ -189,39 +206,39 @@ function buildSinglePlaylist(
     const rotated = rotate(pinnedTracks, index * 3)
     for (const track of rotated) {
       if (canUse(track)) add(track)
-      if (currentTotalSec >= targetSec) break
+      if (currentBodySec >= targetSec) break
     }
   }
 
   // ── BƯỚC 2: Priority tracks cho đến khi đạt ngưỡng MIN ───────────────────
-  if (currentTotalSec < targetSec) {
+  if (currentBodySec < targetSec) {
     const priorityStart = priorityPool.length > 0 ? (index * 13) % priorityPool.length : 0
     drainPool(
       priorityPool,
       priorityStart,
-      () => currentTotalSec >= targetSec || currentPrioritySec >= desiredPriorityMin,
+      () => currentBodySec >= targetSec || currentPrioritySec >= desiredPriorityMin,
       maxCycles
     )
   }
 
   // ── BƯỚC 3: Random tracks cho đủ targetSec ───────────────────────────────
-  if (currentTotalSec < targetSec && randomPool.length > 0) {
+  if (currentBodySec < targetSec && randomPool.length > 0) {
     const randomStart = randomPool.length > 0 ? (index * 17) % randomPool.length : 0
     drainPool(
       randomPool,
       randomStart,
-      () => currentTotalSec >= targetSec,
+      () => currentBodySec >= targetSec,
       maxCycles
     )
   }
 
   // ── BƯỚC 4: Nếu vẫn thiếu, thêm priority (tránh vượt max nếu có thể) ────
-  if (currentTotalSec < targetSec && priorityPool.length > 0) {
+  if (currentBodySec < targetSec && priorityPool.length > 0) {
     drainPool(
       priorityPool,
       0,
       () => {
-        if (currentTotalSec >= targetSec) return true
+        if (currentBodySec >= targetSec) return true
         // Nếu chưa vượt max thì ok, nếu vượt rồi vẫn fill vì bước emergency
         return false
       },
@@ -230,12 +247,12 @@ function buildSinglePlaylist(
   }
 
   // ── BƯỚC 5 (Emergency fill): vẫn thiếu → dùng tất cả không giới hạn ──────
-  if (currentTotalSec < targetSec) {
+  if (currentBodySec < targetSec) {
     const allPool = [...priorityPool, ...randomPool]
     if (allPool.length > 0) {
       let fi = 0
       let fc = 0
-      while (currentTotalSec < targetSec && fc < 500) {
+      while (currentBodySec < targetSec && fc < 500) {
         const track = allPool[fi % allPool.length]
         if (track.id !== lastTrackId || allPool.length === 1) {
           add(track)
@@ -259,13 +276,18 @@ function buildSinglePlaylist(
   // ── Tính stats ────────────────────────────────────────────────────────────
   let finalPrioritySec = 0, finalRandomSec = 0
   let finalPriorityCount = 0, finalRandomCount = 0
+  let openingDurationSec = 0, openingCount = 0
   let endingDurationSec = 0, endingCount = 0
   let cumulative = 0
 
   for (const track of playlistTracks) {
     cumulative += track.duration
+    track.order = playlistTracks.indexOf(track) + 1
     track.cumulativeDuration = cumulative
-    if (track.role === 'ending' || endingIdSet.has(track.id)) {
+    if (track.role === 'opening') {
+      openingDurationSec += track.duration
+      openingCount++
+    } else if (track.role === 'ending' || endingIdSet.has(track.id)) {
       endingDurationSec += track.duration
       endingCount++
     } else if (track.folderType === 'priority') {
@@ -277,7 +299,7 @@ function buildSinglePlaylist(
     }
   }
 
-  const mainDurationSec = cumulative - endingDurationSec
+  const mainDurationSec = cumulative - openingDurationSec - endingDurationSec
 
   if (mainDurationSec < targetSec) {
     console.warn(`[PlaylistEngine] Playlist ${index + 1}: chỉ đạt ${mainDurationSec.toFixed(0)}s / ${targetSec}s trước nhạc thêm cuối. Thư viện không đủ bài.`)
@@ -290,6 +312,8 @@ function buildSinglePlaylist(
     totalDurationSec: cumulative,
     priorityDurationSec: finalPrioritySec,
     randomDurationSec: finalRandomSec,
+    openingDurationSec,
+    openingCount,
     priorityCount: finalPriorityCount,
     randomCount: finalRandomCount,
     endingDurationSec,
@@ -309,9 +333,16 @@ export function buildPlaylists(options: BuildPlaylistsOptions): BuildPlaylistsRe
     targetDurationMinutes,
     priorityRatioMin = 0.65,
     priorityRatioMax = 0.8,
+    openingTracks = [],
     endingTracks = [],
     crossfadeDurationSec,
   } = options
+
+  const uniqueOpeningTracks = openingTracks.filter((track, index, list) => {
+    if (!track?.path || !track.duration || track.duration <= 0) return false
+    const key = track.path.toLowerCase()
+    return list.findIndex(t => t.path?.toLowerCase() === key) === index
+  })
 
   if (playlistCount < 1) throw new Error('playlistCount must be >= 1')
   if (targetDurationMinutes <= 0) throw new Error('targetDurationMinutes must be > 0')
@@ -337,8 +368,9 @@ export function buildPlaylists(options: BuildPlaylistsOptions): BuildPlaylistsRe
     const key = track.path.toLowerCase()
     return list.findIndex(t => t.path?.toLowerCase() === key) === index
   })
+  const openingPathSet = new Set(uniqueOpeningTracks.map(t => t.path.toLowerCase()))
   const endingPathSet = new Set(uniqueEndingTracks.map(t => t.path.toLowerCase()))
-  const mainTracks = tracks.filter(t => !endingPathSet.has(t.path.toLowerCase()))
+  const mainTracks = tracks.filter(t => !openingPathSet.has(t.path.toLowerCase()) && !endingPathSet.has(t.path.toLowerCase()) && t.folderType !== 'opening')
   const pinnedTracks = mainTracks.filter(t => pinnedTrackIds.includes(t.id))
   const priorityTracks = mainTracks.filter(t => t.folderType === 'priority' && !pinnedTrackIds.includes(t.id))
   const randomTracks = mainTracks.filter(t => t.folderType === 'random' && !pinnedTrackIds.includes(t.id))
@@ -393,45 +425,64 @@ export function buildPlaylists(options: BuildPlaylistsOptions): BuildPlaylistsRe
   // ── Build từng playlist ───────────────────────────────────────────────────
   const playlists: PlaylistDefinition[] = []
   const playlistSignatures = new Set<string>()
+  const pinnedVariants = Math.max(1, pinnedTracks.length)
+  const priorityVariants = Math.max(1, priorityTracks.length)
+  const randomVariants = Math.max(1, randomTracks.length)
+  const rotationVariantCount = pinnedVariants * priorityVariants * randomVariants
+  const variantsPerPlaylist = Math.min(rotationVariantCount, playlistCount)
 
   for (let i = 0; i < playlistCount; i++) {
-    let playlist: PlaylistDefinition
-    let attempts = 0
+    let playlist: PlaylistDefinition | undefined
+    let signature = ''
 
-    do {
-      // Mỗi lần thử: shuffle lại trong tier (LRU order giữ nguyên, shuffle trong tier)
-      // Pinned: shuffle để đa dạng thứ tự nội bộ nhóm, rotate để mỗi playlist khác nhau
-      const pinnedShuffled = shuffle(pinnedTracks)
+    for (let variant = 0; variant < variantsPerPlaylist; variant++) {
+      // Enumerate independent group rotations so small pools use every available
+      // order variant before reporting that a unique signature is impossible.
+      const candidateVariant = i + variant
+      const pinnedForBuild = rotate(pinnedTracks, candidateVariant % pinnedVariants)
+      const priorityForBuild = rotate(
+        lruSortedPriority,
+        Math.floor(candidateVariant / pinnedVariants) % priorityVariants,
+      )
+      const randomForBuild = rotate(
+        lruSortedRandom,
+        Math.floor(candidateVariant / (pinnedVariants * priorityVariants)) % randomVariants,
+      )
 
-      // Priority và random: LRU sort (tier 0→1→2), rồi shuffle trong mỗi tier → đã làm trong sortByLRU()
-      // Để mỗi attempt khác nhau, shuffle lại
-      const priorityForBuild = attempts === 0 ? lruSortedPriority : shuffle(lruSortedPriority)
-      const randomForBuild   = attempts === 0 ? lruSortedRandom   : shuffle(lruSortedRandom)
-
-      playlist = buildSinglePlaylist(
+      const candidate = buildSinglePlaylist(
         i,
-        pinnedShuffled,
+        pinnedForBuild,
         priorityForBuild,
         randomForBuild,
         effectiveTargetSec,
         desiredPriorityMin,
         desiredPriorityMax,
         allowReuse,
+        uniqueOpeningTracks.length > 0 ? uniqueOpeningTracks[i % uniqueOpeningTracks.length] : undefined,
         uniqueEndingTracks
       )
 
-      const sig = playlist.tracks.map(t => t.id).join('|')
-      if (!playlistSignatures.has(sig)) {
-        playlistSignatures.add(sig)
+      const candidateSignature = candidate.tracks.map(t => t.id).join('|')
+      if (!playlistSignatures.has(candidateSignature)) {
+        playlist = candidate
+        signature = candidateSignature
         break
       }
+    }
 
-      attempts++
-    } while (attempts < 30)
+    if (!playlist) {
+      throw new Error(
+        `Không thể tạo đủ ${playlistCount} playlist có thứ tự bài hát khác nhau. ` +
+        `Thư viện hiện tại không có đủ biến thể thứ tự cho playlist ${i + 1}. ` +
+        `Giảm số playlist hoặc thêm bài hát rồi thử lại.`,
+      )
+    }
+
+    playlistSignatures.add(signature)
 
     // ── Cảnh báo per-playlist nếu tỷ lệ lệch nhiều ────────────────────────
     if (playlist.totalDurationSec > 0) {
-      const mainDurationSec = Math.max(playlist.totalDurationSec - (playlist.endingDurationSec ?? 0), 0)
+      const mainDurationSec = Math.max(playlist.totalDurationSec - (playlist.openingDurationSec ?? 0) - (playlist.endingDurationSec ?? 0), 0)
       const actualPct = mainDurationSec > 0 ? Math.round((playlist.priorityDurationSec / mainDurationSec) * 100) : 0
       const targetPct = Math.round(priorityRatioMin * 100)
 

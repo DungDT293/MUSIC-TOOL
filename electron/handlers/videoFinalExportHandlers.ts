@@ -6,7 +6,6 @@
 import { ipcMain, BrowserWindow, type WebContents } from 'electron'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
-import { randomUUID } from 'crypto'
 import { exportFinalVideo, scanAudioSource, scanVideoSource, scanImageSource } from '../../backend/video/finalExport'
 import { videoJobManager } from '../../backend/video/videoJobManager'
 import { jobQueue } from '../../backend/jobQueue/jobQueue'
@@ -15,17 +14,27 @@ import {
   VIDEO_FINAL_EXPORT_ERROR,
   VIDEO_FINAL_EXPORT_PROGRESS,
   VIDEO_FINAL_EXPORT_REQUEST,
+  VIDEO_FINAL_EXPORT_SCAN_AUDIO,
+  VIDEO_FINAL_EXPORT_SCAN_VIDEO,
+  VIDEO_FINAL_EXPORT_SCAN_IMAGE,
+  VIDEO_FINAL_EXPORT_CANCEL,
   type FinalExportRequestPayload,
   type FinalExportProgressPayload,
   type FinalExportDonePayload,
   type FinalExportErrorPayload,
 } from '../../shared/videoFinalExportChannels'
-import { getOrInitAuthState, isValidAbsolutePath } from '../authState'
+import { getOrInitAuthState, isAllowedAuthState, isValidAbsolutePath } from '../authState'
 import { confirmResourcesForVideoJob } from './systemHandlers'
 import { getLicenseServerBase } from '../../backend/licenseServerConfig'
-import { FinalExportRequestPayloadSchema } from '../../shared/ipcSchemas'
+import {
+  FinalExportRequestPayloadSchema,
+  FinalExportScanAudioSchema,
+  FinalExportScanImageSchema,
+  FinalExportScanVideoSchema,
+} from '../../shared/ipcSchemas'
 
 const finalExportJobHandles = new Map<string, { cancel: () => Promise<void> }>()
+let activeFinalExportOwner: string | null = null
 
 function sendIfAlive(webContents: WebContents, channel: string, payload: unknown): boolean {
   if (webContents.isDestroyed()) return false
@@ -38,6 +47,13 @@ function assertValidSourcePaths(source: { path?: string; paths?: string[] } | un
   const paths = [source.path, ...(source.paths ?? [])].filter((p): p is string => !!p)
   const invalid = paths.find((p) => !isValidAbsolutePath(p))
   if (invalid) throw new Error(`Invalid ${label} path: ${invalid}`)
+}
+
+async function requireAllowedAuth(): Promise<void> {
+  const state = await getOrInitAuthState()
+  if (!isAllowedAuthState(state)) {
+    throw new Error('Phiên đăng nhập không hợp lệ. Vui lòng đăng nhập lại trước khi sử dụng chức năng này.')
+  }
 }
 
 async function trackVideoExport(
@@ -95,35 +111,41 @@ async function trackVideoExport(
 }
 
 export function registerVideoFinalExportHandlers(getMainWindow: () => BrowserWindow | null) {
-  ipcMain.handle('video:final-export:scan-audio', async (_event, payload) => {
-    assertValidSourcePaths(payload?.audioSource, 'audio source')
-    try { return await scanAudioSource(payload) }
+  ipcMain.handle(VIDEO_FINAL_EXPORT_SCAN_AUDIO, async (_event, rawPayload) => {
+    await requireAllowedAuth()
+    const parsed = FinalExportScanAudioSchema.parse(rawPayload)
+    assertValidSourcePaths(parsed.audioSource, 'audio source')
+    try { return await scanAudioSource(parsed) }
     catch (err: any) { throw new Error(err?.message || 'Scan audio source failed') }
   })
 
-  ipcMain.handle('video:final-export:scan-video', async (_event, payload) => {
-    assertValidSourcePaths(payload?.videoSource, 'video source')
-    try { return await scanVideoSource(payload) }
+
+  ipcMain.handle(VIDEO_FINAL_EXPORT_SCAN_VIDEO, async (_event, rawPayload) => {
+    await requireAllowedAuth()
+    const parsed = FinalExportScanVideoSchema.parse(rawPayload)
+    assertValidSourcePaths(parsed.videoSource, 'video source')
+    try { return await scanVideoSource(parsed) }
     catch (err: any) { throw new Error(err?.message || 'Scan video source failed') }
   })
 
-  ipcMain.handle('video:final-export:scan-image', async (_event, payload) => {
-    assertValidSourcePaths(payload?.imageSource, 'image source')
-    try { return await scanImageSource(payload) }
+  ipcMain.handle(VIDEO_FINAL_EXPORT_SCAN_IMAGE, async (_event, rawPayload) => {
+    await requireAllowedAuth()
+    const parsed = FinalExportScanImageSchema.parse(rawPayload)
+    assertValidSourcePaths(parsed.imageSource, 'image source')
+    try { return await scanImageSource(parsed) }
     catch (err: any) { throw new Error(err?.message || 'Scan image source failed') }
   })
 
-  ipcMain.on(VIDEO_FINAL_EXPORT_REQUEST, (_event, rawPayload: FinalExportRequestPayload) => {
+  ipcMain.on(VIDEO_FINAL_EXPORT_REQUEST, (event, rawPayload: FinalExportRequestPayload) => {
     void (async () => {
       const parseResult = FinalExportRequestPayloadSchema.safeParse(rawPayload)
-      const payload = (parseResult.success ? parseResult.data : rawPayload) as FinalExportRequestPayload
-      const requestId = payload.requestId || randomUUID()
+      const requestId = typeof rawPayload?.requestId === 'string' ? rawPayload.requestId.trim() : ''
       try {
         if (!parseResult.success) {
           const detail = parseResult.error.issues.map((issue) => `${issue.path.join('.') || 'payload'}: ${issue.message}`).join('; ')
-          const mainWindow = getMainWindow()
-          if (mainWindow && !mainWindow.isDestroyed()) {
-            sendIfAlive(mainWindow.webContents, VIDEO_FINAL_EXPORT_ERROR, {
+          const recipient = event.sender.isDestroyed() ? getMainWindow()?.webContents : event.sender
+          if (recipient && !recipient.isDestroyed()) {
+            sendIfAlive(recipient, VIDEO_FINAL_EXPORT_ERROR, {
               requestId,
               error: `Payload xuất video không hợp lệ: ${detail}`,
               message: `Payload xuất video không hợp lệ: ${detail}`,
@@ -131,9 +153,37 @@ export function registerVideoFinalExportHandlers(getMainWindow: () => BrowserWin
           }
           return
         }
+        const payload = parseResult.data as FinalExportRequestPayload
+        try {
+          await requireAllowedAuth()
+        } catch (authError: any) {
+          const recipient = event.sender.isDestroyed() ? getMainWindow()?.webContents : event.sender
+          if (recipient && !recipient.isDestroyed()) {
+            const message = authError?.message || 'Phiên đăng nhập không hợp lệ. Vui lòng đăng nhập lại trước khi xuất video.'
+            sendIfAlive(recipient, VIDEO_FINAL_EXPORT_ERROR, {
+              requestId,
+              error: message,
+              message,
+            } satisfies FinalExportErrorPayload)
+          }
+          return
+        }
+        if (activeFinalExportOwner) {
+          const mainWindow = getMainWindow()
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            sendIfAlive(mainWindow.webContents, VIDEO_FINAL_EXPORT_ERROR, {
+              requestId,
+              error: 'Đã có một quy trình xuất video đang chạy. Vui lòng đợi hoàn thành hoặc hủy trước khi bắt đầu quy trình mới.',
+              message: 'Đã có một quy trình xuất video đang chạy. Vui lòng đợi hoàn thành hoặc hủy trước khi bắt đầu quy trình mới.',
+            } satisfies FinalExportErrorPayload)
+          }
+          return
+        }
+        activeFinalExportOwner = requestId
         const mainWindow = getMainWindow()
         if (!mainWindow || mainWindow.isDestroyed()) {
           console.error('[IPC] Main window not available for final export')
+          activeFinalExportOwner = null
           return
         }
 
@@ -143,6 +193,7 @@ export function registerVideoFinalExportHandlers(getMainWindow: () => BrowserWin
             error: 'Đường dẫn thư mục xuất video không hợp lệ.',
             message: 'Đường dẫn thư mục xuất video không hợp lệ.',
           } satisfies FinalExportErrorPayload)
+          activeFinalExportOwner = null
           return
         }
 
@@ -162,10 +213,21 @@ export function registerVideoFinalExportHandlers(getMainWindow: () => BrowserWin
             error: pathErr?.message || 'Đường dẫn nguồn không hợp lệ.',
             message: pathErr?.message || 'Đường dẫn nguồn không hợp lệ.',
           } satisfies FinalExportErrorPayload)
+          activeFinalExportOwner = null
           return
         }
 
-        const sender = mainWindow.webContents
+        const sender = event.sender.isDestroyed() ? mainWindow.webContents : event.sender
+        let queuedJobHandle: { cancel: () => Promise<void> } | null = null
+        const cancelIfOwnerDestroyed = () => {
+          if (queuedJobHandle) {
+            void queuedJobHandle.cancel()
+          } else if (activeFinalExportOwner === requestId) {
+            activeFinalExportOwner = null
+            videoJobManager.cancelJob(requestId)
+          }
+        }
+        sender.once('destroyed', cancelIfOwnerDestroyed)
         const existingJobs = jobQueue.getJobs()
         const runningFinalExport = existingJobs.find(
           (job) => job.type === 'video:final-export' && (job.status === 'running' || job.status === 'pending')
@@ -177,16 +239,37 @@ export function registerVideoFinalExportHandlers(getMainWindow: () => BrowserWin
             error: 'Đã có một quy trình xuất video đang chạy. Vui lòng đợi hoàn thành hoặc hủy trước khi bắt đầu quy trình mới.',
             message: 'Đã có một quy trình xuất video đang chạy. Vui lòng đợi hoàn thành hoặc hủy trước khi bắt đầu quy trình mới.',
           } satisfies FinalExportErrorPayload)
+          activeFinalExportOwner = null
+          sender.removeListener('destroyed', cancelIfOwnerDestroyed)
           return
         }
 
         const proceed = await confirmResourcesForVideoJob('final-export', payload.outputFolder)
+        try {
+          await requireAllowedAuth()
+        } catch (authError: any) {
+          if (activeFinalExportOwner === requestId) activeFinalExportOwner = null
+          sender.removeListener('destroyed', cancelIfOwnerDestroyed)
+          sendIfAlive(sender, VIDEO_FINAL_EXPORT_ERROR, {
+            requestId,
+            error: authError?.message || 'Phiên đăng nhập không hợp lệ. Vui lòng đăng nhập lại trước khi xuất video.',
+            message: authError?.message || 'Phiên đăng nhập không hợp lệ. Vui lòng đăng nhập lại trước khi xuất video.',
+          } satisfies FinalExportErrorPayload)
+          return
+        }
+        if (activeFinalExportOwner !== requestId || sender.isDestroyed()) {
+          if (activeFinalExportOwner === requestId) activeFinalExportOwner = null
+          sender.removeListener('destroyed', cancelIfOwnerDestroyed)
+          return
+        }
         if (!proceed) {
           sendIfAlive(sender, VIDEO_FINAL_EXPORT_ERROR, {
             requestId,
             error: 'Người dùng đã hủy xuất video sau cảnh báo tài nguyên.',
             message: 'Người dùng đã hủy xuất video sau cảnh báo tài nguyên.',
           } satisfies FinalExportErrorPayload)
+          activeFinalExportOwner = null
+          sender.removeListener('destroyed', cancelIfOwnerDestroyed)
           return
         }
 
@@ -195,7 +278,6 @@ export function registerVideoFinalExportHandlers(getMainWindow: () => BrowserWin
             sendIfAlive(sender, VIDEO_FINAL_EXPORT_PROGRESS, progressPayload)
           },
           done: async (donePayload: FinalExportDonePayload) => {
-            finalExportJobHandles.delete(requestId)
             sendIfAlive(sender, VIDEO_FINAL_EXPORT_DONE, donePayload)
             if (donePayload.outputs && donePayload.outputs.length > 0) {
               for (const output of donePayload.outputs) {
@@ -204,11 +286,12 @@ export function registerVideoFinalExportHandlers(getMainWindow: () => BrowserWin
             }
           },
           error: async (errorPayload: FinalExportErrorPayload) => {
-            finalExportJobHandles.delete(requestId)
             sendIfAlive(sender, VIDEO_FINAL_EXPORT_ERROR, errorPayload)
             await trackVideoExport('failed', errorPayload.message || errorPayload.error)
           },
         }
+
+        if (activeFinalExportOwner !== requestId) return
 
         const jobHandle = jobQueue.enqueue({
           type: 'video:final-export',
@@ -217,36 +300,32 @@ export function registerVideoFinalExportHandlers(getMainWindow: () => BrowserWin
             audioCount: payload.audioSource?.type === 'folder' ? 0 : (payload.audioSource?.paths?.length ?? 0),
             videoCount: payload.videoSource?.type === 'folder' ? 0 : (payload.videoSource?.paths?.length ?? 0),
           },
-          // FIX M14: Kill the FFmpeg process when the job is cancelled from UI.
-          // Without this, jobQueue.cancel() only aborts the AbortController but the
-          // FFmpeg child process spawned by exportFinalVideo() continues running in
-          // the background, consuming CPU/disk until it finishes on its own.
-          onCancel: () => {
-            videoJobManager.cancelJob(requestId)
-          },
+          onCancel: () => videoJobManager.cancelJob(requestId),
           task: async (ctx) => {
-            try {
-              await exportFinalVideo({ ...payload, requestId: requestId || ctx.jobId }, emitter)
-              return { success: true }
-            } catch (error: any) {
-              console.error('[IPC] Final export error:', error)
-              await emitter.error({
-                requestId: requestId || ctx.jobId,
-                error: error?.message || 'Xuất video thất bại.',
-                message: error?.message,
-              })
-              return { success: false, error: error?.message }
-            }
+            if (ctx.signal.aborted) throw new Error('Job cancelled before starting')
+            return exportFinalVideo({ ...payload, requestId }, emitter)
           },
         })
 
+        queuedJobHandle = jobHandle
         finalExportJobHandles.set(requestId, jobHandle)
-        jobHandle.result.catch((err) => {
-          console.error('[IPC] Final export job failed:', err)
-          finalExportJobHandles.delete(requestId)
-        })
+        jobHandle.result.then(
+          () => {
+            if (activeFinalExportOwner === requestId) activeFinalExportOwner = null
+            finalExportJobHandles.delete(requestId)
+            sender.removeListener('destroyed', cancelIfOwnerDestroyed)
+          },
+          (error: any) => {
+            console.error('[IPC] Final export job failed:', error)
+            if (activeFinalExportOwner === requestId) activeFinalExportOwner = null
+            finalExportJobHandles.delete(requestId)
+            sender.removeListener('destroyed', cancelIfOwnerDestroyed)
+          },
+        )
+        // Listener was attached before resource confirmation; no duplicate listener here.
       } catch (err: any) {
         console.error('[IPC] VIDEO_FINAL_EXPORT_REQUEST unhandled error:', err)
+        if (activeFinalExportOwner === requestId) activeFinalExportOwner = null
         const mainWindow = getMainWindow()
         if (mainWindow && !mainWindow.isDestroyed()) {
           sendIfAlive(mainWindow.webContents, VIDEO_FINAL_EXPORT_ERROR, {
@@ -259,7 +338,10 @@ export function registerVideoFinalExportHandlers(getMainWindow: () => BrowserWin
     })()
   })
 
-  ipcMain.handle('video:final-export:cancel', async (_event, requestId: string) => {
+  ipcMain.handle(VIDEO_FINAL_EXPORT_CANCEL, async (_event, requestId: string) => {
+    if (typeof requestId !== 'string' || requestId.trim().length === 0) {
+      return { success: false, error: 'Final export requestId không hợp lệ.' }
+    }
     try {
       const jobHandle = finalExportJobHandles.get(requestId)
       if (jobHandle) {
@@ -267,6 +349,7 @@ export function registerVideoFinalExportHandlers(getMainWindow: () => BrowserWin
         finalExportJobHandles.delete(requestId)
       }
       videoJobManager.cancelJob(requestId)
+      if (activeFinalExportOwner === requestId) activeFinalExportOwner = null
       return { success: true }
     } catch (err: any) {
       console.error('[IPC] Cancel final export error:', err)

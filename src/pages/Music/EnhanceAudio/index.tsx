@@ -17,6 +17,7 @@ import NoiseReductionPanel from './NoiseReductionPanel'
 import PresetsPanel from './PresetsPanel'
 import FileList from './FileList'
 import PreviewPlayer from './PreviewPlayer'
+import { applyPresetDefaults, type EnhanceAudioPresetSettings } from './presets'
 
 // ── Default settings ───────────────────────────────────────────────────────
 
@@ -91,18 +92,25 @@ export default function EnhanceAudioMain() {
 
   // ── Preset apply ─────────────────────────────────────────────────────────
 
-  const handleApplyPreset = useCallback((partial: Partial<{
-    eq: EQSettings; compressor: CompressorSettings; loudnorm: LoudnormSettings; stereo: StereoSettings;
-    noiseGate: NoiseGateSettings; limiter: LimiterSettings; exciter: ExciterSettings; noiseReduction: NoiseReductionSettings;
-  }>) => {
-    if (partial.eq) setEQ(partial.eq)
-    if (partial.compressor) setCompressor(partial.compressor)
-    if (partial.loudnorm) setLoudnorm(partial.loudnorm)
-    if (partial.stereo) setStereo(partial.stereo)
-    if (partial.noiseGate) setNoiseGate(partial.noiseGate)
-    if (partial.limiter) setLimiter(partial.limiter)
-    if (partial.exciter) setExciter(partial.exciter)
-    if (partial.noiseReduction) setNoiseReduction(partial.noiseReduction)
+  const handleApplyPreset = useCallback((partial: EnhanceAudioPresetSettings) => {
+    const next = applyPresetDefaults(partial, {
+      eq: DEFAULT_EQ,
+      compressor: DEFAULT_COMP,
+      loudnorm: DEFAULT_LOUD,
+      stereo: DEFAULT_STEREO,
+      noiseGate: DEFAULT_NOISE_GATE,
+      limiter: DEFAULT_LIMITER,
+      exciter: DEFAULT_EXCITER,
+      noiseReduction: DEFAULT_NOISE_REDUCTION,
+    })
+    setEQ(next.eq)
+    setCompressor(next.compressor)
+    setLoudnorm(next.loudnorm)
+    setStereo(next.stereo)
+    setNoiseGate(next.noiseGate)
+    setLimiter(next.limiter)
+    setExciter(next.exciter)
+    setNoiseReduction(next.noiseReduction)
   }, [])
 
   // ── File management ──────────────────────────────────────────────────────

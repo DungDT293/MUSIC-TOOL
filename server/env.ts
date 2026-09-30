@@ -23,7 +23,7 @@ export interface Env {
   WEBHOOK_URL?: string
 }
 
-export const DEFAULT_POLICY_VERSION = '4.4.3'
+export const DEFAULT_POLICY_VERSION = '4.5.2'
 export const DEFAULT_VERSION_POLICY = {
   latest_version: DEFAULT_POLICY_VERSION,
   min_supported_version: DEFAULT_POLICY_VERSION,

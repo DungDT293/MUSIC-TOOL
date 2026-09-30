@@ -6,6 +6,7 @@ import {
   type DayPresetId,
   type DayPlanDetailOverrides,
 } from '../AutopilotPage'
+import AutopilotVideoRepairActions from '../../components/AutopilotVideoRepairActions'
 
 /** Một batch = 1 thể loại nhạc với cấu hình riêng */
 interface BatchGenre {
@@ -17,6 +18,7 @@ interface BatchGenre {
   rootFinal: string
   priorityMusicFolder: string
   randomMusicFolder: string
+  openingMusicFolder: string
   priorityVideoFolder: string
   endingAudioPaths: string[]
   autoCreateDailySubfolder: boolean
@@ -79,6 +81,7 @@ function createDefaultBatch(): BatchGenre {
     rootFinal: '',
     priorityMusicFolder: '',
     randomMusicFolder: '',
+    openingMusicFolder: '',
     priorityVideoFolder: '',
     endingAudioPaths: [],
     autoCreateDailySubfolder: true,
@@ -100,6 +103,7 @@ function serializeBatchConfig(batches: BatchGenre[]) {
     rootFinal: batch.rootFinal,
     priorityMusicFolder: batch.priorityMusicFolder,
     randomMusicFolder: batch.randomMusicFolder,
+    openingMusicFolder: batch.openingMusicFolder,
     priorityVideoFolder: batch.priorityVideoFolder,
     endingAudioPaths: batch.endingAudioPaths,
     autoCreateDailySubfolder: batch.autoCreateDailySubfolder,
@@ -264,7 +268,7 @@ export default function BatchModeTab() {
               status: progress.status === 'error' ? 'error'
                 : progress.status === 'completed_with_errors' ? 'completed_with_errors'
                 : 'completed',
-              error: progress.error,
+              error: progress.error || progress.message || 'Không có chi tiết lỗi từ backend.',
               message: progress.message,
             }
           }))
@@ -499,6 +503,7 @@ export default function BatchModeTab() {
           autoCreateDailySubfolder: batch.autoCreateDailySubfolder,
           priorityMusicFolder: batch.priorityMusicFolder,
           randomMusicFolder: batch.randomMusicFolder,
+          openingMusicFolder: batch.openingMusicFolder,
           priorityVideoFolder: batch.priorityVideoFolder,
           endingAudioPaths: batch.endingAudioPaths,
           minVideoClipsTarget: clampNumberOrDefault(batch.minVideoClipsTarget, 1000, 100, 100000),
@@ -540,17 +545,19 @@ export default function BatchModeTab() {
 
         if (finalStatus?.status === 'error' || finalStatus?.status === 'cancelling') {
           hadErrors = true
-          setBatches(prev => prev.map((b, idx) => idx === batchIndex ? { ...b, status: 'error', error: finalStatus.error, message: finalStatus.message } : b))
-          addLog('error', `Batch "${batch.name}" kết thúc với lỗi.`)
+          const detail = finalStatus.error || finalStatus.message || 'Không có chi tiết lỗi từ backend.'
+          setBatches(prev => prev.map((b, idx) => idx === batchIndex ? { ...b, status: 'error', error: detail, message: finalStatus.message } : b))
+          addLog('error', `Batch "${batch.name}" lỗi chi tiết:\n${detail}`)
         } else if (finalStatus?.status === 'completed_with_errors') {
           hadPartials = true
+          const detail = finalStatus.error || finalStatus.message || 'Không có chi tiết lỗi từ backend.'
           setBatches(prev => prev.map((b, idx) => idx === batchIndex ? {
             ...b,
             status: 'completed_with_errors',
-            error: finalStatus.error,
+            error: detail,
             message: finalStatus.message,
           } : b))
-          addLog('warn', `Batch "${batch.name}" hoàn thành nhưng có lỗi.`)
+          addLog('error', `Batch "${batch.name}" có lỗi chi tiết:\n${detail}`)
         } else if (finalStatus?.status === 'completed') {
           setBatches(prev => prev.map((b, idx) => idx === batchIndex ? { ...b, status: 'completed', error: undefined, message: finalStatus.message } : b))
           addLog('info', `Batch "${batch.name}" hoàn thành!`)
@@ -576,14 +583,15 @@ export default function BatchModeTab() {
           break
         }
         hadErrors = true
-        addLog('error', `Batch "${batch.name}" exception: ${err?.message}`)
-        setBatches(prev => prev.map((b, idx) => idx === batchIndex ? { ...b, status: 'error', error: err?.message } : b))
+        const detail = err?.message || err?.error || String(err) || 'Không có chi tiết lỗi từ backend.'
+        addLog('error', `Batch "${batch.name}" exception chi tiết:\n${detail}`)
+        setBatches(prev => prev.map((b, idx) => idx === batchIndex ? { ...b, status: 'error', error: detail } : b))
         setRunProgress({
           status: 'error',
           currentStep: null,
           stepPercent: 0,
           message: `Batch "${batch.name}" bị exception.`,
-          error: err?.message,
+          error: detail,
           updatedAt: Date.now(),
         })
       }
@@ -618,6 +626,14 @@ export default function BatchModeTab() {
     setIsRunning(false)
     currentRunIndexRef.current = -1
     setCurrentRunIndex(-1)
+  }
+
+  const handleFixAndRetry = (batchIndex: number) => {
+    setBatches(prev => prev.map((batch, index) => index === batchIndex
+      ? { ...batch, status: 'pending', error: undefined, message: 'Đang quét lại thư mục và tạo playlist mới...' }
+      : batch))
+    setRunProgress(prev => ({ ...prev, status: 'idle', error: undefined, message: 'Đang chuẩn bị chạy lại batch sau khi quét lại nguồn.' }))
+    void runBatch(batchIndex)
   }
 
   const handleCancel = async () => {
@@ -791,7 +807,23 @@ export default function BatchModeTab() {
                     wordBreak: 'break-word',
                   }}
                 >
-                  {batch.message || batch.error}
+                  {batch.error || batch.message}
+                  {batch.status === 'error' && /nguyên nhân:|cách xử lý:|file nghi lỗi:|video nguồn cần kiểm tra:/i.test(batch.error || '') && (
+                    <button
+                      type="button"
+                      onClick={(event) => { event.stopPropagation(); handleFixAndRetry(idx) }}
+                      disabled={isRunning}
+                      style={{ marginTop: '8px', padding: '5px 10px', borderRadius: '4px', border: '1px solid #f59e0b', background: '#451a03', color: '#fde68a', cursor: isRunning ? 'not-allowed' : 'pointer', fontSize: '11px', fontWeight: 600 }}
+                    >
+                      Sửa nhanh: quét lại &amp; chạy lại
+                    </button>
+                  )}
+                  <AutopilotVideoRepairActions
+                    error={batch.error}
+                    rootVideo={batch.rootVideo}
+                    disabled={isRunning}
+                    onUseNormalizedRoot={(rootVideo) => handleUpdateBatch(batch.id, { rootVideo })}
+                  />
                 </div>
               )}
 
@@ -859,6 +891,7 @@ export default function BatchModeTab() {
                     ['rootFinal', 'Video hoàn chỉnh'],
                     ['priorityMusicFolder', 'Nhạc ưu tiên'],
                     ['randomMusicFolder', 'Nhạc random'],
+                    ['openingMusicFolder', 'Nhạc mở đầu (tùy chọn)'],
                     ['priorityVideoFolder', 'Video ưu tiên (tùy chọn)'],
                   ] as const).map(([field, label]) => (
                     <div key={field} style={{ display: 'flex', alignItems: 'flex-start', gap: '6px' }}>
@@ -1029,6 +1062,7 @@ export default function BatchModeTab() {
                       autoCreateDailySubfolder: batch.autoCreateDailySubfolder,
                       priorityMusicFolder: batch.priorityMusicFolder,
                       randomMusicFolder: batch.randomMusicFolder,
+                      openingMusicFolder: batch.openingMusicFolder,
                       priorityVideoFolder: batch.priorityVideoFolder,
                       endingAudioPaths: batch.endingAudioPaths,
                     }}

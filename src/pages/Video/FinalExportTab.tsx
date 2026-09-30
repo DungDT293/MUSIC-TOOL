@@ -338,8 +338,13 @@ function FinalExportTab() {
         )
 
         if (runningJob && mounted) {
-          console.log('[FinalExport] Found running job, restoring state:', runningJob.id)
-          setActiveRequestId(runningJob.id)
+          const requestId = typeof runningJob.payload?.requestId === 'string' ? runningJob.payload.requestId : null
+          if (!requestId) {
+            console.warn('[FinalExport] Running job has no requestId payload; cannot restore cancellation safely:', runningJob.id)
+            return
+          }
+          console.log('[FinalExport] Found running job, restoring state:', requestId)
+          setActiveRequestId(requestId)
           setIsExporting(true)
           
           if (runningJob.progress) {

@@ -43,7 +43,7 @@ export interface ProbeResult {
 /**
  * Probe file để lấy metadata (audio/video streams, format info)
  */
-export async function probeFile(filePath: string): Promise<ProbeResult> {
+export async function probeFile(filePath: string, signal?: AbortSignal, requestId?: string): Promise<ProbeResult> {
   // Kiểm tra file tồn tại
   if (!fs.existsSync(filePath)) {
     throw new Error(`File không tồn tại: ${filePath}`)
@@ -58,7 +58,7 @@ export async function probeFile(filePath: string): Promise<ProbeResult> {
   ]
 
   try {
-    const output = await runFfprobe(args)
+    const output = await runFfprobe(args, 30_000, { signal, requestId })
     
     if (!output || output.trim().length === 0) {
       throw new Error(`FFprobe returned empty output for: ${filePath}`)

@@ -5,6 +5,7 @@
  */
 
 import path from 'node:path'
+import { app } from 'electron'
 import { getDecryptedString } from '../backend/security/stringEncryption'
 import { createSignedHeaders } from '../backend/security/apiSigning'
 import { getMachineHash, hasMachineHashCacheFootprint } from '../backend/license/machineId'
@@ -68,8 +69,7 @@ export function isValidAbsolutePath(p: unknown): p is string {
     return true
   }
 
-  const resolved = path.resolve(p)
-  if (!path.isAbsolute(resolved)) return false
+  if (!path.isAbsolute(p)) return false
   return true
 }
 
@@ -152,6 +152,43 @@ export interface InternalAuthState {
   downloadUrl?: string
 }
 
+export function isAllowedAuthState(
+  state: InternalAuthState | null | undefined,
+): state is InternalAuthState & { status: 'allowed'; username: string; machineId: string } {
+  return state?.status === 'allowed' && !!state.username && !!state.machineId
+}
+
+function isLocalDevRenderer(): boolean {
+  if (app.isPackaged) return false
+  const rendererUrl = process.env.ELECTRON_RENDERER_URL
+  if (!rendererUrl) return false
+
+  try {
+    const url = new URL(rendererUrl)
+    return url.protocol === 'http:' && (url.hostname === 'localhost' || url.hostname === '127.0.0.1')
+  } catch {
+    return false
+  }
+}
+
+export function isDevAuthBypassEnabled(): boolean {
+  return isLocalDevRenderer()
+}
+
+function createDevAuthState(machineId: string): InternalAuthState {
+  return {
+    status: 'allowed',
+    username: 'dev-local',
+    machineId,
+    message: 'Development mode: local auth bypass active. No credential persisted.',
+    preferredView: 'login',
+  }
+}
+
+function hasExplicitStoredBlock(stored: any): boolean {
+  return stored?.status === 'blocked'
+}
+
 export let authState: InternalAuthState | null = null
 let _authStateInitPromise: Promise<InternalAuthState> | null = null
 
@@ -201,6 +238,11 @@ export async function getOrInitAuthState(): Promise<InternalAuthState> {
       }
 
       const stored = await readEncryptedAuthState()
+      if (isDevAuthBypassEnabled() && !hasExplicitStoredBlock(stored)) {
+        authState = createDevAuthState(currentMachineId)
+        return authState
+      }
+
       const hasStoredAllowedCredential = !!(stored?.password || stored?.token || stored?.deviceToken)
       if (stored && stored.remember && stored.status === 'allowed' && stored.username && hasStoredAllowedCredential) {
         authState = {

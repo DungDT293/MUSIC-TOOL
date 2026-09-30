@@ -6,7 +6,6 @@ import {
   ExportProgressPayload,
 } from '../../types/ipc'
 import { DiskSpaceErrorModal } from '../../components/DiskSpaceErrorModal'
-import NumericDraftInput from '../../components/NumericDraftInput'
 import type { ExportHistoryEntry } from '../../types/ipc'
 
 function formatDuration(seconds: number | undefined | null): string {
@@ -58,12 +57,9 @@ type AudioQuality = 'mp3_320' | 'aac_384'
 function ExportAudioPage() {
   const [playlists, setPlaylists] = useState<PlaylistDefinition[]>([])
   const [selectedPlaylistIds, setSelectedPlaylistIds] = useState<string[]>([])
-  const [outputDir, setOutputDir] = useState<string>('')
+  const [genreOutputDirs, setGenreOutputDirs] = useState<Record<string, string>>({})
   const [fileNamePrefix, setFileNamePrefix] = useState<string>('')
   const [quality, setQuality] = useState<AudioQuality>('aac_384')
-  const [smoothTransitions, setSmoothTransitions] = useState<boolean>(false)
-  const [crossfadeDuration, setCrossfadeDuration] = useState<string>('') // giây
-  const [normalizeLoudness, setNormalizeLoudness] = useState<boolean>(false)
   const [loading, setLoading] = useState<boolean>(false)
   const [progressText, setProgressText] = useState<string | null>(null)
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
@@ -98,12 +94,74 @@ function ExportAudioPage() {
   const cancelRequestedRef = useRef(false)
   const [selectedHistoryIdsToDelete, setSelectedHistoryIdsToDelete] = useState<Set<string>>(new Set()) // Các entry được chọn để xóa
   const [isDeletingHistory, setIsDeletingHistory] = useState(false) // Đang xóa lịch sử
+  const genreGroups = useMemo(() => {
+    const groups = new Map<string, { id: string; name: string; playlists: PlaylistDefinition[] }>()
+    for (const playlist of playlists) {
+      const id = playlist.genreId || 'legacy'
+      const existing = groups.get(id) || { id, name: playlist.genreName || 'Playlist cũ', playlists: [] }
+      existing.playlists.push(playlist)
+      groups.set(id, existing)
+    }
+    return Array.from(groups.values())
+  }, [playlists])
+
   const [validationResults, setValidationResults] = useState<Array<{
     playlistId: string
     playlistName: string
     issues: Array<{ trackPath: string; trackName: string; reason: string }>
   }> | null>(null)
   const [isValidating, setIsValidating] = useState(false)
+  const [playlistStatuses, setPlaylistStatuses] = useState<Record<string, 'pending' | 'running' | 'completed' | 'error'>>({})
+  const [playlistErrors, setPlaylistErrors] = useState<Record<string, string>>({})
+  const [activeGenreId, setActiveGenreId] = useState<string | null>(null)
+  const lastExportConfigRef = useRef<{ playlistIds: string[] } | null>(null)
+  const activeQueueRef = useRef<string[]>([])
+
+  const getPlaylistOutputDir = (playlist: PlaylistDefinition): string => genreOutputDirs[playlist.genreId || 'legacy'] || ''
+
+  const missingOutputGenres = useMemo(() => {
+    const groups = new Map<string, string>()
+    for (const playlist of playlists) {
+      const id = playlist.genreId || 'legacy'
+      groups.set(id, playlist.genreName || 'Playlist cũ')
+    }
+    return Array.from(groups.entries()).filter(([id]) => !genreOutputDirs[id])
+  }, [genreOutputDirs, playlists])
+
+  const selectedCrossfadePlaylists = useMemo(
+    () => playlists.filter((playlist) => selectedPlaylistIds.includes(playlist.id) && playlist.genreSettings?.smoothTransitions),
+    [playlists, selectedPlaylistIds],
+  )
+
+  const getGroupOutputDir = (groupId: string): string => genreOutputDirs[groupId] || ''
+
+  const allPlaylistsHaveOutputDirs = playlists.length > 0 && missingOutputGenres.length === 0
+
+  const handleSelectGenreOutputFolder = async (genreId: string) => {
+    try {
+      const dir = await window.api.selectFolder()
+      if (dir) {
+        setGenreOutputDirs((previous) => ({ ...previous, [genreId]: dir }))
+        setErrorMessage(null)
+      }
+    } catch (err) {
+      console.error('[ExportAudio] selectGenreOutputFolder error', err)
+      setErrorMessage('Không chọn được thư mục.')
+    }
+  }
+
+  const handleSelectHistoryOutputDir = async () => {
+    try {
+      const dir = await window.api.selectFolder()
+      if (dir) {
+        setHistoryOutputDir(dir)
+        setErrorMessage(null)
+      }
+    } catch (err) {
+      console.error('[ExportAudio] selectHistoryFolder error', err)
+      setErrorMessage('Không chọn được thư mục.')
+    }
+  }
 
   // Ref cho checkbox "Chọn tất cả" để set indeterminate
   const selectAllCheckboxRef = useRef<HTMLInputElement>(null)
@@ -143,6 +201,23 @@ const filteredHistory = useMemo(() => {
   if (!selectedDate) return []
   return historyByDate.get(selectedDate) || []
 }, [selectedDate, historyByDate])
+
+const filteredHistoryGroups = useMemo(() => {
+  const groups = new Map<string, { id: string; name: string; entries: ExportHistoryEntry[] }>()
+  for (const entry of filteredHistory) {
+    const playlist = playlists.find((item) => item.id === entry.playlistId)
+    const id = playlist?.genreId || 'legacy'
+    const name = playlist?.genreName || (id === 'legacy' ? 'Playlist cũ / không rõ thể loại' : 'Không rõ thể loại')
+    const group = groups.get(id) || { id, name, entries: [] }
+    group.entries.push(entry)
+    groups.set(id, group)
+  }
+  return Array.from(groups.values())
+}, [filteredHistory, playlists])
+
+const selectedHistoryEntry = selectedHistoryId ? history.find((entry) => entry.id === selectedHistoryId) : null
+const selectedHistoryPlaylist = selectedHistoryEntry ? playlists.find((playlist) => playlist.id === selectedHistoryEntry.playlistId) : null
+const selectedHistoryGenre = selectedHistoryPlaylist?.genreName || 'Playlist cũ / không rõ thể loại'
 
   // Set indeterminate state cho checkbox "Chọn tất cả"
   useEffect(() => {
@@ -329,34 +404,6 @@ const filteredHistory = useMemo(() => {
       if (unsubscribe) unsubscribe()
     }
   }, [currentPlaylistStartTime])
-
-  // Handle select folder
-  const handleSelectFolder = async () => {
-    try {
-      const dir = await window.api.selectFolder()
-      if (dir) {
-        setOutputDir(dir)
-        setErrorMessage(null)
-      }
-    } catch (err) {
-      console.error('[ExportAudio] selectFolder error', err)
-      setErrorMessage('Không chọn được thư mục.')
-    }
-  }
-
-  // Handle select history output directory
-  const handleSelectHistoryOutputDir = async () => {
-    try {
-      const dir = await window.api.selectFolder()
-      if (dir) {
-        setHistoryOutputDir(dir)
-        setErrorMessage(null)
-      }
-    } catch (err) {
-      console.error('[ExportAudio] selectHistoryFolder error', err)
-      setErrorMessage('Không chọn được thư mục.')
-    }
-  }
 
   // Load history when modal opens
   useEffect(() => {
@@ -555,6 +602,78 @@ const filteredHistory = useMemo(() => {
     )
   }
 
+  const runExportQueue = async (playlistIds: string[]) => {
+    if (playlistIds.length === 0) return
+    const queuedPlaylists = playlistIds.map((id) => playlists.find((item) => item.id === id)).filter((item): item is PlaylistDefinition => !!item)
+    if (queuedPlaylists.some((playlist) => !getPlaylistOutputDir(playlist))) {
+      setErrorMessage('Vui lòng chọn thư mục xuất cho từng thể loại trước khi chạy.')
+      return
+    }
+    cancelRequestedRef.current = false
+    activeQueueRef.current = playlistIds
+    lastExportConfigRef.current = { playlistIds }
+    setLoading(true)
+    setErrorMessage(null)
+    setSuccessMessage(null)
+    setProgressText(null)
+    setBatchStartTime(Date.now())
+    setCurrentSpeedX(null)
+    setRemainingSeconds(null)
+    setTotalExportCount(playlistIds.length)
+    const results: string[] = []
+    const errors: string[] = []
+    for (let i = 0; i < playlistIds.length; i++) {
+      if (cancelRequestedRef.current) break
+      const pl = playlists.find((item) => item.id === playlistIds[i])
+      if (!pl) continue
+      setCurrentExportIndex(i)
+      setActiveGenreId(pl.genreId || null)
+      setCurrentPlaylistStartTime(Date.now())
+      setCurrentSpeedX(null)
+      setRemainingSeconds(null)
+      setCurrentProgress({
+        playlistId: pl.id,
+        name: pl.name,
+        currentSec: 0,
+        totalSec: pl.totalDurationSec ?? 0,
+        percent: 0,
+      })
+      setProgressText(`Đang xuất playlist ${i + 1}/${playlistIds.length}: ${pl.name}`)
+      setPlaylistStatuses((prev) => ({ ...prev, [pl.id]: 'running' }))
+      const useCrossfade = pl.genreSettings?.smoothTransitions ?? false
+      const useLoudnorm = pl.genreSettings?.normalizeLoudness ?? false
+      const req: ExportPlaylistRequest = { playlistId: pl.id, outputDir: getPlaylistOutputDir(pl), fileName: `${fileNamePrefix.trim()}${sanitizeFileName(pl.name)}`, format: quality === 'mp3_320' ? 'mp3' : 'aac', bitrateKbps: quality === 'mp3_320' ? 320 : 384, smoothTransitions: useCrossfade, crossfadeDurationSec: useCrossfade ? Math.max(1, Math.min(10, pl.genreSettings?.crossfadeDurationSec ?? 4)) : undefined, normalizeLoudness: useLoudnorm, loudnessTargetLufs: useLoudnorm ? -14 : undefined }
+      try {
+        const res = await window.api.exportPlaylist({ ...req, currentIndex: i, totalCount: playlistIds.length } as any)
+        if (!res?.success || !res.outputPath) throw new Error(res?.error || 'Export playlist thất bại.')
+        results.push(res.outputPath)
+        setCurrentProgress((previous) => previous && previous.playlistId === pl.id ? { ...previous, currentSec: previous.totalSec, percent: 100 } : previous)
+        setPlaylistStatuses((prev) => ({ ...prev, [pl.id]: 'completed' }))
+      } catch (err: any) {
+        const message = err?.message || String(err)
+        errors.push(`${pl.name}: ${message}`)
+        setPlaylistStatuses((prev) => ({ ...prev, [pl.id]: 'error' }))
+        setPlaylistErrors((prev) => ({ ...prev, [pl.id]: message }))
+      }
+    }
+    setLoading(false)
+    setCurrentProgress(null)
+    setProgressText(null)
+    setCurrentPlaylistStartTime(null)
+    setCurrentSpeedX(null)
+    setRemainingSeconds(null)
+    setBatchStartTime(null)
+    setActiveGenreId(null)
+    if (results.length && queuedPlaylists.length > 0) setLastOutputDir(getPlaylistOutputDir(queuedPlaylists[queuedPlaylists.length - 1]) || null)
+    if (results.length) setSuccessMessage(`Đã xuất ${results.length}/${playlistIds.length} playlist.`)
+    if (errors.length) setErrorMessage(`Playlist lỗi:\n${errors.join('\n')}`)
+  }
+
+  const handleRetryFailed = () => {
+    const failed = Object.entries(playlistStatuses).filter(([, status]) => status === 'error').map(([id]) => id)
+    void runExportQueue(failed)
+  }
+
   // Handle export (batch)
   const handleExport = async () => {
     setErrorMessage(null)
@@ -567,8 +686,9 @@ const filteredHistory = useMemo(() => {
       setErrorMessage('Vui lòng chọn ít nhất 1 playlist.')
       return
     }
-    if (!outputDir) {
-      setErrorMessage('Vui lòng chọn thư mục xuất.')
+    const selectedPlaylistsForExport = playlists.filter((pl) => selectedPlaylistIds.includes(pl.id))
+    if (selectedPlaylistsForExport.some((playlist) => !getPlaylistOutputDir(playlist))) {
+      setErrorMessage('Vui lòng chọn thư mục xuất cho từng thể loại đã chọn.')
       return
     }
 
@@ -634,19 +754,16 @@ const filteredHistory = useMemo(() => {
 
         const req: ExportPlaylistRequest = {
           playlistId: pl.id,
-          outputDir,
+          outputDir: getPlaylistOutputDir(pl),
           fileName: baseName,
           format,
           bitrateKbps,
-          smoothTransitions,
-          crossfadeDurationSec:
-            smoothTransitions && crossfadeDuration.trim()
-              ? Math.max(1, Math.min(10, Number(crossfadeDuration) || 0))
-              : smoothTransitions
-                ? 4 // default 4s nếu bật nhưng không nhập
-                : undefined,
-          normalizeLoudness,
-          loudnessTargetLufs: normalizeLoudness ? -14 : undefined,
+          smoothTransitions: pl.genreSettings?.smoothTransitions ?? false,
+          crossfadeDurationSec: pl.genreSettings?.smoothTransitions
+            ? Math.max(1, Math.min(10, pl.genreSettings.crossfadeDurationSec ?? 4))
+            : undefined,
+          normalizeLoudness: pl.genreSettings?.normalizeLoudness ?? false,
+          loudnessTargetLufs: pl.genreSettings?.normalizeLoudness ? -14 : undefined,
         }
 
         try {
@@ -726,7 +843,7 @@ const filteredHistory = useMemo(() => {
 
       if (!cancelRequestedRef.current && results.length > 0) {
         setSuccessMessage(`Đã xuất ${results.length} playlist:\n${results.join('\n')}${summaryText}`)
-        setLastOutputDir(outputDir)
+        setLastOutputDir(getPlaylistOutputDir(selected[0]) || null)
         
         // Refresh lịch sử nếu modal đang mở
         if (historyVisible) {
@@ -764,7 +881,8 @@ const filteredHistory = useMemo(() => {
     }
   }
 
-  const invalidConfig = selectedPlaylistIds.length === 0 || !outputDir
+  const selectedPlaylistsForExport = playlists.filter((pl) => selectedPlaylistIds.includes(pl.id))
+  const invalidConfig = selectedPlaylistIds.length === 0 || selectedPlaylistsForExport.some((playlist) => !getPlaylistOutputDir(playlist))
 
   return (
     <div style={{ padding: '24px', height: '100%', display: 'flex', gap: '24px' }}>
@@ -817,8 +935,10 @@ const filteredHistory = useMemo(() => {
               Chưa có playlist nào. Hãy tạo playlist trước.
             </p>
           ) : (
-            playlists.map((pl) => {
+            playlists.map((pl, index) => {
               const isSelected = selectedPlaylistIds.includes(pl.id)
+              const previousGenre = playlists[index - 1]?.genreId
+              const showGenreHeader = !!pl.genreId && pl.genreId !== previousGenre
               const priorityPercent = pl.totalDurationSec > 0
                 ? ((pl.priorityDurationSec / pl.totalDurationSec) * 100).toFixed(1)
                 : '0.0'
@@ -827,6 +947,8 @@ const filteredHistory = useMemo(() => {
                 : '0.0'
 
               return (
+                <>
+                  {showGenreHeader && <div style={{ fontWeight: 700, color: '#2563eb', marginTop: '10px' }}>{pl.genreName}</div>}
                 <div
                   key={pl.id}
                   onClick={() => handleTogglePlaylist(pl.id)}
@@ -860,6 +982,7 @@ const filteredHistory = useMemo(() => {
                     </div>
                   </div>
                 </div>
+                </>
               )
             })
           )}
@@ -872,41 +995,17 @@ const filteredHistory = useMemo(() => {
           Xuất nhạc
         </h3>
 
-        {/* Thư mục xuất file */}
-        <div style={{ marginTop: '16px' }}>
-          <label style={{ display: 'block', marginBottom: '8px', fontWeight: '500' }}>
-            Thư mục xuất file
-          </label>
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-            <input
-              type="text"
-              readOnly
-              value={outputDir || 'Chưa chọn thư mục'}
-              style={{
-                flex: 1,
-                padding: '8px 12px',
-                border: '1px solid #ddd',
-                borderRadius: '4px',
-                backgroundColor: '#f5f5f5',
-                fontSize: '14px',
-              }}
-            />
-            <button
-              onClick={handleSelectFolder}
-              disabled={loading}
-              style={{
-                padding: '8px 16px',
-                backgroundColor: '#007acc',
-                color: '#fff',
-                border: 'none',
-                borderRadius: '4px',
-                cursor: loading ? 'not-allowed' : 'pointer',
-                fontSize: '14px',
-                opacity: loading ? 0.6 : 1,
-              }}
-            >
-              Chọn thư mục
-            </button>
+        <div style={{ marginTop: '16px', padding: '12px', border: '1px solid #dbeafe', borderRadius: '6px' }}>
+          <div style={{ fontWeight: 600 }}>Thư mục xuất theo thể loại</div>
+          <div style={{ marginTop: '4px', fontSize: '12px', color: '#666' }}>Crossfade và Loudnorm lấy từ Step 2 theo từng thể loại. Step 4 chỉ chọn nơi lưu.</div>
+          <div style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {genreGroups.map((group) => (
+              <div key={group.id} style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <strong style={{ minWidth: '120px', fontSize: '13px' }}>{group.name}</strong>
+                <input type="text" readOnly value={getGroupOutputDir(group.id) || 'Chưa chọn thư mục'} style={{ flex: 1, minWidth: 0, padding: '7px 10px', border: '1px solid #ddd', borderRadius: '4px', background: '#f5f5f5', fontSize: '12px' }} />
+                <button type="button" onClick={() => void handleSelectGenreOutputFolder(group.id)} disabled={loading} style={{ padding: '7px 10px', background: '#007acc', color: '#fff', border: 0, borderRadius: '4px', cursor: loading ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap' }}>Chọn thư mục</button>
+              </div>
+            ))}
           </div>
         </div>
 
@@ -959,67 +1058,8 @@ const filteredHistory = useMemo(() => {
           </div>
         </div>
 
-        {/* Chuyển bài mượt (crossfade) */}
-        <div style={{ marginTop: '12px' }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: '500' }}>
-            <input
-              type="checkbox"
-              checked={smoothTransitions}
-              onChange={(e) => setSmoothTransitions(e.target.checked)}
-              disabled={loading}
-            />
-            <span>Chuyển bài mượt (crossfade)</span>
-          </label>
-          <div style={{ marginTop: '8px', display: 'flex', gap: '8px', alignItems: 'center' }}>
-            <NumericDraftInput
-              min={1}
-              max={10}
-              step={0.5}
-              allowBlank
-              disabled={loading || !smoothTransitions}
-              value={crossfadeDuration === '' ? '' : Number(crossfadeDuration)}
-              onCommit={(value) => setCrossfadeDuration(value === '' ? '' : String(value))}
-              placeholder="Thời lượng crossfade (giây, mặc định 4s)"
-              style={{
-                flex: 1,
-                padding: '8px 12px',
-                border: '1px solid #ddd',
-                borderRadius: '4px',
-                fontSize: '14px',
-                backgroundColor: smoothTransitions ? '#fff' : '#f5f5f5',
-              }}
-            />
-            <span style={{ fontSize: '12px', color: '#666' }}>1-10s</span>
-          </div>
-          <div style={{ marginTop: '4px', fontSize: '12px', color: '#666' }}>
-            Nếu bật, các bài sẽ crossfade mượt mà với nhau. Để trống sẽ dùng mặc định 4s.
-          </div>
-        </div>
-
-        {/* Cân bằng âm lượng (Loudness Normalization) */}
-        <div style={{ marginTop: '12px' }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: '500' }}>
-            <input
-              type="checkbox"
-              checked={normalizeLoudness}
-              onChange={(e) => setNormalizeLoudness(e.target.checked)}
-              disabled={loading}
-            />
-            <span>Cân bằng âm lượng giữa các bài (Loudnorm)</span>
-          </label>
-          <div style={{ marginTop: '4px', fontSize: '12px', color: '#666' }}>
-            Tự động đồng đều âm lượng giữa tất cả các bài theo chuẩn EBU R128 (-14 LUFS = chuẩn YouTube/Spotify).
-            Bài to sẽ được giảm, bài nhỏ sẽ được tăng — đảm bảo không bị chênh lệch khi nghe liên tục.
-          </div>
-          {normalizeLoudness && (
-            <div style={{ marginTop: '4px', fontSize: '12px', color: '#f59e0b', fontStyle: 'italic' }}>
-              Lưu ý: Mỗi bài sẽ được xử lý riêng trước khi ghép, nên thời gian xuất sẽ lâu hơn bình thường.
-            </div>
-          )}
-        </div>
-
-        {/* Nút kiểm tra playlist (chỉ hiện khi crossfade bật) */}
-        {smoothTransitions && selectedPlaylistIds.length > 0 && (
+        {/* Nút kiểm tra playlist (chỉ hiện khi genre có crossfade) */}
+        {selectedCrossfadePlaylists.length > 0 && (
           <div style={{ marginTop: '16px' }}>
             <button
               onClick={async () => {
@@ -1032,11 +1072,9 @@ const filteredHistory = useMemo(() => {
                     setErrorMessage('API validatePlaylistsForCrossfade chưa sẵn sàng.')
                     return
                   }
-                  const crossfadeSec = smoothTransitions && crossfadeDuration.trim()
-                    ? Math.max(1, Math.min(10, Number(crossfadeDuration) || 4))
-                    : 4
+                  const crossfadeSec = Math.max(1, Math.min(10, selectedCrossfadePlaylists[0]?.genreSettings?.crossfadeDurationSec ?? 4))
                   const result = await api.music.validatePlaylistsForCrossfade({
-                    playlistIds: selectedPlaylistIds,
+                    playlistIds: selectedCrossfadePlaylists.map((playlist) => playlist.id),
                     crossfadeDurationSec: crossfadeSec,
                   })
                   setValidationResults(result.results || [])
@@ -1052,7 +1090,7 @@ const filteredHistory = useMemo(() => {
                   setIsValidating(false)
                 }
               }}
-              disabled={isValidating || loading || selectedPlaylistIds.length === 0}
+              disabled={isValidating || loading || selectedCrossfadePlaylists.length === 0}
               style={{
                 width: '100%',
                 padding: '10px 20px',
@@ -1111,8 +1149,38 @@ const filteredHistory = useMemo(() => {
           </div>
         )}
 
+        {/* Hàng đợi theo thể loại */}
+        {genreGroups.length > 0 && (
+          <div style={{ marginTop: '16px', padding: '10px', border: '1px solid #dbeafe', borderRadius: '6px', fontSize: '12px' }}>
+            <strong>Hàng đợi thể loại</strong>
+            {genreGroups.map((group) => {
+              const genreIds = group.playlists.map((playlist) => playlist.id)
+              const done = genreIds.filter((id) => playlistStatuses[id] === 'completed').length
+              const failed = genreIds.filter((id) => playlistStatuses[id] === 'error').length
+              return <div key={group.id} style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', marginTop: '6px' }}>
+                <span>{group.name}: {done}/{genreIds.length} xong{failed ? ` · ${failed} lỗi` : ''}{activeGenreId === group.id ? ' · đang chạy' : ''}</span>
+                <button type="button" disabled={loading || !getGroupOutputDir(group.id)} onClick={() => void runExportQueue(genreIds)} style={{ fontSize: '11px' }}>Xuất thể loại</button>
+              </div>
+            })}
+          </div>
+        )}
+
         {/* Nút xuất */}
-        <div style={{ marginTop: '20px' }}>
+        <div style={{ marginTop: '20px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          <button
+            onClick={() => void runExportQueue(playlists.map((playlist) => playlist.id))}
+            disabled={loading || !allPlaylistsHaveOutputDirs || playlists.length === 0}
+            style={{ padding: '12px 18px', backgroundColor: loading || !allPlaylistsHaveOutputDirs || playlists.length === 0 ? '#ccc' : '#16a34a', color: '#fff', border: 'none', borderRadius: '4px', cursor: loading || !allPlaylistsHaveOutputDirs || playlists.length === 0 ? 'not-allowed' : 'pointer', fontWeight: 'bold' }}
+          >
+            Chạy tất cả theo thể loại
+          </button>
+          <button
+            onClick={handleRetryFailed}
+            disabled={loading || !allPlaylistsHaveOutputDirs || !Object.values(playlistStatuses).some((status) => status === 'error')}
+            style={{ padding: '12px 18px', backgroundColor: loading || !allPlaylistsHaveOutputDirs || !Object.values(playlistStatuses).some((status) => status === 'error') ? '#ccc' : '#d97706', color: '#fff', border: 'none', borderRadius: '4px', cursor: loading || !allPlaylistsHaveOutputDirs || !Object.values(playlistStatuses).some((status) => status === 'error') ? 'not-allowed' : 'pointer', fontWeight: 'bold' }}
+          >
+            Thử lại playlist lỗi
+          </button>
           <button
             onClick={handleExport}
             disabled={loading || invalidConfig}
@@ -1294,6 +1362,11 @@ const filteredHistory = useMemo(() => {
             <p style={{ margin: 0, fontSize: '14px', whiteSpace: 'pre-line' }}>
               {errorMessage}
             </p>
+            {errorMessage.toLowerCase().includes('codec opus') && (
+              <div style={{ marginTop: '10px', paddingTop: '10px', borderTop: '1px solid #f5c6cb', fontSize: '13px' }}>
+                <strong>Cách xử lý nhanh:</strong> vào <strong>Quét nhạc → Chuẩn hóa audio</strong>, chọn định dạng <strong>AAC</strong>, xuất sang thư mục mới rồi quét/tạo lại playlist. Không chọn ghi đè file nguồn.
+              </div>
+            )}
           </div>
         )}
 
@@ -1322,18 +1395,40 @@ const filteredHistory = useMemo(() => {
                 background: '#fff',
                 padding: '20px',
                 borderRadius: '8px',
-                width: '700px',
-                maxHeight: '80vh',
-                overflow: 'auto',
+                width: 'min(1100px, calc(100vw - 40px))',
+                maxHeight: '90vh',
+                overflow: 'hidden',
+                display: 'flex',
+                flexDirection: 'column',
                 position: 'relative',
                 color: '#000',
               }}
               onClick={(e) => e.stopPropagation()}
             >
               <h3 style={{ marginTop: 0 }}>Lịch sử playlist đã xuất</h3>
-              <div style={{ display: 'flex', gap: '12px', alignItems: 'stretch' }}>
+              <div style={{ display: 'flex', gap: '12px', alignItems: 'stretch', minHeight: 0, flex: 1, overflow: 'hidden' }}>
                 {/* Cột ngày */}
-                <div style={{ width: '180px', borderRight: '1px solid #ddd', paddingRight: '8px', overflowY: 'auto', maxHeight: '60vh' }}>
+                <div style={{ width: '190px', flexShrink: 0, borderRight: '1px solid #ddd', paddingRight: '8px', overflowY: 'auto', maxHeight: '60vh' }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const selectAll = selectedDatesForDownload.size !== historyDates.length
+                      const nextDates = selectAll ? new Set(historyDates) : new Set<string>()
+                      const nextIds = new Set(selectedHistoryIdsToDelete)
+                      for (const date of historyDates) {
+                        for (const entry of historyByDate.get(date) || []) {
+                          if (selectAll) nextIds.add(entry.id)
+                          else nextIds.delete(entry.id)
+                        }
+                      }
+                      setSelectedDatesForDownload(nextDates)
+                      setSelectedHistoryIdsToDelete(nextIds)
+                    }}
+                    disabled={historyDates.length === 0}
+                    style={{ width: '100%', padding: '7px 8px', marginBottom: '8px', fontSize: '12px', background: '#f0f0f0', border: '1px solid #ccc', borderRadius: '5px', cursor: historyDates.length === 0 ? 'not-allowed' : 'pointer' }}
+                  >
+                    {selectedDatesForDownload.size === historyDates.length && historyDates.length > 0 ? 'Bỏ chọn tất cả ngày' : 'Chọn tất cả ngày'}
+                  </button>
                   {historyDates.length === 0 && <div>Chưa có lịch sử.</div>}
                   {historyDates.map((d) => (
                     <div
@@ -1434,80 +1529,82 @@ const filteredHistory = useMemo(() => {
                         </button>
                       </div>
                     )}
-                    <div style={{ maxHeight: '50vh', overflow: 'auto' }}>
+                    <div style={{ maxHeight: '42vh', overflowY: 'auto', paddingRight: '4px' }}>
                       {filteredHistory.length === 0 && <div>Chọn ngày để xem playlist đã xuất.</div>}
-                      {filteredHistory.map((h) => (
-                      <div
-                        key={h.id}
-                        style={{
-                          padding: '8px',
-                          marginBottom: '6px',
-                          border: '1px solid #ccc',
-                          borderRadius: '6px',
-                          background: selectedHistoryId === h.id ? '#e6f7ff' : '#fafafa',
-                          display: 'flex',
-                          alignItems: 'flex-start',
-                          gap: '8px',
-                        }}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={selectedHistoryIdsToDelete.has(h.id)}
-                          onChange={(e) => {
-                            e.stopPropagation()
-                            const newSet = new Set(selectedHistoryIdsToDelete)
-                            const entryDate = new Date(h.exportedAt).toLocaleDateString()
-                            
-                            if (e.target.checked) {
-                              // Chọn playlist → tự động chọn ngày của playlist đó
-                              newSet.add(h.id)
-                              const newDateSet = new Set(selectedDatesForDownload)
-                              newDateSet.add(entryDate)
-                              setSelectedDatesForDownload(newDateSet)
-                            } else {
-                              // Bỏ chọn playlist → bỏ chọn ngày nếu không còn playlist nào trong ngày đó được chọn
-                              newSet.delete(h.id)
-                              const entriesInDate = historyByDate.get(entryDate) || []
-                              const hasOtherSelected = entriesInDate.some(e => e.id !== h.id && newSet.has(e.id))
-                              if (!hasOtherSelected) {
-                                const newDateSet = new Set(selectedDatesForDownload)
-                                newDateSet.delete(entryDate)
-                                setSelectedDatesForDownload(newDateSet)
-                              }
-                            }
-                            setSelectedHistoryIdsToDelete(newSet)
-                          }}
-                          onClick={(e) => e.stopPropagation()}
-                          style={{ cursor: 'pointer', marginTop: '2px', flexShrink: 0 }}
-                        />
-                        <div
-                          onClick={() => setSelectedHistoryId(h.id)}
-                          style={{
-                            flex: 1,
-                            cursor: 'pointer',
-                          }}
-                        >
-                          <div style={{ fontWeight: 600 }}>{h.playlistName}</div>
-                          <div style={{ fontSize: '12px', color: '#666' }}>
-                            Xuất lúc: {new Date(h.exportedAt).toLocaleString()}
-                          </div>
-                          <div style={{ fontSize: '12px', color: '#666' }}>File: {h.outputPath}</div>
-                        </div>
-                      </div>
-                      ))}
+                      {filteredHistoryGroups.map((group) => {
+                        const selectedInGroup = group.entries.filter((entry) => selectedHistoryIdsToDelete.has(entry.id)).length
+                        return (
+                          <section key={group.id} style={{ marginBottom: '12px', border: '1px solid #dbeafe', borderRadius: '7px', overflow: 'hidden' }}>
+                            <div style={{ padding: '8px 10px', background: '#eff6ff', color: '#1d4ed8', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <strong>{group.name}</strong>
+                              <span style={{ fontSize: '12px' }}>{selectedInGroup > 0 ? `${selectedInGroup}/` : ''}{group.entries.length} playlist</span>
+                            </div>
+                            <div style={{ padding: '6px' }}>
+                              {group.entries.map((h) => (
+                                <div
+                                  key={h.id}
+                                  style={{
+                                    padding: '8px',
+                                    marginBottom: '6px',
+                                    border: '1px solid #ccc',
+                                    borderRadius: '6px',
+                                    background: selectedHistoryId === h.id ? '#e6f7ff' : '#fafafa',
+                                    display: 'flex',
+                                    alignItems: 'flex-start',
+                                    gap: '8px',
+                                  }}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={selectedHistoryIdsToDelete.has(h.id)}
+                                    onChange={(e) => {
+                                      e.stopPropagation()
+                                      const newSet = new Set(selectedHistoryIdsToDelete)
+                                      const entryDate = new Date(h.exportedAt).toLocaleDateString()
+                                      if (e.target.checked) {
+                                        newSet.add(h.id)
+                                        const newDateSet = new Set(selectedDatesForDownload)
+                                        newDateSet.add(entryDate)
+                                        setSelectedDatesForDownload(newDateSet)
+                                      } else {
+                                        newSet.delete(h.id)
+                                        const entriesInDate = historyByDate.get(entryDate) || []
+                                        const hasOtherSelected = entriesInDate.some((entry) => entry.id !== h.id && newSet.has(entry.id))
+                                        if (!hasOtherSelected) {
+                                          const newDateSet = new Set(selectedDatesForDownload)
+                                          newDateSet.delete(entryDate)
+                                          setSelectedDatesForDownload(newDateSet)
+                                        }
+                                      }
+                                      setSelectedHistoryIdsToDelete(newSet)
+                                    }}
+                                    onClick={(e) => e.stopPropagation()}
+                                    style={{ cursor: 'pointer', marginTop: '2px', flexShrink: 0 }}
+                                  />
+                                  <div onClick={() => setSelectedHistoryId(h.id)} style={{ flex: 1, cursor: 'pointer', minWidth: 0 }} title={h.outputPath}>
+                                    <div style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{h.playlistName}</div>
+                                    <div style={{ fontSize: '12px', color: '#666' }}>Xuất lúc: {new Date(h.exportedAt).toLocaleString()}</div>
+                                    <div style={{ fontSize: '12px', color: '#888', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>File: {h.outputPath.split(/[/\\\\]/).pop()}</div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </section>
+                        )
+                      })}
                     </div>
                   </div>
 
-                  {selectedHistoryId && (
+                  {selectedHistoryEntry && (
                     <div style={{ marginTop: '12px', maxHeight: '200px', overflow: 'auto' }}>
-                      <div style={{ fontWeight: 600, marginBottom: '6px' }}>Tracklist:</div>
-                      {history
-                        .find((h) => h.id === selectedHistoryId)
-                        ?.tracks.map((t, idx) => (
-                          <div key={idx} style={{ fontSize: '12px', marginBottom: '4px' }}>
-                            {formatSecondsHMS(t.startSec)} - {t.name}
-                          </div>
-                        ))}
+                      <div style={{ fontWeight: 600, marginBottom: '6px' }}>
+                        Tracklist: {selectedHistoryEntry.playlistName} <span style={{ color: '#666', fontWeight: 400 }}>· {selectedHistoryGenre}</span>
+                      </div>
+                      {selectedHistoryEntry.tracks.map((t, idx) => (
+                        <div key={idx} style={{ fontSize: '12px', marginBottom: '4px' }}>
+                          {formatSecondsHMS(t.startSec)} - {t.name}
+                        </div>
+                      ))}
                     </div>
                   )}
                 </div>

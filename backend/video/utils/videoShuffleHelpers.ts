@@ -195,6 +195,13 @@ export function buildPlaylistToFillDuration(
       } else {
         currentClips = [...clips]
       }
+      const previousClipId = playlist.at(-1)?.id
+      if (previousClipId && currentClips.length > 1 && currentClips[0]?.id === previousClipId) {
+        const replacementIndex = currentClips.findIndex((candidate) => candidate.id !== previousClipId)
+        if (replacementIndex > 0) {
+          ;[currentClips[0], currentClips[replacementIndex]] = [currentClips[replacementIndex], currentClips[0]]
+        }
+      }
       clipIndex = 0
       reshuffleCount++
     }

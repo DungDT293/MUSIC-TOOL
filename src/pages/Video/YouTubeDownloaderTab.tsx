@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import NumericDraftInput from '../../components/NumericDraftInput';
 import {
+  SpotifyMetadataResult,
   YouTubeQuality,
   YouTubeVideoInfo,
   YouTubeDownloadProgress,
@@ -8,6 +9,7 @@ import {
   YouTubeDownloadVideoRequest
 } from '../../types/ipc';
 import './YouTubeDownloaderTab.css';
+import { createQueueVideoRequest } from './queueDownloadRequest';
 
 const URL_CANDIDATE_REGEX = /(?:https?:\/\/|www\.)[^\s<>"'`]+/gi;
 const TRAILING_URL_PUNCTUATION = /[)\]}.,;:!?]+$/;
@@ -96,6 +98,75 @@ export function YouTubeDownloaderTab() {
   } | null>(null);
   
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
+  const [spotifyUrl, setSpotifyUrl] = useState('');
+  const [spotifyResult, setSpotifyResult] = useState<SpotifyMetadataResult | null>(null);
+  const [spotifyLoading, setSpotifyLoading] = useState(false);
+  const [spotifyError, setSpotifyError] = useState<string | null>(null);
+  const [spotifyAudioLoading, setSpotifyAudioLoading] = useState(false);
+  const [spotifyZip, setSpotifyZip] = useState(true);
+
+  const handleSpotifyImport = async () => {
+    const value = spotifyUrl.trim();
+    if (!value) {
+      setSpotifyError('Vui lòng nhập Spotify URL.');
+      return;
+    }
+    setSpotifyLoading(true);
+    setSpotifyError(null);
+    setSpotifyResult(null);
+    try {
+      const response = await window.api.music.spotifyImport({ url: value });
+      setSpotifyResult(response);
+      if (!response.success) setSpotifyError(`${response.error.message} Playlist phải công khai và Spotify phải trả metadata.`);
+    } catch (error) {
+      setSpotifyError(error instanceof Error ? error.message : 'Không thể nhập metadata Spotify.');
+    } finally {
+      setSpotifyLoading(false);
+    }
+  };
+
+  const handleSpotifyAudioDownload = async () => {
+    if (!spotifyResult?.success || !outputDir) {
+      setSpotifyError('Nhập metadata Spotify và chọn thư mục lưu trước.');
+      return;
+    }
+    setSpotifyAudioLoading(true);
+    setSpotifyError(null);
+    setError(null);
+    try {
+      const response = await window.api.youtube.downloadSpotify({
+        tracks: spotifyResult.tracks,
+        outputDir,
+        audioFormat: 'mp3',
+        createZip: spotifyZip,
+        cookiesFile: useCookiesFromBrowser && cookiesBrowser === 'file' ? cookiesFilePath || undefined : undefined,
+        cookiesFromBrowser: useCookiesFromBrowser && cookiesBrowser !== 'file' ? cookiesBrowser as any : undefined,
+      });
+      if (!response.success || !response.result) {
+        setSpotifyError(response.error || 'Không thể tải playlist Spotify.');
+        return;
+      }
+      const failedCount = response.result.failed.length;
+      setDownloadResult({
+        downloaded: response.result.downloaded,
+        failed: response.result.failed.map((item) => ({
+          video: {
+            id: item.track.id,
+            title: item.track.name,
+            duration: Math.round((item.track.durationMs || 0) / 1000),
+            thumbnail: '', description: '', uploader: item.track.artists.join(', '),
+            uploadDate: '', viewCount: 0, likeCount: 0, width: 0, height: 0, formats: [],
+          },
+          error: item.error,
+        })),
+      });
+      if (response.result.zipPath) setSpotifyError(`Đã tạo ZIP: ${response.result.zipPath}${failedCount ? `; lỗi ${failedCount} bài.` : ''}`);
+    } catch (error) {
+      setSpotifyError(error instanceof Error ? error.message : 'Không thể tải playlist Spotify.');
+    } finally {
+      setSpotifyAudioLoading(false);
+    }
+  };
 
   // ── Download Queue (Sprint 2.2) ──────────────────────────────────────────
   interface QueueItem {
@@ -108,7 +179,15 @@ export function YouTubeDownloaderTab() {
   }
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [queueRunning, setQueueRunning] = useState(false);
+  const queueCancelRequestedRef = useRef(false);
   const [queueUrlInput, setQueueUrlInput] = useState('');
+  const [queueAudioOnly, setQueueAudioOnly] = useState(false);
+  const [queueAudioFormat, setQueueAudioFormat] = useState<'mp3' | 'wav'>('mp3');
+
+  const queueAudioSettings = {
+    audioOnly: queueAudioOnly,
+    audioFormat: queueAudioFormat,
+  } as const;
   const queueRef = useRef<QueueItem[]>([]);
   queueRef.current = queue;
   
@@ -409,6 +488,14 @@ export function YouTubeDownloaderTab() {
   };
   
   const handleCancelDownload = async () => {
+    if (queueRunning) {
+      queueCancelRequestedRef.current = true;
+      await window.api.youtube.cancelDownload();
+      setShowCancelConfirm(false);
+      setError('Đang hủy Queue...');
+      return;
+    }
+
     if (!showCancelConfirm) {
       setShowCancelConfirm(true);
       return;
@@ -445,6 +532,7 @@ export function YouTubeDownloaderTab() {
   const handleRunQueue = async () => {
     if (queueRunning) return;
     if (!outputDir) { setError('Vui lòng chọn thư mục lưu trước khi chạy queue!'); return; }
+    queueCancelRequestedRef.current = false;
     setQueueRunning(true);
     setIsDownloading(true);
     setError(null);
@@ -454,19 +542,24 @@ export function YouTubeDownloaderTab() {
 
     const items = queueRef.current;
     try {
-      for (let i = 0; i < items.length; i++) {
-        const item = items[i];
+      for (const item of items) {
+        if (queueCancelRequestedRef.current) break;
         if (item.status !== 'pending') continue;
 
         setQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'running', error: undefined } : q));
 
         try {
           const validation = await window.api.youtube.validateUrl(item.url);
+          if (queueCancelRequestedRef.current) {
+            setQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'error', error: 'Đã hủy' } : q));
+            break;
+          }
           if (!validation.success || !validation.isValid) {
             throw new Error(validation.error || 'URL không hợp lệ');
           }
 
           const cookiesFromBrowser = useCookiesFromBrowser && cookiesBrowser !== 'file' ? cookiesBrowser as any : undefined;
+          let itemError: string | null = null;
 
           if (validation.type === 'channel' || validation.type === 'playlist') {
             const result = await window.api.youtube.downloadChannel({
@@ -479,44 +572,53 @@ export function YouTubeDownloaderTab() {
                 limit: channelLimit,
                 continueOnError,
                 concurrent: false,
-                audioOnly,
-                audioFormat,
+                ...queueAudioSettings,
                 cookiesFromBrowser,
                 minDurationSeconds: minDuration ? minDuration * 60 : undefined,
               },
             });
-
-            if (result.success) {
+            itemError = result.success ? null : result.error || 'Failed';
+            if (!queueCancelRequestedRef.current && result.success) {
               setQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'done', outputFiles: result.downloaded || [] } : q));
-            } else {
-              setQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'error', error: result.error || 'Failed' } : q));
             }
           } else {
-            const request: YouTubeDownloadVideoRequest = {
-              url: item.url,
+            const request = createQueueVideoRequest(item.url, {
               outputDir,
               quality,
               downloadSubtitles,
               downloadThumbnail,
-              audioOnly,
-              audioFormat,
+              ...queueAudioSettings,
               cookiesFromBrowser,
-            };
+            });
             const result = await window.api.youtube.downloadVideo(request);
-            if (result.success) {
+            itemError = result.success ? null : result.error || 'Failed';
+            if (!queueCancelRequestedRef.current && result.success) {
               setQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'done', outputFile: result.outputFile } : q));
-            } else {
-              setQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'error', error: result.error || 'Failed' } : q));
             }
           }
+
+          if (queueCancelRequestedRef.current) {
+            setQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'error', error: 'Đã hủy' } : q));
+            break;
+          }
+          if (itemError) {
+            setQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'error', error: itemError! } : q));
+            if (!continueOnError) break;
+          }
         } catch (err: any) {
-          setQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'error', error: err?.message || 'Unknown error' } : q));
-          if (!continueOnError) break;
+          const cancelled = queueCancelRequestedRef.current;
+          setQueue(prev => prev.map(q => q.id === item.id ? {
+            ...q,
+            status: 'error',
+            error: cancelled ? 'Đã hủy' : err?.message || 'Unknown error',
+          } : q));
+          if (cancelled || !continueOnError) break;
         }
       }
     } finally {
       setQueueRunning(false);
       setIsDownloading(false);
+      if (queueCancelRequestedRef.current) setError('Queue đã bị hủy');
     }
   };
 
@@ -734,6 +836,55 @@ export function YouTubeDownloaderTab() {
           }}>
             {ytDlpUpdateMsg}
           </span>
+        )}
+      </div>
+
+      <div className="section" style={{ marginBottom: '16px' }}>
+        <h3>Nhập Spotify metadata</h3>
+        <p style={{ margin: '0 0 12px', color: '#9ca3af', fontSize: '13px' }}>
+          Nhập link playlist Spotify. Nếu đã import cookie Spotify, app dùng cookie để đọc đủ metadata playlist; chỉ tìm nguồn YouTube, không tải audio trực tiếp từ Spotify.
+        </p>
+        <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+          <input
+            value={spotifyUrl}
+            onChange={(event) => setSpotifyUrl(event.target.value)}
+            placeholder="https://open.spotify.com/playlist/..."
+            disabled={spotifyLoading}
+            style={{ flex: '1 1 360px', minWidth: 0, padding: '10px', backgroundColor: '#252526', color: '#fff', border: '1px solid #444', borderRadius: '4px' }}
+          />
+          <button
+            onClick={handleSpotifyImport}
+            disabled={spotifyLoading || !spotifyUrl.trim()}
+            className="btn-primary"
+          >
+            {spotifyLoading ? 'Đang nhập...' : 'Nhập metadata'}
+          </button>
+        </div>
+        {spotifyError && <div style={{ marginTop: '12px', color: '#ff8888' }}>{spotifyError}</div>}
+        {spotifyResult?.success && (
+          <div style={{ marginTop: '16px' }}>
+            <div style={{ marginBottom: '10px', color: '#ccc' }}>
+              {spotifyResult.type}: <a href={spotifyResult.externalUrl} target="_blank" rel="noreferrer" style={{ color: '#64b5f6' }}>{spotifyResult.name}</a> ({spotifyResult.tracks.length} bài)
+            </div>
+            <ol style={{ margin: 0, paddingLeft: '24px', maxHeight: '240px', overflowY: 'auto', color: '#ccc' }}>
+              {spotifyResult.tracks.map((track) => (
+                <li key={track.id} style={{ marginBottom: '6px' }}>
+                  <a href={track.externalUrl} target="_blank" rel="noreferrer" style={{ color: '#64b5f6' }}>{track.name}</a>
+                  {' — '}{track.artists.join(', ') || 'Không rõ nghệ sĩ'}
+                  {track.albumName ? ` · ${track.albumName}` : ''}
+                </li>
+              ))}
+            </ol>
+            <div style={{ display: 'flex', gap: '12px', alignItems: 'center', marginTop: '12px', flexWrap: 'wrap' }}>
+              <label style={{ fontSize: '12px', color: '#ccc' }}>
+                <input type="checkbox" checked={spotifyZip} onChange={(event) => setSpotifyZip(event.target.checked)} disabled={spotifyAudioLoading} /> Tạo ZIP
+              </label>
+              <button className="btn-primary" onClick={handleSpotifyAudioDownload} disabled={spotifyAudioLoading || !outputDir}>
+                {spotifyAudioLoading ? 'Đang tìm và tải...' : 'Tìm YouTube và tải MP3'}
+              </button>
+              {!outputDir && <span style={{ fontSize: '12px', color: '#fbbf24' }}>Chọn thư mục lưu trong Cài đặt download.</span>}
+            </div>
+          </div>
         )}
       </div>
 
@@ -1004,7 +1155,7 @@ export function YouTubeDownloaderTab() {
       {channelInfo && renderChannelInfo()}
       
       {/* Settings */}
-      {(videoInfo || channelInfo || queue.length > 0 || queueUrlInput.trim()) && renderSettings()}
+      {(videoInfo || channelInfo || spotifyResult?.success || queue.length > 0 || queueUrlInput.trim()) && renderSettings()}
       
       {/* Download Button */}
       {(videoInfo || channelInfo) && outputDir && renderDownloadButton()}
@@ -1031,6 +1182,31 @@ export function YouTubeDownloaderTab() {
           <p style={{ fontSize: '11px', color: '#fbbf24', marginTop: '-6px' }}>
             Queue nhiều nền tảng sẽ không dùng một file cookies.txt chung. Hãy import cookies theo từng nền tảng trong Cookie Manager để tự match đúng URL.
           </p>
+        )}
+
+        <div className="setting-item checkbox" style={{ marginTop: '8px' }}>
+          <label>
+            <input
+              type="checkbox"
+              checked={queueAudioOnly}
+              onChange={e => setQueueAudioOnly(e.target.checked)}
+              disabled={queueRunning}
+            />
+            Chỉ tải audio cho Queue (MP3/WAV)
+          </label>
+        </div>
+        {queueAudioOnly && (
+          <div className="setting-item" style={{ marginTop: '6px' }}>
+            <label>Định dạng audio Queue:</label>
+            <select
+              value={queueAudioFormat}
+              onChange={e => setQueueAudioFormat(e.target.value as 'mp3' | 'wav')}
+              disabled={queueRunning}
+            >
+              <option value="mp3">MP3 (nhẹ, phổ biến)</option>
+              <option value="wav">WAV (không nén, chất lượng cao)</option>
+            </select>
+          </div>
         )}
 
         {/* Input */}
@@ -1111,6 +1287,7 @@ export function YouTubeDownloaderTab() {
         {/* Summary */}
         {queue.length > 0 && (
           <div style={{ marginTop: '8px', fontSize: '12px', color: '#9ca3af' }}>
+            Chế độ: {queueAudioOnly ? `Audio-only ${queueAudioFormat.toUpperCase()}` : 'Video'} |{' '}
             Tổng: {queue.length} |
             Chờ: {queue.filter(q => q.status === 'pending').length} |
             Xong: {queue.filter(q => q.status === 'done').length} |

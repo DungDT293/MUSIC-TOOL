@@ -3,11 +3,11 @@ import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { app } from 'electron'
 import { getFfmpegPaths } from '../ffmpeg/config'
 import { probeFile } from '../ffmpeg/probe'
-import { validateInputFiles, type ValidatedInputFile } from './videoUtils'
+import { validateInputFiles, type InvalidInputFile, type ValidatedInputFile } from './videoUtils'
 import { videoJobManager } from './videoJobManager'
 import { verifyOutputVideo } from './outputVerification'
 import { runPlaybackTest } from './playbackTest'
@@ -20,8 +20,10 @@ import {
   shuffleOnce,
   type ClipItem,
 } from './utils/videoShuffleHelpers'
+import { planVideoBatch, type PlannedVideoJob } from './utils/videoPlaylistPlan'
 import { getRecentHistory, type ExportHistoryEntry } from '../music/exportHistory'
 import type {
+  FinalExportAudioFailure,
   FinalExportDonePayload,
   FinalExportErrorPayload,
   FinalExportProgressPayload,
@@ -39,6 +41,36 @@ interface AudioFileInfo {
   path: string
   durationSec: number
   codecName: string | null
+}
+
+interface AudioScanResult {
+  files: AudioFileInfo[]
+  failures: FinalExportAudioFailure[]
+  requestedCount: number
+}
+
+function getAudioRecoveryHint(detail: string): string {
+  const lower = detail.toLowerCase()
+  if (/enoent|no such file|không tìm thấy|không tồn tại/.test(lower)) {
+    return 'Cách xử lý: kiểm tra file audio còn tồn tại, kết nối lại ổ mạng nếu cần, rồi quét lại playlist và chạy lại.'
+  }
+  if (/eacces|eperm|permission denied|access is denied|read-only/.test(lower)) {
+    return 'Cách xử lý: đóng ứng dụng đang khóa file, cấp quyền đọc thư mục audio rồi chạy lại.'
+  }
+  if (/duration|no audio|invalid data|corrupt|decode|probe|ffprobe/.test(lower)) {
+    return 'Cách xử lý: mở file audio để kiểm tra; nếu hỏng hoặc thiếu stream audio, xuất lại playlist/đổi file nguồn rồi chạy lại.'
+  }
+  return 'Cách xử lý: kiểm tra đường dẫn, định dạng và quyền đọc file audio; xuất lại playlist rồi chạy lại final export.'
+}
+
+function describeAudioFailure(pathValue: string, stage: FinalExportAudioFailure['stage'], error: unknown, extra = ''): FinalExportAudioFailure {
+  const detail = `${describeErrorForLog(error)}${extra ? ` | ${extra}` : ''}`.slice(-1800)
+  return {
+    path: pathValue,
+    stage,
+    detail,
+    repairHint: getAudioRecoveryHint(detail),
+  }
 }
 
 interface PreparedVideoClips {
@@ -77,11 +109,15 @@ export interface ExportJob {
   customOutputName?: string // Tên tùy chỉnh từ outputNames array
   tracklistText?: string // Tracklist text nếu có
   mappedVideo?: VideoClipItem // Tab 6 files mode: audio[i] ghép đúng video[i]
+  plannedVideoJob?: PlannedVideoJob
 }
 
 export interface ExportPlan {
   jobs: ExportJob[]
   totalJobs: number
+  requestedAudioCount: number
+  acceptedAudioCount: number
+  audioFailures: FinalExportAudioFailure[]
   totalAudioDurationSec: number
   totalVideoDurationSec: number
   endingAudioItems?: AudioSourceItem[]
@@ -89,6 +125,9 @@ export interface ExportPlan {
   videoClips: VideoClipItem[]
   /** Clip video ưu tiên (tùy chọn) – sẽ luôn xuất hiện đầu video trước khi loop các clip còn lại */
   priorityVideoClips?: VideoClipItem[]
+  uniqueRequired?: boolean
+  /** Physical clip identities reserved by this strict plan. */
+  uniqueVideoClipIds?: string[]
 }
 
 // ─── Chroma Key Overlay: build FFmpeg filter_complex ───────────────────────────
@@ -139,6 +178,127 @@ function describeErrorForLog(err: any): string {
   if (err?.exitCode !== undefined) parts.push(`exitCode=${err.exitCode}`)
   if (err?.cause?.message) parts.push(`cause=${err.cause.message}`)
   return parts.filter(Boolean).join(' | ')
+}
+
+function getVideoRecoveryHint(detail: string): string {
+  const lower = detail.toLowerCase()
+  if (/no such file|enoent|không tìm thấy|không tồn tại/.test(lower)) {
+    return 'Cách xử lý: kiểm tra lại đường dẫn/ổ mạng của file nêu trên, kết nối lại ổ nếu cần, rồi quét và chạy lại.'
+  }
+  if (/eacces|eperm|permission denied|access is denied|read-only/.test(lower)) {
+    return 'Cách xử lý: kiểm tra quyền đọc video và quyền ghi thư mục output; đóng ứng dụng đang khóa file rồi chạy lại.'
+  }
+  if (/enospc|no space|disk full|dung lượng/.test(lower)) {
+    return 'Cách xử lý: giải phóng dung lượng ổ chứa thư mục tạm/output, rồi chạy lại job lỗi.'
+  }
+  if (/corrupt|invalid data|truncated|missing picture|decode|pretranscode|không có stream hình ảnh/.test(lower)) {
+    return 'Cách xử lý: mở các video nguồn nêu trên để kiểm tra; thay/xóa file hỏng hoặc Chuẩn hóa video sang MP4/H.264 trong thư mục riêng, quét lại rồi chạy lại.'
+  }
+  return 'Cách xử lý: kiểm tra các file nguồn và output nêu trên, xem chi tiết kỹ thuật FFmpeg, rồi chạy lại sau khi sửa file/đường dẫn lỗi.'
+}
+
+async function diagnoseVideoSourceFiles(
+  sourcePaths: readonly string[],
+  requestId: string,
+): Promise<Array<{ path: string; stage: string; detail: string }>> {
+  const uniquePaths = Array.from(new Set(sourcePaths)).filter(Boolean)
+  const diagnosisPaths = uniquePaths.slice(0, 64)
+  const failures: Array<{ path: string; stage: string; detail: string }> = []
+  let nextIndex = 0
+  const worker = async () => {
+    while (nextIndex < diagnosisPaths.length) {
+      const index = nextIndex++
+      const sourcePath = diagnosisPaths[index]
+      if (!sourcePath || videoJobManager.isCancelled(requestId)) return
+      await new Promise<void>((resolve) => {
+        let settled = false
+        let stderr = ''
+        const finish = () => {
+          if (settled) return
+          settled = true
+          resolve()
+        }
+        let child: ReturnType<typeof spawn>
+        try {
+          child = spawn(
+            getFfmpegExecutable(),
+            ['-hide_banner', '-loglevel', 'error', '-t', '3', '-i', sourcePath, '-map', '0:v:0', '-f', 'null', '-'],
+            { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] },
+          )
+        } catch (error) {
+          failures.push({
+            path: sourcePath,
+            stage: 'kiểm tra decode video nguồn',
+            detail: error instanceof Error ? error.message : String(error),
+          })
+          finish()
+          return
+        }
+        const timer = setTimeout(() => {
+          try { child.kill('SIGTERM') } catch {}
+          failures.push({
+            path: sourcePath,
+            stage: 'kiểm tra decode video nguồn',
+            detail: 'Timeout khi decode thử 3 giây đầu.',
+          })
+          finish()
+        }, 30_000)
+        child.stderr?.on('data', (chunk: Buffer) => {
+          stderr = `${stderr}${chunk.toString('utf-8')}`.slice(-1200)
+        })
+        child.on('error', (error) => {
+          clearTimeout(timer)
+          failures.push({
+            path: sourcePath,
+            stage: 'kiểm tra decode video nguồn',
+            detail: `${error.message}${stderr ? ` | stderr: ${stderr}` : ''}`,
+          })
+          finish()
+        })
+        child.on('close', (code) => {
+          clearTimeout(timer)
+          if (code !== 0) {
+            failures.push({
+              path: sourcePath,
+              stage: 'kiểm tra decode video nguồn',
+              detail: `FFmpeg exit code ${code}${stderr ? ` | stderr: ${stderr}` : ''}`,
+            })
+          }
+          finish()
+        })
+      })
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(4, Math.max(1, diagnosisPaths.length)) }, () => worker()))
+  if (uniquePaths.length > diagnosisPaths.length) {
+    failures.push({
+      path: `(đã giới hạn chẩn đoán ${diagnosisPaths.length}/${uniquePaths.length} clip)`,
+      stage: 'kiểm tra decode video nguồn',
+      detail: 'Xem danh sách video nguồn của job để kiểm tra các clip còn lại.',
+    })
+  }
+  return failures
+}
+
+function describeVideoJobFailure(opts: {
+  error: unknown
+  stage: string
+  job: ExportJob
+  sourcePaths: readonly string[]
+}): string {
+  const detail = describeErrorForLog(opts.error)
+  const sourceLines = opts.sourcePaths.length > 0
+    ? opts.sourcePaths.slice(0, 12).map((sourcePath) => `• ${sourcePath}`).join('\n')
+    : '• Chưa xác định được clip nguồn trước khi lỗi.'
+  const suffix = opts.sourcePaths.length > 12 ? `\n... và ${opts.sourcePaths.length - 12} clip khác.` : ''
+  return [
+    `Giai đoạn lỗi: ${opts.stage}.`,
+    `Audio job: ${opts.job.audio.path}`,
+    `Video output: ${opts.job.outputPath}`,
+    `Video nguồn cần kiểm tra:\n${sourceLines}${suffix}`,
+    `Chi tiết kỹ thuật: ${detail.slice(-1500)}`,
+    getVideoRecoveryHint(detail),
+  ].join('\n')
 }
 
 function clampNumber(value: number | undefined, min: number, max: number, fallback: number): number {
@@ -616,23 +776,37 @@ async function ensurePathKind(p: string, kind: 'file' | 'dir'): Promise<void> {
   }
 }
 
-async function loadAudioFiles(source: FinalExportRequestPayload['audioSource']): Promise<AudioFileInfo[]> {
+async function loadAudioFiles(source: FinalExportRequestPayload['audioSource']): Promise<AudioScanResult> {
   const audioFiles: AudioFileInfo[] = []
+  const failures: FinalExportAudioFailure[] = []
 
   const collectFromPaths = async (paths: string[]) => {
     for (const filePath of paths) {
-      await ensurePathKind(filePath, 'file')
+      try {
+        await ensurePathKind(filePath, 'file')
+      } catch (error) {
+        const failure = describeAudioFailure(filePath, 'validate-path', error)
+        failures.push(failure)
+        console.error(`[FinalExport][Audio rejected][validate-path] ${filePath}\n${failure.detail}\n${failure.repairHint}`)
+        continue
+      }
       try {
         const info = await probeFile(filePath)
         const duration = info?.format?.duration ?? 0
         const codecName = info?.audio?.codec ?? null
         if (!duration || duration <= 0) {
-          console.warn('[FinalExport] Bỏ qua audio duration <= 0:', filePath)
+          const failure = describeAudioFailure(filePath, 'duration', new Error('Audio duration <= 0'), `observedDurationSec=${duration}`)
+          failure.durationSec = duration
+          failure.codecName = codecName
+          failures.push(failure)
+          console.error(`[FinalExport][Audio rejected][duration] ${filePath}\n${failure.detail}\n${failure.repairHint}`)
           continue
         }
         audioFiles.push({ path: filePath, durationSec: duration, codecName })
       } catch (error) {
-        console.warn('[FinalExport] Bỏ qua audio lỗi:', filePath, error)
+        const failure = describeAudioFailure(filePath, 'probe', error)
+        failures.push(failure)
+        console.error(`[FinalExport][Audio rejected][probe] ${filePath}\n${failure.detail}\n${failure.repairHint}`)
       }
     }
   }
@@ -658,11 +832,26 @@ async function loadAudioFiles(source: FinalExportRequestPayload['audioSource']):
   }
 
   if (audioFiles.length === 0) {
-    throw new Error('Không tìm thấy file audio hợp lệ.')
+    const detail = failures.length > 0
+      ? failures.slice(0, 12).map((failure) => `• ${failure.path} | ${failure.stage} | ${failure.detail}\n  ${failure.repairHint}`).join('\n')
+      : 'Không có file audio hợp lệ.'
+    throw new Error(`Không tìm thấy file audio hợp lệ.\n${detail}`)
   }
 
-  audioFiles.sort((a, b) => a.path.localeCompare(b.path, undefined, { numeric: true, sensitivity: 'base' }))
-  return audioFiles
+  if (source.type === 'folder') {
+    audioFiles.sort((a, b) => a.path.localeCompare(b.path, undefined, { numeric: true, sensitivity: 'base' }))
+  }
+  return { files: audioFiles, failures, requestedCount: audioFiles.length + failures.length }
+}
+
+function formatInvalidVideoDetails(details: InvalidInputFile[]): string {
+  const sample = details.slice(0, 12).map((item, index) => `${index + 1}. ${item.path}\n   Lỗi: ${item.reason}`).join('\n')
+  const suffix = details.length > 12 ? `\n... và ${details.length - 12} video khác.` : ''
+  return [
+    'Nguyên nhân: Một hoặc nhiều video nguồn không đọc được hoặc không có stream hình ảnh hợp lệ.',
+    `Video lỗi:\n${sample}${suffix}`,
+    'Cách xử lý: mở từng đường dẫn trên bằng trình phát video; thay/xóa file hỏng, hoặc chuẩn hóa video sang MP4/H.264 trước khi chạy lại. Nếu đường dẫn nằm trên ổ mạng, kết nối lại ổ rồi quét lại.',
+  ].join('\n')
 }
 
 async function loadVideoClips(source: FinalExportRequestPayload['videoSource']): Promise<PreparedVideoClips> {
@@ -691,11 +880,24 @@ async function loadVideoClips(source: FinalExportRequestPayload['videoSource']):
     throw new Error('Không tìm thấy clip video hợp lệ.')
   }
 
-  const { valid } = await validateInputFiles(videoPaths, 8)
+  const { valid, invalidDetails } = await validateInputFiles(videoPaths, 8)
+  if (invalidDetails.length > 0) {
+    // Do not silently drop bad clips: user must see exact paths before export continues.
+    throw new Error(formatInvalidVideoDetails(invalidDetails))
+  }
   if (valid.length === 0) {
-    throw new Error('Không clip video nào có duration hợp lệ.')
+    throw new Error(
+      invalidDetails.length > 0
+        ? formatInvalidVideoDetails(invalidDetails)
+        : 'Không tìm thấy clip video hợp lệ. Cách xử lý: kiểm tra thư mục video, quyền đọc và định dạng file rồi quét lại.',
+    )
   }
 
+  if (source.type === 'files') {
+    // Probes finish concurrently; restore caller order so Autopilot pool order reaches concat.
+    const byPath = new Map(valid.map((clip) => [clip.path, clip]))
+    return { clips: videoPaths.map((filePath) => byPath.get(filePath)).filter((clip): clip is ValidatedInputFile => !!clip) }
+  }
   valid.sort((a, b) => a.path.localeCompare(b.path, undefined, { numeric: true, sensitivity: 'base' }))
   return { clips: valid }
 }
@@ -749,13 +951,16 @@ async function loadImageFiles(source: FinalExportRequestPayload['imageSource']):
  */
 async function scanAudioSourceForPlan(
   audioSource: FinalExportRequestPayload['audioSource']
-): Promise<AudioSourceItem[]> {
-  const audioFiles = await loadAudioFiles(audioSource)
-  return audioFiles.map(f => ({
-    path: f.path,
-    durationSec: f.durationSec,
-    codecName: f.codecName,  // FIX PERF-1: Propagate codec đã probe — tránh probe lại
-  }))
+): Promise<AudioScanResult & { items: AudioSourceItem[] }> {
+  const result = await loadAudioFiles(audioSource)
+  return {
+    ...result,
+    items: result.files.map(f => ({
+      path: f.path,
+      durationSec: f.durationSec,
+      codecName: f.codecName,  // FIX PERF-1: Propagate codec đã probe — tránh probe lại
+    })),
+  }
 }
 
 /**
@@ -845,7 +1050,10 @@ export async function planFinalExport(
   outputNames?: string[],
   priorityVideoSource?: FinalExportRequestPayload['priorityVideoSource'],
   imageSource?: FinalExportRequestPayload['imageSource'],
-  endingAudio?: FinalExportRequestPayload['endingAudio']
+  endingAudio?: FinalExportRequestPayload['endingAudio'],
+  uniqueRequired: boolean = false,
+  reservedVideoClipIds?: ReadonlySet<string>,
+  existingSequenceFingerprints?: ReadonlySet<string>,
 ): Promise<ExportPlan> {
   // Medium: Validate output folder writable
   try {
@@ -856,8 +1064,9 @@ export async function planFinalExport(
   }
 
   // 1. Scan audio (probe 1 lần)
-  const audioItems: AudioSourceItem[] = await scanAudioSourceForPlan(audioSource)
-  
+  const audioScan = await scanAudioSourceForPlan(audioSource)
+  const audioItems = audioScan.items
+
   if (audioItems.length === 0) {
     throw new Error('Không có file audio hợp lệ.')
   }
@@ -887,7 +1096,7 @@ export async function planFinalExport(
   }
 
   const endingAudioItems: AudioSourceItem[] = endingAudio?.paths?.length
-    ? await scanAudioSourceForPlan({ type: 'files', path: endingAudio.paths[0] || '', paths: endingAudio.paths })
+    ? (await scanAudioSourceForPlan({ type: 'files', path: endingAudio.paths[0] || '', paths: endingAudio.paths })).items
     : []
 
   // Tab 6 strict mapping: khi user chọn danh sách video files, phải ghép audio[i] -> video[i].
@@ -939,22 +1148,83 @@ export async function planFinalExport(
     usedOutputPaths.add(finalPath.toLowerCase())
   }
 
+  for (const job of jobs) {
+    try {
+      await fsp.access(job.outputPath, fs.constants.F_OK)
+      throw new Error(`File output đã tồn tại, không ghi đè: ${job.outputPath}`)
+    } catch (error: any) {
+      if (error?.code !== 'ENOENT') throw error
+    }
+  }
+
   // 4. Calculate totals
   const endingDurationPerJobSec = endingAudioItems.reduce((sum, a) => sum + a.durationSec, 0)
   const totalAudioDurationSec = audioItems.reduce((sum, a) => sum + a.durationSec + endingDurationPerJobSec, 0)
   const totalVideoDurationSec = videoClips.reduce((sum, v) => sum + v.durationSec, 0)
 
-  // Note: imageSource is accepted for future slideshow mode; currently plan does not
-  // populate videoClips from images. That happens in executeFinalExport via renderSlideshowClips.
+  if (!strictFilesVideoPairing && (uniqueRequired || existingSequenceFingerprints)) {
+    if (videoClips.length === 0) {
+      throw new Error('Chế độ unique sequence không hỗ trợ slideshow vì không có clip video vật lý để cấp phát.')
+    }
+
+    const sourceClips = [...(priorityVideoClips ?? []), ...videoClips]
+    const plannerClips = (await Promise.all(sourceClips.map(async (clip) => {
+      let canonicalPath: string
+      try {
+        canonicalPath = await fsp.realpath(clip.path)
+      } catch (error: any) {
+        throw new Error(`Không thể xác nhận clip unique: ${clip.path}. ${error?.message || error}`)
+      }
+      return {
+        id: createHash('md5').update(canonicalPath.replace(/\\/g, '/').toLowerCase()).digest('hex').slice(0, 12),
+        path: clip.path,
+        durationSec: clip.durationSec,
+      }
+    }))).filter((clip) => !uniqueRequired || !reservedVideoClipIds?.has(clip.id))
+    const planned = planVideoBatch({
+      jobs: jobs.map((job) => ({
+        jobIndex: job.jobIndex,
+        targetDurationSec: job.audio.durationSec + endingDurationPerJobSec,
+      })),
+      clips: plannerClips,
+      uniqueRequired,
+      requireUniqueSequences: !uniqueRequired && !!existingSequenceFingerprints,
+      existingFingerprints: existingSequenceFingerprints,
+    })
+    const jobsByIndex = new Map(jobs.map((job) => [job.jobIndex, job]))
+    for (const plannedJob of planned.jobs) {
+      const job = jobsByIndex.get(plannedJob.jobIndex)
+      if (!job) throw new Error(`Video batch plan trả về job không tồn tại: ${plannedJob.jobIndex}`)
+      job.plannedVideoJob = plannedJob
+    }
+  }
+
+  if (audioScan.failures.length > 0) {
+    console.warn(
+      `[FinalExport] Audio plan: requested=${audioScan.requestedCount}, accepted=${audioItems.length}, rejected=${audioScan.failures.length}`,
+    )
+    for (const failure of audioScan.failures.slice(0, 20)) {
+      console.warn(`[FinalExport] Rejected audio: ${failure.path} | stage=${failure.stage} | ${failure.detail} | ${failure.repairHint}`)
+    }
+  } else {
+    console.log(`[FinalExport] Audio plan: requested=${audioScan.requestedCount}, accepted=${audioItems.length}, rejected=0`)
+  }
 
   return {
     jobs,
     totalJobs: jobs.length,
+    requestedAudioCount: audioScan.requestedCount,
+    acceptedAudioCount: audioItems.length,
+    audioFailures: audioScan.failures,
     totalAudioDurationSec,
     totalVideoDurationSec,
     endingAudioItems,
     videoClips,
     priorityVideoClips,
+    uniqueRequired,
+    uniqueVideoClipIds: uniqueRequired
+      ? jobs.flatMap((job) => job.plannedVideoJob?.clips.map((clip) => clip.id) ?? [])
+      : undefined,
   }
 }
 
@@ -1089,7 +1359,7 @@ export async function executeFinalExport(
   imageKenBurns?: boolean,
   imageShuffle?: boolean,
   audioVisualizer?: FinalExportVisualizerOptions,
-): Promise<void> {
+): Promise<FinalExportDonePayload> {
   // FIX H-03: Same-drive scratch — derive output directory from the first job's outputPath
   const outputDir = plan.jobs.length > 0 ? path.dirname(plan.jobs[0].outputPath) : undefined
   const tempDir = await ensureTempDir(`final-export-${requestId}-`, outputDir)
@@ -1242,9 +1512,17 @@ export async function executeFinalExport(
 
     const quarantinedClipPaths = new Set<string>()
     const usedVideoSourcePathsBySucceededJob = new Map<number, string[]>()
+    const usedVideoClipIdsBySucceededJob = new Map<number, string[]>()
+    const jobDiagnostics = new Map<number, { stage: string; sourcePaths: string[]; failureDetails: Array<{ path: string; stage: string; detail: string }> }>()
 
     // Run jobs sequentially to keep progress stable and deterministic
     const processJob = async (job: ExportJob): Promise<void> => {
+      const diagnostics = {
+        stage: 'chuẩn bị audio',
+        sourcePaths: [] as string[],
+        failureDetails: [] as Array<{ path: string; stage: string; detail: string }>,
+      }
+      jobDiagnostics.set(job.jobIndex, diagnostics)
       // Kiểm tra cancel trước khi bắt đầu job
       if (videoJobManager.isCancelled(requestId)) {
         throw new Error('Đã dừng bởi người dùng')
@@ -1259,6 +1537,7 @@ export async function executeFinalExport(
       const jobScratchDir = path.join(tempDir, `job_${String(job.jobIndex + 1).padStart(2, '0')}`)
       await fsp.mkdir(jobScratchDir, { recursive: true })
       const effectiveAudio = await prepareJobAudioWithEnding(job, jobScratchDir, requestId)
+      diagnostics.stage = 'chọn video nguồn'
 
       // Emit progress: prepare-video stage
       emitter.progress({
@@ -1308,7 +1587,17 @@ export async function executeFinalExport(
 
       let videoPlaylist: ClipItem[]
 
-      if (strictFilesPairingForJob && mappedClip) {
+      if (job.plannedVideoJob) {
+        videoPlaylist = job.plannedVideoJob.clips.map((clip) => ({
+          path: clip.path,
+          durationSec: clip.durationSec,
+          id: clip.id,
+        }))
+        const plannedDuration = videoPlaylist.reduce((sum, clip) => sum + clip.durationSec, 0)
+        if (plannedDuration < targetDurationSec) {
+          throw new Error(`Video plan không đủ duration cho job ${job.jobIndex + 1}`)
+        }
+      } else if (strictFilesPairingForJob && mappedClip) {
         if (jobPriorityClips.length > 0) {
           console.warn(
             `[Job ${currentJobIndex}] Strict audio[i] -> video[i] pairing active; ignoring priority video clips to avoid mixing sources.`
@@ -1319,15 +1608,13 @@ export async function executeFinalExport(
           `[Job ${currentJobIndex}/${plan.totalJobs}] Strict 1:1 pairing with clip: ${path.basename(mappedClip.path)}`
         )
       } else if (jobPriorityClips.length > 0) {
-        // Có video ưu tiên: luôn cho xuất hiện đầu video mỗi job (bất kể canMapOneToOne)
-        // Priority clips được xử lý GIỐNG HỆT như logic ghép video bình thường (buildPlaylistToFillDuration)
-        // NHƯNG priority clips LUÔN ở đầu video
-        
-        // Tạo seed cho priority playlist (để shuffle nhất quán)
+        // Xoay priority theo job để tránh mọi output bắt đầu cùng sequence khi shuffle tắt.
+        const priorityOffset = job.jobIndex % jobPriorityClips.length
+        const rotatedPriorityClips = priorityOffset === 0
+          ? jobPriorityClips
+          : [...jobPriorityClips.slice(priorityOffset), ...jobPriorityClips.slice(0, priorityOffset)]
         const prioritySeed = Date.now() + job.jobIndex * 1000000 + Math.random() * 1000
-        
-        // Priority clips: Dùng buildPlaylistToFillDuration GIỐNG HỆT logic ghép bình thường
-        const priorityPlaylist = buildPlaylistToFillDuration(jobPriorityClips, targetDurationSec, shuffle, prioritySeed)
+        const priorityPlaylist = buildPlaylistToFillDuration(rotatedPriorityClips, targetDurationSec, shuffle, prioritySeed)
         const priorityDuration = priorityPlaylist.reduce((sum, c) => sum + c.durationSec, 0)
         const remainingTarget = Math.max(0, targetDurationSec - priorityDuration)
 
@@ -1400,7 +1687,7 @@ export async function executeFinalExport(
         }
       }
       
-      if (!strictFilesPairingForJob) {
+      if (!plan.uniqueRequired && !job.plannedVideoJob && !strictFilesPairingForJob) {
         const reserveDurationSec = Math.min(Math.max(targetDurationSec * 0.2, 180), 900)
         const reservePrimarySource =
           jobPriorityClips.length > 0
@@ -1421,10 +1708,12 @@ export async function executeFinalExport(
           }
         }
       }
+      diagnostics.sourcePaths = videoPlaylist.map((clip) => clip.path)
+      diagnostics.stage = 'tạo danh sách concat video'
       console.log(
         `[Job ${currentJobIndex}] Video playlist: ${videoPlaylist.length} clips (pool=${jobBaseClips.length}, priority=${jobPriorityClips.length})`
       )
-      
+
       // 2. Create concat list file
       const videoListFile = path.join(jobScratchDir, 'video_concat.txt')
       // Thêm 'duration' cho mỗi clip → FFmpeg concat demuxer tính PTS tích lũy chính xác
@@ -1463,6 +1752,7 @@ export async function executeFinalExport(
       )
 
       // 4. Run FFmpeg với progress tracking
+      diagnostics.stage = 'FFmpeg ghép/mã hóa video'
       // FIX PERF-12: Dùng shared cache thay vì tạo mới cho mỗi job
       // → clip đã pre-transcode ở job trước sẽ được reuse, không cần encode lại
       const reusableTranscodedClipCache = sharedTranscodedClipCache
@@ -1519,6 +1809,8 @@ export async function executeFinalExport(
         gpuHybridNormalizeVfFilter: effectiveGpuHybridNormalizeVfFilter,
         preTranscodeMode: effectiveNormalizeVfFilter ? resolvedPreTranscodeMode : 'software',
         failedVideoSourcePaths: quarantinedClipPaths,
+        strictSourcePlan: !!job.plannedVideoJob,
+        failureDetails: diagnostics.failureDetails,
         reusableTranscodedClipCache,
         chromaKeyOverlay,
         audioVisualizer,
@@ -1552,6 +1844,7 @@ export async function executeFinalExport(
       }
 
       // 5. Verify output (metadata + decode smoke/deep verify) + optional playback test
+      diagnostics.stage = 'kiểm tra video output (ffprobe/decode)'
       const shouldRunDeepVerify = forceReencode || needAudioEncode || normalizeAudio || !!normalizeVfFilter || isAudioVisualizerActive(audioVisualizer) || !!job.endingAudios?.length
       emitter.progress({
         requestId,
@@ -1658,13 +1951,29 @@ export async function executeFinalExport(
       // This prevents race condition where we cleanup before Step 2 finishes
       // Note: runFinalCommand will cleanup tempVideoPath after Step 2 completes
       
-      usedVideoSourcePathsBySucceededJob.set(job.jobIndex, Array.from(new Set(videoPlaylist.map((clip) => clip.path))))
+      const committedVideoPlaylist = trimPlaylistToDuration(videoPlaylist, targetDurationSec)
+      if (job.plannedVideoJob) {
+        const plannedIds = job.plannedVideoJob.clips.map((clip) => clip.id)
+        const executedIds = committedVideoPlaylist.map((clip) => clip.id)
+        if (plannedIds.length !== executedIds.length || plannedIds.some((id, index) => id !== executedIds[index])) {
+          throw new Error(`Playlist thực tế lệch video plan ở job ${job.jobIndex + 1}; không commit history.`)
+        }
+      }
+      const committedVideoPaths = committedVideoPlaylist.map((clip) => clip.path)
+      usedVideoSourcePathsBySucceededJob.set(job.jobIndex, committedVideoPaths)
+      usedVideoClipIdsBySucceededJob.set(
+        job.jobIndex,
+        await Promise.all(committedVideoPaths.map(async (clipPath) => {
+          const canonicalPath = (await fsp.realpath(clipPath)).replace(/\\/g, '/').toLowerCase()
+          return createHash('md5').update(canonicalPath).digest('hex').slice(0, 12)
+        })),
+      )
       console.log(`[Job ${currentJobIndex}/${plan.totalJobs}] ✓ Completed: ${job.outputFileName}`)
     }
 
     // Chạy tuần tự từng job một (không chạy song song)
     // Wrap mỗi job trong try/catch để 1 job lỗi không chặn các job còn lại
-    const failedJobs: { jobIndex: number; fileName: string; error: string }[] = []
+    const failedJobs: NonNullable<FinalExportDonePayload['failedJobs']> = []
     const succeededJobs: ExportJob[] = []
 
     for (const job of plan.jobs) {
@@ -1677,12 +1986,45 @@ export async function executeFinalExport(
         const jobElapsed = ((Date.now() - jobStartTime) / 1000).toFixed(1)
         console.log(`[FinalExport] ═══ Job ${jobLabel} SUCCEEDED in ${jobElapsed}s: ${job.outputFileName} ═══`)
       } catch (err: any) {
-        const errorMsg = describeErrorForLog(err)
+        if (videoJobManager.isCancelled(requestId)) {
+          throw new Error('Đã dừng bởi người dùng')
+        }
+
+        const diagnostic = jobDiagnostics.get(job.jobIndex) ?? {
+          stage: 'không xác định',
+          sourcePaths: [],
+          failureDetails: [],
+        }
+        const diagnosedSourceFailures = diagnostic.failureDetails.length === 0
+          ? await diagnoseVideoSourceFiles(diagnostic.sourcePaths, requestId)
+          : []
+        if (videoJobManager.isCancelled(requestId)) {
+          throw new Error('Đã dừng bởi người dùng')
+        }
+        const sourceFailures = [...diagnostic.failureDetails, ...diagnosedSourceFailures]
+        const errorWithDiagnostics = sourceFailures.length > 0
+          ? new Error([
+              describeErrorForLog(err),
+              'Nguồn video bị lỗi trong quá trình xử lý:',
+              sourceFailures.slice(0, 12).map((failure) => `• ${failure.path} | ${failure.stage} | ${failure.detail}`).join('\n'),
+            ].join('\n'))
+          : err
+        const errorMsg = describeVideoJobFailure({
+          error: errorWithDiagnostics,
+          stage: diagnostic.stage,
+          job,
+          sourcePaths: diagnostic.sourcePaths,
+        })
         const jobElapsed = ((Date.now() - jobStartTime) / 1000).toFixed(1)
         failedJobs.push({
           jobIndex: job.jobIndex,
           fileName: job.outputFileName,
           error: errorMsg,
+          audioFile: job.audio.path,
+          outputPath: job.outputPath,
+          stage: diagnostic.stage,
+          repairHint: getVideoRecoveryHint(describeErrorForLog(errorWithDiagnostics)),
+          sourceVideoPaths: diagnostic.sourcePaths,
         })
         console.error(
           `[FinalExport] ═══ Job ${jobLabel} FAILED in ${jobElapsed}s (${job.outputFileName}) | audio=${job.audio.path} | output=${job.outputPath} | ${errorMsg} ═══`
@@ -1701,6 +2043,10 @@ export async function executeFinalExport(
           status: `❌ Job ${job.jobIndex + 1}/${plan.totalJobs} thất bại: ${errorMsg.slice(0, 120)}. Tiếp tục các job còn lại...`,
         })
       }
+    }
+
+    if (videoJobManager.isCancelled(requestId)) {
+      throw new Error('Đã dừng bởi người dùng')
     }
 
     console.log(`[FinalExport] ═══ ALL JOBS COMPLETE: ${succeededJobs.length} succeeded, ${failedJobs.length} failed out of ${plan.totalJobs} ═══`)
@@ -1726,8 +2072,15 @@ export async function executeFinalExport(
       )
     }
 
-    emitter.done({
+    if (videoJobManager.isCancelled(requestId)) {
+      throw new Error('Đã dừng bởi người dùng')
+    }
+
+    const donePayload: FinalExportDonePayload = {
       requestId,
+      requestedAudioCount: plan.requestedAudioCount,
+      acceptedAudioCount: plan.acceptedAudioCount,
+      audioFailures: plan.audioFailures,
       outputs: succeededJobs.map(j => ({
         audioFile: j.audio.path,
         videoFile: j.outputPath,
@@ -1736,10 +2089,22 @@ export async function executeFinalExport(
       })),
       failedJobs: failedJobs.length > 0 ? failedJobs : undefined,
       warnings: tracklistWarnings.length > 0 ? tracklistWarnings : undefined,
-    })
-    
+      videoSequences: succeededJobs.map((job) => ({
+        jobIndex: job.jobIndex,
+        videoPaths: usedVideoSourcePathsBySucceededJob.get(job.jobIndex) ?? [],
+        clipIds: usedVideoClipIdsBySucceededJob.get(job.jobIndex) ?? [],
+      })),
+    }
+    if (videoJobManager.isCancelled(requestId)) {
+      throw new Error('Đã dừng bởi người dùng')
+    }
+    emitter.done(donePayload)
+
     // Xóa file audio và video nguồn nếu được yêu cầu
     if (deleteSourceFiles) {
+      if (videoJobManager.isCancelled(requestId)) {
+        throw new Error('Đã dừng bởi người dùng')
+      }
       console.log('[FinalExport] Xóa file audio và video nguồn sau khi xuất xong...')
       const deletedFiles: string[] = []
       const failedFiles: string[] = []
@@ -1802,6 +2167,7 @@ export async function executeFinalExport(
         console.warn(`[FinalExport] Không thể xóa ${failedFiles.length} file:`, failedFiles)
       }
     }
+    return donePayload
   } catch (error: any) {
     // NOTE: Không gọi emitter.error() ở đây — hàm gọi (exportFinalVideo) sẽ catch
     // và emit error. Gọi ở cả 2 chỗ gây duplicate error event trên UI.
@@ -2093,6 +2459,10 @@ interface PreTranscodeClipsOptions {
   transcodedCache?: Map<string, string>
   /** FIX BUG 3: Out-parameter — nếu truyền, preTranscodeClips sẽ push durationSec song song với transcodedPaths */
   outDurations?: number[]
+  /** Strict batch plans fail if a source cannot be preserved. */
+  strictSourcePlan?: boolean
+  /** Per-source failures retained for user-facing diagnostics. */
+  failureDetails?: Array<{ path: string; stage: string; detail: string }>
 }
 function sanitizePreTranscodeEncoderArgs(rawEncoderArgs: string[]): string[] {
   const sanitizedArgs: string[] = []
@@ -2172,6 +2542,18 @@ function filterOutQuarantinedClips(clips: ClipItem[], quarantinedPaths: Set<stri
   return clips.filter((clip) => !quarantinedPaths.has(clip.path))
 }
 
+function trimPlaylistToDuration(clips: ClipItem[], targetDurationSec: number): ClipItem[] {
+  if (clips.length === 0 || !Number.isFinite(targetDurationSec) || targetDurationSec <= 0) return []
+  const result: ClipItem[] = []
+  let duration = 0
+  for (const clip of clips) {
+    result.push(clip)
+    duration += Math.max(0, clip.durationSec)
+    if (duration >= targetDurationSec) break
+  }
+  return result
+}
+
 /**
  * FIX PERF-15: Tweak encoder args cho pre-transcode intermediate files.
  *
@@ -2225,6 +2607,8 @@ async function preTranscodeClips(opts: PreTranscodeClipsOptions): Promise<string
     failedSourcePaths,
     transcodedCache,
     outDurations,
+    strictSourcePlan = false,
+    failureDetails,
   } = opts
   const defaultFfmpegPath = getFfmpegExecutable()
   const transcodedPaths: string[] = []
@@ -2334,7 +2718,7 @@ async function preTranscodeClips(opts: PreTranscodeClipsOptions): Promise<string
         source.kind === 'file'
           ? [
               '-hide_banner',
-              '-y',
+              '-n',
               '-fflags', '+genpts+igndts+discardcorrupt',
               '-i', source.path,
               '-vf', selectedVfFilter,
@@ -2348,7 +2732,7 @@ async function preTranscodeClips(opts: PreTranscodeClipsOptions): Promise<string
             ]
           : [
               '-hide_banner',
-              '-y',
+              '-n',
               '-f', 'lavfi',
               '-i', source.spec,
               '-t', source.durationSec.toFixed(3),
@@ -2592,6 +2976,11 @@ async function preTranscodeClips(opts: PreTranscodeClipsOptions): Promise<string
         }
 
         const primaryMessage = primaryErr?.message || String(primaryErr)
+        failureDetails?.push({
+          path: clip.path,
+          stage: `pre-transcode ${primaryMode.toUpperCase()}`,
+          detail: primaryMessage.slice(-1200),
+        })
         let recovered = false
 
         if (primaryMode === 'gpu') {
@@ -2612,6 +3001,11 @@ async function preTranscodeClips(opts: PreTranscodeClipsOptions): Promise<string
             )
           } catch (cpuErr: any) {
             const cpuMessage = cpuErr?.message || String(cpuErr)
+            failureDetails?.push({
+              path: clip.path,
+              stage: 'pre-transcode CPU retry',
+              detail: cpuMessage.slice(-1200),
+            })
             console.warn(
               `[PreTranscode] Skipping broken clip ${path.basename(clip.path)} after GPU and CPU failure.\n${primaryMessage}\n${cpuMessage}`
             )
@@ -2667,6 +3061,13 @@ async function preTranscodeClips(opts: PreTranscodeClipsOptions): Promise<string
     }
   }
 
+  if (strictSourcePlan && skippedClipCount > 0) {
+    const failed = failureDetails && failureDetails.length > 0
+      ? ` Nguồn lỗi:\n${failureDetails.slice(0, 12).map((item) => `• ${item.path} | ${item.stage} | ${item.detail}`).join('\n')}`
+      : ''
+    throw new Error(`Nguồn video trong strict plan bị lỗi; không thay thế bằng clip khác.${failed}\nCách xử lý: sửa/thay các video nêu trên rồi chạy lại.`)
+  }
+
   // Collect results in order from pre-allocated slots
   for (let i = 0; i < clips.length; i++) {
     const slot = slotResults[i]
@@ -2677,6 +3078,11 @@ async function preTranscodeClips(opts: PreTranscodeClipsOptions): Promise<string
   }
 
   if (usableDurationSec < minimumDurationSec) {
+    if (strictSourcePlan) {
+      throw new Error(
+        `[PreTranscode] Strict video plan lost ${ (minimumDurationSec - usableDurationSec).toFixed(2) }s after source failure; refusing placeholder/reuse.`
+      )
+    }
     const missingDurationSec = minimumDurationSec - usableDurationSec
     const fillerIndex = transcodedPaths.length
     const fillerOutput = path.join(tempDir, `pre_filler_${String(fillerIndex).padStart(5, '0')}.mp4`)
@@ -2921,9 +3327,11 @@ interface RunFinalCommandOptions {
   gpuHybridNormalizeVfFilter?: string | null
   preTranscodeMode?: PreTranscodeMode
   failedVideoSourcePaths?: Set<string>
+  failureDetails?: Array<{ path: string; stage: string; detail: string }>
   reusableTranscodedClipCache?: Map<string, string>
   chromaKeyOverlay?: ChromaKeyOverlay
   audioVisualizer?: FinalExportVisualizerOptions
+  strictSourcePlan?: boolean
   /** FIX PERF-12: Skip cleanup of pre-transcoded clips so they can be reused by next job */
   skipTempCleanup?: boolean
 }
@@ -2945,6 +3353,8 @@ async function runFinalCommand(opts: RunFinalCommandOptions): Promise<void> {
     gpuHybridNormalizeVfFilter,
     preTranscodeMode,
     failedVideoSourcePaths,
+    failureDetails,
+    strictSourcePlan = false,
     reusableTranscodedClipCache,
     chromaKeyOverlay,
     audioVisualizer,
@@ -3073,6 +3483,7 @@ async function runFinalCommand_TwoPass(opts: RunFinalCommandOptions): Promise<vo
     gpuHybridNormalizeVfFilter,
     preTranscodeMode = 'software',
     failedVideoSourcePaths,
+    failureDetails,
     reusableTranscodedClipCache,
     skipTempCleanup = false,
   } = opts
@@ -3122,6 +3533,8 @@ async function runFinalCommand_TwoPass(opts: RunFinalCommandOptions): Promise<vo
         requestId,
         minimumDurationSec: totalDurationSec,
         failedSourcePaths: failedVideoSourcePaths,
+        strictSourcePlan: opts.strictSourcePlan,
+        failureDetails,
         transcodedCache,
         outDurations: durations,
         onProgress: (percent, speedX) => {
@@ -3252,6 +3665,17 @@ async function runFinalCommand_TwoPass(opts: RunFinalCommandOptions): Promise<vo
         .join('\n')
       await fsp.writeFile(pass2ListPath, currentPass2ListContent, 'utf-8')
 
+      const pass2OutputPath = path.join(tempDir, `pass2-${mode}.mp4`)
+      await fsp.rm(pass2OutputPath, { force: true })
+      const publishPass2Output = async () => {
+        try {
+          await fsp.link(pass2OutputPath, outputPath)
+        } catch (error: any) {
+          if (error?.code !== 'EXDEV') throw error
+          await fsp.copyFile(pass2OutputPath, outputPath, fs.constants.COPYFILE_EXCL)
+        }
+        await fsp.unlink(pass2OutputPath)
+      }
       const pass2Args = [
         '-hide_banner', '-loglevel', 'error', '-stats',
         '-fflags', '+genpts',
@@ -3268,8 +3692,8 @@ async function runFinalCommand_TwoPass(opts: RunFinalCommandOptions): Promise<vo
         '-avoid_negative_ts', 'make_zero',
         '-movflags', '+faststart',
         '-t', totalDurationSec.toFixed(3),
-        '-y',
-        outputPath,
+        '-n',
+        pass2OutputPath,
       ]
 
       await new Promise<void>((resolve, reject) => {
@@ -3333,6 +3757,12 @@ async function runFinalCommand_TwoPass(opts: RunFinalCommandOptions): Promise<vo
           }
 
           if (code === 0) {
+            try {
+              await publishPass2Output()
+            } catch (publishError) {
+              safeReject(publishError instanceof Error ? publishError : new Error(String(publishError)))
+              return
+            }
             emitProgress({
               requestId,
               stage: 'finishing',
@@ -3344,31 +3774,6 @@ async function runFinalCommand_TwoPass(opts: RunFinalCommandOptions): Promise<vo
             })
             safeResolve()
             return
-          }
-
-          try {
-            const stats = await fsp.stat(outputPath)
-            if (stats.size > 0) {
-              const stderrText = stderrLines.join('\n')
-              const isBufferQueueWarning = /buffers queued|Error marking filters as finished/i.test(stderrText)
-              if (isBufferQueueWarning) {
-                console.warn(`[FinalExport 2-Pass] Pass 2 exited with code ${code} but file exists (${formatBytes(stats.size)}). Verifying...`)
-                try {
-                  const probeResult = await probeFile(outputPath)
-                  const probeDuration = probeResult?.format?.duration ?? 0
-                  if (isProbeDurationCloseEnough(probeDuration, totalDurationSec)) {
-                    console.warn(`[FinalExport 2-Pass] Probe OK: duration=${probeDuration.toFixed(1)}s. Accepting.`)
-                    emitProgress({ requestId, stage: 'finishing', percent: 100, timeSec: totalDurationSec, totalDurationSec, speedX: undefined, etaSec: 0 })
-                    safeResolve()
-                    return
-                  }
-                } catch (probeErr) {
-                  console.error(`[FinalExport 2-Pass] Probe failed:`, probeErr)
-                }
-              }
-            }
-          } catch {
-            // file not found
           }
 
           const tail = stderrLines.slice(-10).join('\n')
@@ -3390,9 +3795,7 @@ async function runFinalCommand_TwoPass(opts: RunFinalCommandOptions): Promise<vo
         if (!retriedMissingPass2Inputs && error?.missingPass2Inputs) {
           retriedMissingPass2Inputs = true
           console.warn('[FinalExport 2-Pass] Pass 2 lost one or more temp inputs during runtime. Rebuilding Pass 1 and retrying Pass 2 once...')
-          // FIX M-04: Clean up partial/corrupt output file before retrying.
-          // Pass 2 may have written a partial output before failing.
-          try { await fsp.rm(outputPath, { force: true }) } catch {}
+          // No-clobber policy: do not delete an existing output during retry.
           // FIX PERF-12b: Chỉ cleanup files MISSING, không xóa files valid trong shared cache
           const missingFiles = findMissingPreTranscodedOutputs(transcodedPaths)
           const missingSet = new Set(missingFiles)
@@ -3431,11 +3834,7 @@ async function runFinalCommand_TwoPass(opts: RunFinalCommandOptions): Promise<vo
             totalDurationSec,
             status: 'Pass 2/2: Đang thử lại với chế độ tiết kiệm bộ nhớ...',
           })
-          try {
-            await fsp.rm(outputPath, { force: true })
-          } catch {
-            // ignore stale partial output cleanup errors
-          }
+          // No-clobber policy: leave existing output untouched on retry.
           continue
         }
         throw error
@@ -3593,7 +3992,7 @@ async function runFinalCommand_SingleStep(opts: RunFinalCommandSingleStepOptions
       '-movflags', '+faststart',
       '-t',
       totalDurationSec.toFixed(3),
-      '-y',
+      '-n',
       outputPath,
     )
 
@@ -3784,14 +4183,14 @@ export async function scanAudioSource(payload: {
   requestId: string
   audioSource: FinalExportRequestPayload['audioSource']
 }): Promise<FinalExportScanResult> {
-  const files = await loadAudioFiles(payload.audioSource)
-  const totalDurationSec = files.reduce((sum, f) => sum + f.durationSec, 0)
+  const result = await loadAudioFiles(payload.audioSource)
+  const totalDurationSec = result.files.reduce((sum, f) => sum + f.durationSec, 0)
   return {
     requestId: payload.requestId,
     kind: 'audio',
-    fileCount: files.length,
+    fileCount: result.files.length,
     totalDurationSec,
-    items: files.map((f) => ({
+    items: result.files.map((f) => ({
       path: f.path,
       durationSec: f.durationSec,
       codecName: f.codecName,
@@ -3845,7 +4244,7 @@ export async function scanImageSource(payload: {
 export async function exportFinalVideo(
   request: FinalExportJobRequest,
   emitter: FinalExportEmitter
-): Promise<void> {
+): Promise<FinalExportDonePayload> {
   const requestId = request.requestId || randomUUID()
 
   try {
@@ -3859,7 +4258,9 @@ export async function exportFinalVideo(
       request.outputNames,
       request.priorityVideoSource,
       request.imageSource,
-      request.endingAudio
+      request.endingAudio,
+      !!request.uniqueRequired,
+      undefined,
     )
 
     // PLAN A: Disk space CHỈ CẢNH BÁO, KHÔNG CHẶN xuất video.
@@ -3905,7 +4306,7 @@ export async function exportFinalVideo(
     })
 
     // Step 2: Execute - chạy từng job
-    await executeFinalExport(
+    const donePayload = await executeFinalExport(
       plan,
       requestId,
       emitter,
@@ -3929,6 +4330,7 @@ export async function exportFinalVideo(
       undefined,
       request.audioVisualizer,
     )
+    return donePayload
   } catch (error: any) {
     const detailedError = describeErrorForLog(error)
     console.error('[FinalExport] Lỗi export video hoàn chỉnh:', detailedError, error)
@@ -3937,7 +4339,8 @@ export async function exportFinalVideo(
       error: detailedError || 'Xuất video thất bại.',
       message: detailedError,
     })
-    // NOTE: Không throw lại — emitter.error() đã báo lỗi cho UI.
-    // Nếu throw thì caller (IPC handler) sẽ catch và gửi thêm 1 error event → duplicate trên UI.
+    throw error
+  } finally {
+    videoJobManager.clearCancelled(requestId)
   }
 }
