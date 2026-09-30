@@ -2078,6 +2078,7 @@ async function runExportVideoWithOptions(
     !!jobRequest.uniqueRequired,
     reservedVideoClipIds,
     jobRequest.uniqueRequired ? undefined : getUsedSequenceFingerprints(),
+    requestId,
   )
   
   // Create emitter

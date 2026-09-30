@@ -1054,7 +1054,11 @@ export async function planFinalExport(
   uniqueRequired: boolean = false,
   reservedVideoClipIds?: ReadonlySet<string>,
   existingSequenceFingerprints?: ReadonlySet<string>,
+  requestId?: string,
 ): Promise<ExportPlan> {
+  if (requestId && videoJobManager.isCancelled(requestId)) {
+    throw new Error('Đã dừng bởi người dùng')
+  }
   // Medium: Validate output folder writable
   try {
     await fsp.mkdir(outputFolder, { recursive: true })
@@ -1065,6 +1069,9 @@ export async function planFinalExport(
 
   // 1. Scan audio (probe 1 lần)
   const audioScan = await scanAudioSourceForPlan(audioSource)
+  if (requestId && videoJobManager.isCancelled(requestId)) {
+    throw new Error('Đã dừng bởi người dùng')
+  }
   const audioItems = audioScan.items
 
   if (audioItems.length === 0) {
@@ -1075,6 +1082,9 @@ export async function planFinalExport(
   const videoClips: VideoClipItem[] = videoSource
     ? await scanVideoSourceForPlan(videoSource)
     : []
+  if (requestId && videoJobManager.isCancelled(requestId)) {
+    throw new Error('Đã dừng bởi người dùng')
+  }
   let priorityVideoClips: VideoClipItem[] | undefined
   if (priorityVideoSource) {
     try {
@@ -4273,6 +4283,8 @@ export async function exportFinalVideo(
       request.endingAudio,
       !!request.uniqueRequired,
       undefined,
+      undefined,
+      requestId,
     )
 
     // PLAN A: Disk space CHỈ CẢNH BÁO, KHÔNG CHẶN xuất video.

@@ -1,5 +1,13 @@
 # HANDOFF
 
+## 2026-09-30 — Stop final-export planning when request is cancelled
+
+- Changed: `planFinalExport` accepts request identity and checks cancellation after audio/video planning scans; Autopilot passes its request ID so large planner scans cannot continue into FFmpeg after cancel.
+- Files: [backend/video/finalExport.ts](backend/video/finalExport.ts), [backend/autopilot/autopilotRunner.ts](backend/autopilot/autopilotRunner.ts), [HANDOFF.md](HANDOFF.md).
+- Preserved: planning order, audio duration semantics, slideshow/priority planning, and existing request payloads.
+- Verification: esbuild syntax checks and `git diff --check` passed. Large network-folder cancellation smoke test remains pending.
+- Follow-up: cancel during audio/video planning and assert no final job starts and terminal cancellation reaches JobQueue.
+
 ## 2026-09-30 — Register Autopilot export activity with main teardown guard
 
 - Changed: Autopilot start now marks main-process export activity active for the full background run and clears it in `finally`, so updater/auth/quit guards see active Autopilot media work.
