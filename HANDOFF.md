@@ -1,5 +1,13 @@
 # HANDOFF
 
+## 2026-09-30 — Treat Autopilot cancellation as terminal day failure
+
+- Changed: `runAutopilotForDay` now throws through cancellation checkpoints after audio export and video selection instead of returning early; outer orchestration can emit one cancellation terminal state without dereferencing an undefined day result or marking a cancelled day successful.
+- Files: [backend/autopilot/autopilotRunner.ts](backend/autopilot/autopilotRunner.ts), [HANDOFF.md](HANDOFF.md).
+- Preserved: normal partial-audio handling, valid output generation, and existing cancellation controller behavior.
+- Verification: esbuild syntax checks for Autopilot and final export passed; `git diff --check` passed. Focused Autopilot suite remains 12/13 because one pre-existing validation-message assertion uses an unaccented label mismatch.
+- Follow-up: exercise cancel during Step 2 and Step 3 with real FFmpeg; assert no success-day log is emitted.
+
 ## 2026-09-30 — Full-audit fallback checkpoint
 
 - Changed: Created fallback commit `779c9f5` containing the pre-audit repository source/test state; excluded untracked build dumps, `.omc` session state, logs, extracted releases, and temporary debug files.

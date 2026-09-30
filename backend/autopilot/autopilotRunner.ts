@@ -2653,7 +2653,7 @@ async function runAutopilotForDay(
     })
   }
 
-  if (isCancelling) return
+  throwIfCancelling()
 
   if (exportedAudioPaths.length === 0) {
     const details = skippedAudioPlaylists.map(describeSkippedAudioPlaylist).join('\n\n')
@@ -2702,7 +2702,7 @@ async function runAutopilotForDay(
   )
 
   // Check cancellation sau khi chọn video
-  if (isCancelling) return
+  throwIfCancelling()
 
   if (selectedVideoPaths.length === 0) {
     throw new Error(
