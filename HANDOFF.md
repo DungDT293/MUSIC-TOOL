@@ -1,5 +1,13 @@
 # HANDOFF
 
+## 2026-09-30 — Cancel YouTube children during handler cleanup
+
+- Changed: YouTube handler cleanup now requests cancellation of all downloader-managed yt-dlp processes before removing listeners and dropping the downloader singleton.
+- Files: [electron/youtube/youtubeHandlers.ts](electron/youtube/youtubeHandlers.ts), [HANDOFF.md](HANDOFF.md).
+- Preserved: cookie storage, downloader reuse, IPC channels, and bounded downloader cancellation behavior.
+- Verification: focused YouTube tests remain 10/10 after the preceding downloader batch; handler syntax check pending.
+- Follow-up: quit app during channel/concurrent/metadata yt-dlp activity on Windows and confirm child processes exit.
+
 ## 2026-09-30 — Validate downloader metadata URLs and track listing processes
 
 - Changed: YouTube metadata/channel/size IPC handlers now reject unsupported URLs before yt-dlp; direct metadata/channel listing yt-dlp processes register in the downloader active-process registry so cancel/shutdown can terminate them.

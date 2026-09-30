@@ -632,6 +632,9 @@ export function cleanupYouTubeHandlers() {
   console.log('[IPC] Cleaning up YouTube handlers...');
 
   if (downloader) {
+    try { downloader.cancelDownload() } catch (error: any) {
+      console.warn('[IPC] Failed to cancel YouTube processes during cleanup:', error?.message || error)
+    }
     downloader.removeAllListeners();
     downloader = null;
   }
