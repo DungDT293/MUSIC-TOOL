@@ -1168,7 +1168,7 @@ export async function validateAutopilotStartConfig(
 
   await fsp.mkdir(config.folders.rootAudio, { recursive: true }).catch(() => {})
   await validateFolder(config.folders.rootAudio, 'Thu muc xuat Audio')
-  await validateMultiFolder(config.folders.rootVideo, 'Thu muc goc Video da cat')
+  await validateMultiFolder(config.folders.rootVideo, 'Thư mục gốc Video đã cắt')
   await fsp.mkdir(config.folders.rootFinal, { recursive: true }).catch(() => {})
   await validateFolder(config.folders.rootFinal, 'Thu muc xuat Video hoan chinh')
 

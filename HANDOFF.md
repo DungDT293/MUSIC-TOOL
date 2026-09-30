@@ -1,5 +1,12 @@
 # HANDOFF
 
+## 2026-09-30 — Normalize Autopilot validation label and focused test baseline
+
+- Changed: Restored accented root-video validation label so the existing regression assertion matches user-facing diagnostics.
+- Files: [backend/autopilot/autopilotRunner.ts](backend/autopilot/autopilotRunner.ts), [HANDOFF.md](HANDOFF.md).
+- Verification: focused Autopilot/JobQueue/YouTube suite passed 35/35; build remains independently verified, package build blocker documented below.
+- Follow-up: run full suite and release artifact build after resolving resource/archive memory constraints.
+
 ## 2026-09-30 — Package browser cookie extractor resource
 
 - Changed: electron-builder now copies `backend/python/browser_cookie_extractor.py` to packaged `resources/python/browser_cookie_extractor.py`, matching `browserCookieService.ts` lookup paths.
