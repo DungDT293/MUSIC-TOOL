@@ -359,7 +359,7 @@ describe('Auth restore regression', () => {
   })
 
   test('getOrInitAuthState restores allowed state when remembered auth has deviceToken but no password', async () => {
-    vi.doMock('../../backend/license/machineId', () => {
+    vi.doMock('../../backend/license/machineId', () => ({
       getMachineHash: vi.fn().mockResolvedValue('machine-1'),
       hasMachineHashCacheFootprint: vi.fn().mockReturnValue(true),
     }))

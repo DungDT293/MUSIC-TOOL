@@ -1,5 +1,12 @@
 # HANDOFF
 
+## 2026-09-30 — Complete focused release gate checks
+
+- Changed: Corrected the existing Autopilot validation-label regression and expanded decode verification error matching so code-0 FFmpeg output with explicit `Error` stderr fails as intended.
+- Files: [backend/autopilot/autopilotRunner.ts](backend/autopilot/autopilotRunner.ts), [backend/video/outputVerification.ts](backend/video/outputVerification.ts), [tests/e2e/auth.e2e.ts](tests/e2e/auth.e2e.ts), [HANDOFF.md](HANDOFF.md).
+- Verification: focused Autopilot/JobQueue/YouTube suite passed 35/35; output verification suite passed 14/14; `npm run build` passed. Full Vitest now reaches tests but still has a separate Electron mock failure in `tests/e2e/auth.e2e.ts` (`electron` mock lacks `protocol` export); portable archive remains blocked by 7-Zip memory.
+- Follow-up: fix the auth test mock contract, rerun full suite, and build portable/NSIS on a machine with enough archive memory.
+
 ## 2026-09-30 — Verify unpacked Windows package resources
 
 - Changed: Ran electron-builder Windows unpacked packaging after adding browser cookie extractor resource; verified packaged `resources/bin/ffmpeg.exe`, `ffprobe.exe`, `yt-dlp.exe`, and `resources/python/browser_cookie_extractor.py` exist.

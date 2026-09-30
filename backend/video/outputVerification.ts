@@ -213,7 +213,7 @@ export async function verifyOutputVideo(
         // FFmpeg stderr luôn chứa chúng (e.g. "-v error" log level, error-concealment messages).
         // KHÔNG thêm "non-monotonous dts" / "premature end" — đó là warning THƯỜNG GẶP của
         // concat demuxer copy path (Pass 2), không phải lỗi hỏng file → sẽ fail nhầm video hợp lệ.
-        const errorPattern = /corrupt|invalid data|moov atom not found|could not find codec|truncated|missing picture|partial file/i
+        const errorPattern = /error|corrupt|invalid data|moov atom not found|could not find codec|truncated|missing picture|partial file/i
         const hasError = errorPattern.test(stderr)
         if (code === 0 && !hasError) {
           // Pass — vẫn log stderr nếu có nội dung warning hữu ích cho post-mortem
