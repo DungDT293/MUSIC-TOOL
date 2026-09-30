@@ -1,5 +1,13 @@
 # HANDOFF
 
+## 2026-09-30 — Reject timed-out output decode verification
+
+- Changed: FFmpeg decode verification timeout now fails verification instead of accepting an unverified/corrupt output as valid. Timeout reason remains in diagnostics.
+- Files: [backend/video/outputVerification.ts](backend/video/outputVerification.ts), [HANDOFF.md](HANDOFF.md).
+- Preserved: decode window, timeout duration, stderr capture, and normal code-0 verification behavior.
+- Verification: source inspection and diff check pending; timeout fixture test remains required.
+- Follow-up: test a deliberately slow/blocked decode and a large valid file; ensure timeout is reported as failure with no output publish.
+
 ## 2026-09-30 — Cancel YouTube children during handler cleanup
 
 - Changed: YouTube handler cleanup now requests cancellation of all downloader-managed yt-dlp processes before removing listeners and dropping the downloader singleton.

@@ -183,7 +183,7 @@ export async function verifyOutputVideo(
       const killTimer = setTimeout(() => {
         decodeStderrTail = stderr.slice(-1000)
         onLog?.(
-          `[verifyOutput] decode test timeout (${decodeTimeoutMs}ms), killing process — treating as OK (file lớn)`
+          `[verifyOutput] decode test timeout (${decodeTimeoutMs}ms), killing process — treating as failed verification`
         )
         if (decodeStderrTail.trim().length > 0) {
           onLog?.(`[verifyOutput] decode stderr (timeout, tail 1KB): ${decodeStderrTail}`)
@@ -191,8 +191,8 @@ export async function verifyOutputVideo(
         try {
           child.kill('SIGKILL')
         } catch {}
-        // Timeout KHÔNG phải lỗi thật — file lớn decode lâu hơn limit → coi là OK
-        safeResolve(true)
+        // Timeout cannot prove file integrity; fail verification instead of accepting unknown output.
+        safeResolve(false)
       }, decodeTimeoutMs)
 
       child.on('error', (err) => {
