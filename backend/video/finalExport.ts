@@ -2748,6 +2748,7 @@ async function preTranscodeClips(opts: PreTranscodeClipsOptions): Promise<string
 
       const proc = spawn(ffmpegPath, args, { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] })
       const childRequestId = `${requestId}-pretranscode-${index}-${mode}`
+      videoJobManager.registerJob(requestId, proc)
       videoJobManager.registerJob(childRequestId, proc)
 
       // Smart timeout: tối thiểu 3 phút, tỉ lệ 15x duration (clip 60s → 15 phút),

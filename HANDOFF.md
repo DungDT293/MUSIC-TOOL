@@ -1,5 +1,13 @@
 # HANDOFF
 
+## 2026-09-30 — Register pretranscode children under parent cancellation
+
+- Changed: Pretranscode FFmpeg children are now registered under both parent request ID and child ID, so parent cancellation can kill quiet active workers immediately while child-specific cancellation remains identity-safe.
+- Files: [backend/video/finalExport.ts](backend/video/finalExport.ts), [HANDOFF.md](HANDOFF.md).
+- Preserved: GPU/CPU fallback, worker retry flow, child identity cleanup, and shared transcode cache behavior.
+- Verification: esbuild syntax check and `git diff --check` passed. Windows quiet-process cancellation smoke test remains pending.
+- Follow-up: cancel during silent pretranscode and assert process exits before timeout and no later job starts.
+
 ## 2026-09-30 — Treat Autopilot cancellation as terminal day failure
 
 - Changed: `runAutopilotForDay` now throws through cancellation checkpoints after audio export and video selection instead of returning early; outer orchestration can emit one cancellation terminal state without dereferencing an undefined day result or marking a cancelled day successful.
