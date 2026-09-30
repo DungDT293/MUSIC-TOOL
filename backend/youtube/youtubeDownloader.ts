@@ -849,6 +849,7 @@ export class YouTubeDownloader extends EventEmitter {
 
     return new Promise((resolve, reject) => {
       const proc = spawn(this.ytDlpPath, args);
+      const externalProcId = this.registerExternalProcess('yt-dlp', proc)
 
       let stdout = '';
       let stderr = '';
@@ -1093,6 +1094,12 @@ export class YouTubeDownloader extends EventEmitter {
   /** Helper: remove a tracked process (called on completion) */
   private removeProcess(jobId: string): void {
     this.activeProcesses.delete(jobId);
+  }
+
+  private registerExternalProcess(prefix: string, proc: ChildProcess): string {
+    const jobId = `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    this.addProcess(jobId, proc)
+    return jobId
   }
 
   private static extractOutputPathsFromLog(text: string): string[] {
@@ -1525,6 +1532,7 @@ export class YouTubeDownloader extends EventEmitter {
 
     return new Promise((resolve, reject) => {
       const proc = spawn(this.ytDlpPath, args);
+      const externalProcId = this.registerExternalProcess('yt-dlp', proc)
 
       let stdout = '';
       let stderr = '';
@@ -2265,6 +2273,7 @@ export class YouTubeDownloader extends EventEmitter {
 
     return new Promise((resolve, reject) => {
       const proc = spawn(this.ytDlpPath, args);
+      const externalProcId = this.registerExternalProcess('yt-dlp', proc)
       const _procId = `dl-folder-${Date.now()}`
       this.addProcess(_procId, proc);
 

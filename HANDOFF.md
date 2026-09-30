@@ -1,5 +1,13 @@
 # HANDOFF
 
+## 2026-09-30 — Validate downloader metadata URLs and track listing processes
+
+- Changed: YouTube metadata/channel/size IPC handlers now reject unsupported URLs before yt-dlp; direct metadata/channel listing yt-dlp processes register in the downloader active-process registry so cancel/shutdown can terminate them.
+- Files: [electron/youtube/youtubeHandlers.ts](electron/youtube/youtubeHandlers.ts), [backend/youtube/youtubeDownloader.ts](backend/youtube/youtubeDownloader.ts), [HANDOFF.md](HANDOFF.md).
+- Preserved: download formats, cookie resolution, bounded retries, channel output structure, and existing single-download process tracking.
+- Verification: esbuild syntax checks for downloader and handlers passed. Focused downloader smoke/cancel tests pending.
+- Follow-up: validate YouTube/Facebook/TikTok metadata URLs, cancel channel listing during yt-dlp, and quit app during listing; confirm child process teardown.
+
 ## 2026-09-30 — Bound Autopilot video scan and stop on cancel
 
 - Changed: Recursive video collection now shares a hard 50,000-entry cap, checks cancellation while walking, avoids unbounded recursive accumulation, and aborts before merging/shuffling after scan cancellation.

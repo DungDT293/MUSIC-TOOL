@@ -132,7 +132,10 @@ export function setupYouTubeHandlers(mainWindow: BrowserWindow) {
       if (!downloader) {
         throw new Error('Downloader not initialized');
       }
-      
+      if (typeof url !== 'string' || !downloader.isValidYouTubeUrl(url)) {
+        throw new Error('URL không được hỗ trợ hoặc không hợp lệ.')
+      }
+
       const videoInfo = await downloader.getVideoInfo(url);
       
       return {
@@ -156,7 +159,10 @@ export function setupYouTubeHandlers(mainWindow: BrowserWindow) {
       if (!downloader) {
         throw new Error('Downloader not initialized');
       }
-      
+      if (typeof url !== 'string' || !downloader.isValidYouTubeUrl(url)) {
+        throw new Error('URL không được hỗ trợ hoặc không hợp lệ.')
+      }
+
       const channelInfo = await downloader.getChannelInfo(url);
       
       return {
@@ -180,7 +186,10 @@ export function setupYouTubeHandlers(mainWindow: BrowserWindow) {
       if (!downloader) {
         throw new Error('Downloader not initialized');
       }
-      
+      if (typeof url !== 'string' || !downloader.isValidYouTubeUrl(url)) {
+        throw new Error('URL không được hỗ trợ hoặc không hợp lệ.')
+      }
+
       const videos = await downloader.getChannelVideos(url, limit);
       
       return {
@@ -206,7 +215,10 @@ export function setupYouTubeHandlers(mainWindow: BrowserWindow) {
         if (!downloader) {
           throw new Error('Downloader not initialized');
         }
-        
+        if (typeof url !== 'string' || !downloader.isValidYouTubeUrl(url)) {
+          throw new Error('URL không được hỗ trợ hoặc không hợp lệ.')
+        }
+
         const estimate = await downloader.estimateChannelSize(url, quality, limit);
         
         return {
