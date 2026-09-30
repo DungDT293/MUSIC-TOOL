@@ -510,13 +510,16 @@ describe('Auth restore regression', () => {
     })
 
     vi.doMock('electron', () => ({
-      app: { getVersion: vi.fn() },
-      ipcMain: { handle },
+      app: { getVersion: vi.fn(), whenReady: vi.fn().mockResolvedValue(undefined), on: vi.fn(), isPackaged: false, quit: vi.fn() },
+      ipcMain: { handle, removeHandler: vi.fn(), on: vi.fn() },
+      protocol: { registerSchemesAsPrivileged: vi.fn(), handle: vi.fn() },
+      BrowserWindow: class MockBrowserWindow { static getAllWindows = vi.fn(() => []); static fromWebContents = vi.fn(); isDestroyed() { return false } },
     }))
     vi.doMock('../../electron/authState', () => ({
       authState: null,
       setAuthState,
       getOrInitAuthState,
+      isDevAuthBypassEnabled: vi.fn(() => false),
       getFriendlyAuthError: vi.fn((_err: any, fallback: string) => fallback),
       postJson,
       APP_VERSION: '1.0.0',
@@ -581,8 +584,10 @@ describe('Auth restore regression', () => {
     const writeEncryptedAuthState = vi.fn().mockResolvedValue(undefined)
 
     vi.doMock('electron', () => ({
-      app: { getVersion: vi.fn() },
-      ipcMain: { handle },
+      app: { getVersion: vi.fn(), whenReady: vi.fn().mockResolvedValue(undefined), on: vi.fn(), isPackaged: false, quit: vi.fn() },
+      ipcMain: { handle, removeHandler: vi.fn(), on: vi.fn() },
+      protocol: { registerSchemesAsPrivileged: vi.fn(), handle: vi.fn() },
+      BrowserWindow: class MockBrowserWindow { static getAllWindows = vi.fn(() => []); static fromWebContents = vi.fn(); isDestroyed() { return false } },
     }))
     vi.doMock('../../electron/authState', () => ({
       authState: null,

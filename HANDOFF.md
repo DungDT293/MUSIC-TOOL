@@ -1,5 +1,12 @@
 # HANDOFF
 
+## 2026-09-30 — Complete auth mock and verification test gate
+
+- Changed: Completed Electron mock surface required by auth regression tests (`protocol`, lifecycle, IPC listener/removal, BrowserWindow stub, and dev-auth helper).
+- Files: [tests/e2e/auth.e2e.ts](tests/e2e/auth.e2e.ts), [backend/video/outputVerification.ts](backend/video/outputVerification.ts), [HANDOFF.md](HANDOFF.md).
+- Verification: auth suite passed 16/16 executed tests (2 real-launch tests skipped); output verification passed 14/14; focused lifecycle suite passed 35/35; `npm run build` passed.
+- Follow-up: rerun full Vitest and package portable/NSIS on a host with enough 7-Zip memory; current unpacked package already passes resource presence checks.
+
 ## 2026-09-30 — Complete focused release gate checks
 
 - Changed: Corrected the existing Autopilot validation-label regression and expanded decode verification error matching so code-0 FFmpeg output with explicit `Error` stderr fails as intended.
