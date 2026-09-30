@@ -1,5 +1,13 @@
 # HANDOFF
 
+## 2026-09-30 — Register Autopilot export activity with main teardown guard
+
+- Changed: Autopilot start now marks main-process export activity active for the full background run and clears it in `finally`, so updater/auth/quit guards see active Autopilot media work.
+- Files: [electron/handlers/autopilotHandlers.ts](electron/handlers/autopilotHandlers.ts), [HANDOFF.md](HANDOFF.md).
+- Preserved: renderer export activity tracking and Autopilot IPC channels.
+- Verification: esbuild syntax check and `git diff --check` passed. Packaged quit/updater smoke test remains pending.
+- Follow-up: start Autopilot, attempt update/quit during active FFmpeg, verify guard remains active until pipeline teardown.
+
 ## 2026-09-30 — Reject timed-out output decode verification
 
 - Changed: FFmpeg decode verification timeout now fails verification instead of accepting an unverified/corrupt output as valid. Timeout reason remains in diagnostics.

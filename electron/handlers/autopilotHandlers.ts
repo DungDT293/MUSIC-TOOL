@@ -26,6 +26,7 @@ import {
   type AutopilotProgress,
 } from '../../backend/autopilot/autopilotRunner'
 import { runAutopilotHealthCheck } from '../../backend/autopilot/healthCheck'
+import { setHasActiveExport } from '../main'
 
 let autopilotStartInFlight = false
 
@@ -100,9 +101,12 @@ export function registerAutopilotHandlers(_getMainWindow: () => BrowserWindow | 
         },
       }
 
-      startAutopilot(effectiveConfig).catch((error: any) => {
-        console.error('[Autopilot] Pipeline error (background):', error)
-      })
+      setHasActiveExport(true)
+      startAutopilot(effectiveConfig)
+        .catch((error: any) => {
+          console.error('[Autopilot] Pipeline error (background):', error)
+        })
+        .finally(() => setHasActiveExport(false))
 
       await new Promise<void>(resolve => setTimeout(resolve, 200))
       return { ok: true }
