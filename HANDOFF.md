@@ -1,5 +1,12 @@
 # HANDOFF
 
+## 2026-09-30 — Verify unpacked Windows package resources
+
+- Changed: Ran electron-builder Windows unpacked packaging after adding browser cookie extractor resource; verified packaged `resources/bin/ffmpeg.exe`, `ffprobe.exe`, `yt-dlp.exe`, and `resources/python/browser_cookie_extractor.py` exist.
+- Files: [electron-builder.json5](electron-builder.json5), [HANDOFF.md](HANDOFF.md).
+- Verification: `npx electron-builder --config electron-builder.json5 --win --dir` passed; resource check passed. Portable archive still fails 7-Zip with `Can't allocate required memory` while archiving ~1.36 GiB; no installer/portable artifact accepted.
+- Follow-up: build portable/NSIS on a machine with sufficient 7-Zip memory or reduce packaged payload after explicit size review; do not publish current archive.
+
 ## 2026-09-30 — Normalize Autopilot validation label and focused test baseline
 
 - Changed: Restored accented root-video validation label so the existing regression assertion matches user-facing diagnostics.
