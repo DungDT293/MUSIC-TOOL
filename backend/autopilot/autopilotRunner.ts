@@ -341,6 +341,8 @@ export interface SkippedAudioPlaylist {
 export interface AutopilotDayResult {
   validAudioPlaylistCount: number
   skippedAudioPlaylists: SkippedAudioPlaylist[]
+  finalExportFailedJobs?: NonNullable<FinalExportDonePayload['failedJobs']>
+  finalExportAudioFailures?: NonNullable<FinalExportDonePayload['audioFailures']>
 }
 
 function describeSkippedAudioPlaylist(item: SkippedAudioPlaylist): string {
@@ -849,7 +851,7 @@ export async function startAutopilot(
     })
 
     const failedDays: { dateCode: string; error: string }[] = []
-    const partialDays: { dateCode: string; skippedAudioPlaylists: SkippedAudioPlaylist[] }[] = []
+    const partialDays: { dateCode: string; skippedAudioPlaylists: SkippedAudioPlaylist[]; failedJobs: NonNullable<FinalExportDonePayload['failedJobs']>; audioFailures: NonNullable<FinalExportDonePayload['audioFailures']> }[] = []
     const succeededDays: string[] = []
     const completedDays: string[] = []
     // One Autopilot run owns one reservation set. Each day planner excludes clips
@@ -877,9 +879,18 @@ export async function startAutopilot(
         const dayElapsedStr = formatDuration(dayElapsed)
         succeededDays.push(plan.dateCode)
         completedDays.push(plan.dateCode)
-        if (dayResult.skippedAudioPlaylists.length > 0) {
-          partialDays.push({ dateCode: plan.dateCode, skippedAudioPlaylists: dayResult.skippedAudioPlaylists })
-          emitLog('warn', `[Bước 5] Ngày ${plan.dateCode}: ${dayResult.validAudioPlaylistCount}/${normalizeNumber(plan.playlistCount as any, 0)} playlist đạt chuẩn; các playlist lỗi đã bỏ qua, video chỉ tạo cho playlist đạt chuẩn.`)
+        if (
+          dayResult.skippedAudioPlaylists.length > 0 ||
+          (dayResult.finalExportFailedJobs?.length ?? 0) > 0 ||
+          (dayResult.finalExportAudioFailures?.length ?? 0) > 0
+        ) {
+          partialDays.push({
+            dateCode: plan.dateCode,
+            skippedAudioPlaylists: dayResult.skippedAudioPlaylists,
+            failedJobs: dayResult.finalExportFailedJobs ?? [],
+            audioFailures: dayResult.finalExportAudioFailures ?? [],
+          })
+          emitLog('warn', `[Bước 5] Ngày ${plan.dateCode}: ${dayResult.validAudioPlaylistCount}/${normalizeNumber(plan.playlistCount as any, 0)} playlist đạt chuẩn; final export có lỗi một phần.`)
         }
         const overallPercent = Math.round(((i + 1) / totalDays) * 100)
 
@@ -936,9 +947,15 @@ export async function startAutopilot(
     }
     for (const partialDay of partialDays) {
       summaryLines.push('')
-      summaryLines.push(`📋 Ngày ${partialDay.dateCode}: playlist audio bị bỏ qua`)
+      summaryLines.push(`📋 Ngày ${partialDay.dateCode}: hoàn tất một phần`)
       for (const skipped of partialDay.skippedAudioPlaylists) {
         summaryLines.push(`  • ${describeSkippedAudioPlaylist(skipped)}`)
+      }
+      for (const failure of partialDay.audioFailures.slice(0, MAX_SUMMARY_LOG_ITEMS)) {
+        summaryLines.push(`  • Audio lỗi: ${path.basename(failure.path)} | ${failure.stage} | ${failure.detail}`)
+      }
+      for (const failure of partialDay.failedJobs.slice(0, MAX_SUMMARY_LOG_ITEMS)) {
+        summaryLines.push(`  • Video lỗi: ${failure.fileName} | ${failure.stage ?? 'không xác định'} | ${failure.repairHint ?? failure.error.slice(0, 500)}`)
       }
     }
     emitLogBlock('info', summaryLines)
@@ -952,7 +969,12 @@ export async function startAutopilot(
       })
     } else if (failedDays.length > 0 || partialDays.length > 0) {
       const partialDetails = partialDays
-        .map((day) => `Ngày ${day.dateCode}:\n${day.skippedAudioPlaylists.map(describeSkippedAudioPlaylist).join('\n\n')}`)
+        .map((day) => [
+          `Ngày ${day.dateCode}:`,
+          day.skippedAudioPlaylists.map(describeSkippedAudioPlaylist).join('\n\n'),
+          day.audioFailures.map((failure) => `Audio lỗi: ${path.basename(failure.path)} | ${failure.stage} | ${failure.detail}\n${failure.repairHint}`).join('\n\n'),
+          day.failedJobs.map((failure) => `Video lỗi: ${failure.fileName} | ${failure.stage ?? 'không xác định'}\n${failure.repairHint ?? failure.error}`).join('\n\n'),
+        ].filter(Boolean).join('\n\n'))
         .join('\n\n')
       emit({
         status: 'completed_with_errors',
@@ -2315,6 +2337,9 @@ async function runExportVideoWithOptions(
         ? ` | ... và ${failedJobs.length - MAX_SUMMARY_LOG_ITEMS} job lỗi khác`
         : ''
     const details = failureParts.length > 0 ? ` ${failureParts.join(' | ')}${failureSuffix}` : ''
+    if (outputCount > 0) {
+      return finalDonePayload
+    }
     throw new Error(
       `Final export chỉ tạo được ${outputCount}/${playlists.length} video cho ngày ${dateCode}.${details}`
     )
@@ -2922,5 +2947,7 @@ async function runAutopilotForDay(
   return {
     validAudioPlaylistCount: validPlaylists.length,
     skippedAudioPlaylists,
+    finalExportFailedJobs: executedDonePayload.failedJobs ?? [],
+    finalExportAudioFailures: executedDonePayload.audioFailures ?? [],
   }
 }

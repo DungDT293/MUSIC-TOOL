@@ -1,5 +1,13 @@
 # HANDOFF
 
+## 2026-09-30 — Preserve structured partial Autopilot results
+
+- Changed: Final export results with at least one valid output now return to Autopilot as partial results instead of throwing a second aggregate error after `done`; day summaries carry failed video jobs and rejected audio diagnostics with repair hints. Zero-output failures still throw.
+- Files: [backend/autopilot/autopilotRunner.ts](backend/autopilot/autopilotRunner.ts), [HANDOFF.md](HANDOFF.md).
+- Preserved: all-valid success, all-failed error, existing audio duration validation, and cancellation terminal behavior.
+- Verification: esbuild syntax check and `git diff --check` passed. Partial-day real-media smoke test remains pending.
+- Follow-up: run three playlists with one rejected audio and one failed video; assert one `completed_with_errors` result with valid output retained and no later contradictory error.
+
 ## 2026-09-30 — Stop final-export planning when request is cancelled
 
 - Changed: `planFinalExport` accepts request identity and checks cancellation after audio/video planning scans; Autopilot passes its request ID so large planner scans cannot continue into FFmpeg after cancel.
