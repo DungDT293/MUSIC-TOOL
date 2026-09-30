@@ -1,5 +1,12 @@
 # HANDOFF
 
+## 2026-09-30 — Full-audit fallback checkpoint
+
+- Changed: Created fallback commit `779c9f5` containing the pre-audit repository source/test state; excluded untracked build dumps, `.omc` session state, logs, extracted releases, and temporary debug files.
+- Files: all tracked source/test changes already present in the worktree; no new product behavior added by this checkpoint.
+- Why: User requested a safe rollback point before full-tool audit and phased remediation.
+- Follow-up: Audit parent tree read-only first; do not reset or clean untracked artifacts without explicit approval. Implement only approved P0/P1 batches, one batch per review boundary.
+
 ## 2026-09-30 — Stop final export cleanly on cancellation
 
 - Changed: Final export now aborts cancellation before recording a failed job, before emitting `done`, and before source deletion. Cancelled jobs no longer continue later outputs or delete successful inputs.
