@@ -33,6 +33,10 @@
       to: 'scripts',
       filter: ['*.ps1', '*.bat'],
     },
+    {
+      from: 'backend/python/browser_cookie_extractor.py',
+      to: 'python/browser_cookie_extractor.py',
+    },
   ],
 
   win: {

@@ -1,5 +1,13 @@
 # HANDOFF
 
+## 2026-09-30 — Package browser cookie extractor resource
+
+- Changed: electron-builder now copies `backend/python/browser_cookie_extractor.py` to packaged `resources/python/browser_cookie_extractor.py`, matching `browserCookieService.ts` lookup paths.
+- Files: [electron-builder.json5](electron-builder.json5), [HANDOFF.md](HANDOFF.md).
+- Preserved: existing FFmpeg/FFprobe/yt-dlp/security/scripts resources and development path lookup.
+- Verification: existing `4.5.2-r2` artifact contains FFmpeg/FFprobe/yt-dlp but lacks cookie extractor; config change syntax/build verification pending.
+- Follow-up: build portable/installer and assert `resources/python/browser_cookie_extractor.py` exists in both outputs.
+
 ## 2026-09-30 — Preserve structured partial Autopilot results
 
 - Changed: Final export results with at least one valid output now return to Autopilot as partial results instead of throwing a second aggregate error after `done`; day summaries carry failed video jobs and rejected audio diagnostics with repair hints. Zero-output failures still throw.
