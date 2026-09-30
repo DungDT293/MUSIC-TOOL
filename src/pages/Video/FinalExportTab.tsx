@@ -172,6 +172,9 @@ function FinalExportTab() {
   const [progressState, setProgressState] = useState<ProgressState | null>(null)
   const [statusText, setStatusText] = useState('Chưa bắt đầu xuất video.')
   const [activeRequestId, setActiveRequestId] = useState<string | null>(null)
+  const activeRequestIdRef = useRef<string | null>(null)
+  const cancelledRequestIdsRef = useRef(new Set<string>())
+  const scanGenerationRef = useRef(0)
   const [audioFileCount, setAudioFileCount] = useState<number | null>(null)
   const [videoFileCount, setVideoFileCount] = useState<number | null>(null)
   const [audioTotalSec, setAudioTotalSec] = useState<number | null>(null)
@@ -344,17 +347,18 @@ function FinalExportTab() {
             return
           }
           console.log('[FinalExport] Found running job, restoring state:', requestId)
+          activeRequestIdRef.current = requestId
+          isExportingRef.current = true
           setActiveRequestId(requestId)
           setIsExporting(true)
-          
-          if (runningJob.progress) {
-            const progressPercent = runningJob.progress.percent ?? 0
+
+          if (typeof runningJob.progress === 'number') {
             setProgressState({
-              percent: progressPercent,
+              percent: runningJob.progress,
               timeSec: 0,
               totalDurationSec: 0,
             })
-            setStatusText(runningJob.progress.message || 'Đang tiếp tục xuất video...')
+            setStatusText('Đang tiếp tục xuất video...')
           }
         }
       } catch (err) {
@@ -373,7 +377,8 @@ function FinalExportTab() {
     if (!api?.videoFinalExport) return undefined
 
     const unsubscribeProgress = api.videoFinalExport.onProgress((payload: FinalExportProgressPayload) => {
-      if (activeRequestId && payload.requestId !== activeRequestId) return
+      const expectedRequestId = activeRequestIdRef.current
+      if (!expectedRequestId || cancelledRequestIdsRef.current.has(payload.requestId) || payload.requestId !== expectedRequestId) return
       setIsExporting(true)
       // PHASE 6: Progress theo job - jobIndex/totalJobs
       if (payload.totalOutputs && payload.currentIndex) {
@@ -415,7 +420,8 @@ function FinalExportTab() {
     })
 
     const unsubscribeDone = api.videoFinalExport.onDone((payload: FinalExportDonePayload) => {
-      if (activeRequestId && payload.requestId !== activeRequestId) return
+      const expectedRequestId = activeRequestIdRef.current
+      if (!expectedRequestId || cancelledRequestIdsRef.current.has(payload.requestId) || payload.requestId !== expectedRequestId) return
       isExportingRef.current = false
       setIsExporting(false)
       // FIX C-01: Unregister from global export activity store
@@ -464,7 +470,8 @@ function FinalExportTab() {
     })
 
     const unsubscribeError = api.videoFinalExport.onError((payload: FinalExportErrorPayload) => {
-      if (activeRequestId && payload.requestId !== activeRequestId) return
+      const expectedRequestId = activeRequestIdRef.current
+      if (!expectedRequestId || cancelledRequestIdsRef.current.has(payload.requestId) || payload.requestId !== expectedRequestId) return
       isExportingRef.current = false
       setIsExporting(false)
       // FIX C-01: Unregister from global export activity store
@@ -609,6 +616,7 @@ function FinalExportTab() {
         source = { type: 'folder', path: selectedPath }
       }
       if (!source) return
+      const scanGeneration = ++scanGenerationRef.current
       if (target === 'audio') {
         setAudioSource(source)
         try {
@@ -616,6 +624,7 @@ function FinalExportTab() {
             requestId: `scan-audio-${Date.now()}`,
             audioSource: source,
           })
+          if (scanGeneration !== scanGenerationRef.current) return
           if (scanRes && scanRes.kind === 'audio') {
             setAudioFileCount(scanRes.fileCount)
             setAudioTotalSec(scanRes.totalDurationSec)
@@ -633,6 +642,7 @@ function FinalExportTab() {
             requestId: `scan-video-${Date.now()}`,
             videoSource: source,
           })
+          if (scanGeneration !== scanGenerationRef.current) return
           if (scanRes && scanRes.kind === 'video') {
             setVideoFileCount(scanRes.fileCount)
             setVideoTotalSec(scanRes.totalDurationSec)
@@ -651,6 +661,7 @@ function FinalExportTab() {
             imageSource: source,
             perImageDurationSec,
           })
+          if (scanGeneration !== scanGenerationRef.current) return
           if (scanRes && scanRes.kind === 'image') {
             setImageFileCount(scanRes.fileCount)
             setImageTotalSec(scanRes.totalDurationSec)
@@ -863,6 +874,8 @@ function FinalExportTab() {
 
     // Set ref ngay lập tức để tránh race condition
     isExportingRef.current = true
+    activeRequestIdRef.current = requestId
+    cancelledRequestIdsRef.current.delete(requestId)
     setActiveRequestId(requestId)
     setIsExporting(true)
     // FIX C-01: Register with global export activity store
@@ -996,8 +1009,8 @@ function FinalExportTab() {
       return `Đã chọn file: ${getFileName(source.path)}${suffix}`
     }
   if (source.type === 'files') {
-    const total = (source.paths?.length ?? count ?? 0) || 0
-    return `Đã chọn ${total} file (từ hộp thoại).`
+    const total = typeof count === 'number' ? count : (source.paths?.length ?? 0)
+    return `Đã chọn ${total} file hợp lệ (từ hộp thoại).`
   }
     const suffix = typeof count === 'number' ? `(số file: ${count})` : '(số file: —)'
     return `Đã chọn thư mục: ${source.path} ${suffix}`
@@ -2120,6 +2133,7 @@ function FinalExportTab() {
               if (!activeRequestId) return
               const cancellingId = activeRequestId
               try {
+                cancelledRequestIdsRef.current.add(cancellingId)
                 await api.videoFinalExport.cancel(cancellingId)
                 setStatusText('Đã hủy xuất video')
                 setErrorMessage('Người dùng đã hủy xuất video.')
@@ -2132,6 +2146,7 @@ function FinalExportTab() {
                 isExportingRef.current = false
                 setIsExporting(false)
                 useExportActivityStore.getState().unregisterExport(cancellingId)
+                activeRequestIdRef.current = null
                 setActiveRequestId(null)
               }
             }}

@@ -1,5 +1,13 @@
 # HANDOFF
 
+## 2026-09-30 — Fence FinalExport UI restore, cancel, and source scans
+
+- Changed: FinalExport restore now restores `isExportingRef` and numeric queue progress correctly; progress/done/error listeners reject events without the active request identity or after cancellation; source scan results use a generation guard; files-mode status reports backend-valid count instead of raw selected count.
+- Files: [src/pages/Video/FinalExportTab.tsx](src/pages/Video/FinalExportTab.tsx), [HANDOFF.md](HANDOFF.md).
+- Preserved: existing IPC channels, request IDs, scan payloads, export activity registration, and output mapping.
+- Verification: esbuild syntax check and `git diff --check` passed. Real remount/late-event UI smoke test remains pending.
+- Follow-up: select source A then B with delayed scan A, remount during active export, cancel, and assert stale events cannot resurrect or overwrite state.
+
 ## 2026-09-30 — Register pretranscode children under parent cancellation
 
 - Changed: Pretranscode FFmpeg children are now registered under both parent request ID and child ID, so parent cancellation can kill quiet active workers immediately while child-specific cancellation remains identity-safe.
