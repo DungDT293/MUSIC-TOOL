@@ -1,5 +1,13 @@
 # HANDOFF
 
+## 2026-10-01 — Cancel Autopilot backend after Batch Mode timeout
+
+- Changed: Batch Mode timeout now sends `autopilot.cancel()` before rejecting its wait, preventing backend FFmpeg/scan work from continuing after the UI timeout.
+- Files: [src/pages/Autopilot/BatchModeTab.tsx](src/pages/Autopilot/BatchModeTab.tsx), [HANDOFF.md](HANDOFF.md).
+- Preserved: normal polling, user cancel flow, batch ordering, and terminal status handling.
+- Verification: focused UI syntax/build check pending; timeout smoke test remains pending.
+- Follow-up: force a short test timeout, verify backend enters cancelling/idle and no next batch starts.
+
 ## 2026-09-30 — Complete Windows package and full test gate
 
 - Changed: Completed portable and NSIS packaging after enabling store compression; no publish/upload performed.

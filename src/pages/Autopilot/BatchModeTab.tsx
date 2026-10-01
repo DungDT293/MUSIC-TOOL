@@ -1295,9 +1295,16 @@ async function waitForAutopilotComplete(w: any, timeoutMs = 4 * 60 * 60 * 1000, 
       const cancelRequested = cancelledRef?.current === true
       // Timeout guard — tránh hang vĩnh viễn
       if (Date.now() - startTime > timeoutMs) {
+        if (!cancelRequested) {
+          try {
+            await w.api?.autopilot?.cancel?.()
+          } catch (cancelError) {
+            console.warn('[BatchMode] Failed to cancel Autopilot after timeout:', cancelError)
+          }
+        }
         reject(new Error(cancelRequested
           ? `Autopilot đang hủy quá lâu (${Math.round(timeoutMs / 60000)} phút)`
-          : `Autopilot timeout sau ${Math.round(timeoutMs / 60000)} phút`))
+          : `Autopilot timeout sau ${Math.round(timeoutMs / 60000)} phút; đã gửi lệnh hủy backend.`))
         return
       }
       try {
