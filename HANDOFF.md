@@ -1,5 +1,13 @@
 # HANDOFF
 
+## 2026-10-01 — Guard output/source collisions and expose audio scan failures
+
+- Changed: Final export rejects any planned output path that resolves to an audio/video/priority/ending source path, preventing overwrite or delete-source data loss. Audio scan results now carry requested count and rejected-file diagnostics; image scan items expose optional dimensions in the shared contract.
+- Files: [backend/video/finalExport.ts](backend/video/finalExport.ts), [shared/videoFinalExportChannels.ts](shared/videoFinalExportChannels.ts), [HANDOFF.md](HANDOFF.md).
+- Preserved: no-clobber behavior for unrelated existing outputs, source ordering, duration semantics, and existing IPC channels.
+- Verification: esbuild checks and `git diff --check` passed. Real collision/invalid-audio IPC tests remain pending.
+- Follow-up: test output filename equal to an input path, all-invalid audio scan, and renderer display of rejected audio details.
+
 ## 2026-10-01 — Cancel Autopilot backend after Batch Mode timeout
 
 - Changed: Batch Mode timeout now sends `autopilot.cancel()` before rejecting its wait, preventing backend FFmpeg/scan work from continuing after the UI timeout.

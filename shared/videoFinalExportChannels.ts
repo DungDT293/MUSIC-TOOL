@@ -270,6 +270,8 @@ export interface FinalExportScanItem {
   path: string
   durationSec: number
   codecName?: string | null
+  width?: number
+  height?: number
 }
 
 export interface FinalExportScanResult {
@@ -278,4 +280,6 @@ export interface FinalExportScanResult {
   fileCount: number
   totalDurationSec: number
   items: FinalExportScanItem[]
+  requestedCount?: number
+  audioFailures?: FinalExportAudioFailure[]
 }

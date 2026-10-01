@@ -1158,7 +1158,17 @@ export async function planFinalExport(
     usedOutputPaths.add(finalPath.toLowerCase())
   }
 
+  const sourcePathKeys = new Set<string>([
+    ...audioItems.map((item) => path.resolve(item.path).toLowerCase()),
+    ...videoClips.map((clip) => path.resolve(clip.path).toLowerCase()),
+    ...(priorityVideoClips ?? []).map((clip) => path.resolve(clip.path).toLowerCase()),
+    ...endingAudioItems.map((item) => path.resolve(item.path).toLowerCase()),
+  ])
   for (const job of jobs) {
+    const outputKey = path.resolve(job.outputPath).toLowerCase()
+    if (sourcePathKeys.has(outputKey)) {
+      throw new Error(`Output trùng file nguồn, từ chối xuất để tránh ghi đè/xóa file gốc: ${job.outputPath}`)
+    }
     try {
       await fsp.access(job.outputPath, fs.constants.F_OK)
       throw new Error(`File output đã tồn tại, không ghi đè: ${job.outputPath}`)
@@ -4212,6 +4222,8 @@ export async function scanAudioSource(payload: {
     kind: 'audio',
     fileCount: result.files.length,
     totalDurationSec,
+    requestedCount: result.requestedCount,
+    audioFailures: result.failures,
     items: result.files.map((f) => ({
       path: f.path,
       durationSec: f.durationSec,
