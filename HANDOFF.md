@@ -1,5 +1,13 @@
 # HANDOFF
 
+## 2026-10-01 — Align scan IPC source contracts
+
+- Changed: Video/image scan IPC payloads now require non-null source types where schemas/handlers already require them; `scanImageSource` is required in `IPCAPI` and renderer no longer silently optional-chains it.
+- Files: [src/types/ipc.ts](src/types/ipc.ts), [src/pages/Video/FinalExportTab.tsx](src/pages/Video/FinalExportTab.tsx), [HANDOFF.md](HANDOFF.md).
+- Preserved: existing channels, preload exposure, main validation, and scan behavior.
+- Verification: type/syntax check and focused IPC/renderer tests pending; full suite baseline was 33 files/222 tests before this batch.
+- Follow-up: run TypeScript/IPC contract checks and scan image/video with valid and missing source payloads.
+
 ## 2026-10-01 — Guard output/source collisions and expose audio scan failures
 
 - Changed: Final export rejects any planned output path that resolves to an audio/video/priority/ending source path, preventing overwrite or delete-source data loss. Audio scan results now carry requested count and rejected-file diagnostics; image scan items expose optional dimensions in the shared contract.

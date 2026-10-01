@@ -1084,11 +1084,11 @@ export interface IPCAPI {
     }) => Promise<FinalExportScanResult>
     scanVideoSource: (payload: {
       requestId: string
-      videoSource: FinalExportRequestPayload['videoSource']
+      videoSource: NonNullable<FinalExportRequestPayload['videoSource']>
     }) => Promise<FinalExportScanResult>
-    scanImageSource?: (payload: {
+    scanImageSource: (payload: {
       requestId: string
-      imageSource: FinalExportRequestPayload['imageSource']
+      imageSource: NonNullable<FinalExportRequestPayload['imageSource']>
       perImageDurationSec?: number
     }) => Promise<FinalExportScanResult>
     onProgress: (handler: (payload: FinalExportProgressPayload) => void) => () => void

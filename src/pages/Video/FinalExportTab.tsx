@@ -656,7 +656,7 @@ function FinalExportTab() {
       } else if (target === 'image') {
         setImageSource(source)
         try {
-          const scanRes = await api?.videoFinalExport?.scanImageSource?.({
+          const scanRes = await api?.videoFinalExport?.scanImageSource({
             requestId: `scan-image-${Date.now()}`,
             imageSource: source,
             perImageDurationSec,
