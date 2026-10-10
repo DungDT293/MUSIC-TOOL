@@ -686,11 +686,6 @@ function CreatePlaylistPage() {
                 <label><input type="checkbox" checked={cfg.loudnorm} onChange={(event) => updateGenreConfig(genre.id, { loudnorm: event.target.checked })} /> Loudnorm</label>
                 <label>Giây <input value={cfg.crossfadeSeconds} disabled={!cfg.crossfade} onChange={(event) => updateGenreConfig(genre.id, { crossfadeSeconds: event.target.value })} style={{ width: '45px', marginLeft: '4px' }} /></label>
               </div>
-              <div style={{ display: 'flex', gap: '14px', flexWrap: 'wrap', marginTop: '10px', fontSize: '12px', color: '#cbd5e1' }}>
-                <label><input type="checkbox" checked={cfg.crossfade} onChange={(event) => updateGenreConfig(genre.id, { crossfade: event.target.checked })} /> Crossfade</label>
-                <label><input type="checkbox" checked={cfg.loudnorm} onChange={(event) => updateGenreConfig(genre.id, { loudnorm: event.target.checked })} /> Loudnorm</label>
-                <label>Giây <input value={cfg.crossfadeSeconds} disabled={!cfg.crossfade} onChange={(event) => updateGenreConfig(genre.id, { crossfadeSeconds: event.target.value })} style={{ width: '45px', marginLeft: '4px' }} /></label>
-              </div>
               <details style={{ marginTop: '10px' }}>
                 <summary style={{ cursor: 'pointer', color: '#94a3b8', fontSize: '12px' }}>Nhạc ghim đứng đầu playlist</summary>
                 <div style={{ marginTop: '6px' }}>

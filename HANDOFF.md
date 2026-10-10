@@ -1,5 +1,13 @@
 # HANDOFF
 
+## 2026-10-10 — Remove duplicate playlist controls
+
+- Changed: Removed the duplicated Crossfade/Loudnorm/seconds row from each genre card; one settings row remains and controls the active genre.
+- Files: [src/pages/Music/CreatePlaylistPage.tsx](src/pages/Music/CreatePlaylistPage.tsx), [HANDOFF.md](HANDOFF.md).
+- Preserved: Crossfade/Loudnorm values, per-genre settings, guide content, and playlist generation behavior.
+- Verification: `npm run build` passed; playlist tests passed 2/2.
+- Follow-up: refresh Function 2 and confirm each genre card shows exactly one Crossfade/Loudnorm row.
+
 ## 2026-10-10 — Add Playlist Guide button
 
 - Changed: Function 2 now has a `Hướng dẫn` button next to `Lưu cài đặt`, explaining Crossfade, Loudnorm, pinned-first music, ending music, and playlist creation flow.
