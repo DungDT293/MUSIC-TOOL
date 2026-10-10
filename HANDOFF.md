@@ -1,5 +1,14 @@
 # HANDOFF
 
+## 2026-10-10 — Show actual music export processing mode
+
+- Changed: Function 4 progress now shows whether current playlist is using `Loudnorm + re-encode`, `Crossfade + re-encode`, or `Stream-copy/AAC encode`.
+- Files: [src/pages/Music/ExportAudioPage.tsx](src/pages/Music/ExportAudioPage.tsx), [HANDOFF.md](HANDOFF.md).
+- Preserved: export commands, duration, bitrate, cancellation, output path, and retry behavior.
+- Verification: `npm run build` passed; `tests/unit/backend/exportAudio.test.ts` passed 6/6.
+- Follow-up: compare visible mode with `[ExportAudio]` logs during normalized AAC and crossfade exports.
+
+
 ## 2026-10-10 — Clean partial audio normalization output on cancel/fail
 
 - Changed: Function 1 now removes the target output file when FFmpeg normalization fails or is cancelled, preventing corrupt partial `.m4a`/audio files from appearing successful on the next scan.

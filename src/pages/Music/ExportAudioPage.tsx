@@ -642,6 +642,8 @@ const selectedHistoryGenre = selectedHistoryPlaylist?.genreName || 'Playlist cũ
       setPlaylistStatuses((prev) => ({ ...prev, [pl.id]: 'running' }))
       const useCrossfade = pl.genreSettings?.smoothTransitions ?? false
       const useLoudnorm = pl.genreSettings?.normalizeLoudness ?? false
+      const exportMode = useLoudnorm ? 'Loudnorm + re-encode' : useCrossfade ? 'Crossfade + re-encode' : 'Stream-copy/AAC encode'
+      setProgressText(`Đang xuất playlist ${i + 1}/${playlistIds.length}: ${pl.name} · ${exportMode}`)
       const req: ExportPlaylistRequest = { playlistId: pl.id, outputDir: getPlaylistOutputDir(pl), fileName: `${fileNamePrefix.trim()}${sanitizeFileName(pl.name)}`, format: quality === 'mp3_320' ? 'mp3' : 'aac', bitrateKbps: quality === 'mp3_320' ? 320 : 384, smoothTransitions: useCrossfade, crossfadeDurationSec: useCrossfade ? Math.max(1, Math.min(10, pl.genreSettings?.crossfadeDurationSec ?? 4)) : undefined, normalizeLoudness: useLoudnorm, loudnessTargetLufs: useLoudnorm ? -14 : undefined }
       try {
         const res = await window.api.exportPlaylist({ ...req, currentIndex: i, totalCount: playlistIds.length } as any)
@@ -751,6 +753,11 @@ const selectedHistoryGenre = selectedHistoryPlaylist?.genreName || 'Playlist cũ
           quality === 'mp3_320' ? 'mp3' : 'aac'
         const bitrateKbps =
           quality === 'mp3_320' ? 320 : 384
+
+        const useCrossfade = pl.genreSettings?.smoothTransitions ?? false
+        const useLoudnorm = pl.genreSettings?.normalizeLoudness ?? false
+        const exportMode = useLoudnorm ? 'Loudnorm + re-encode' : useCrossfade ? 'Crossfade + re-encode' : 'Stream-copy/AAC encode'
+        setProgressText(`Đang xuất playlist ${i + 1}/${selected.length}: ${pl.name} · ${exportMode}`)
 
         const req: ExportPlaylistRequest = {
           playlistId: pl.id,
