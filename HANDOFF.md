@@ -1,5 +1,13 @@
 # HANDOFF
 
+## 2026-10-10 — Stabilize AAC bitrate normalization
+
+- Changed: AAC normalization now disables native AAC perceptual tools (`aac_pns`, `aac_tns`, `aac_is`, `aac_ms`) that caused simple audio to undershoot selected bitrate dramatically; target bitrate remains explicit with AAC codec, 48kHz, stereo output.
+- Files: [backend/music/normalizeAudio.ts](backend/music/normalizeAudio.ts), [HANDOFF.md](HANDOFF.md).
+- Preserved: MP3/WAV/FLAC/keep formats, source protection, backup option, cancellation, output-folder behavior, loudness preset behavior, and duration semantics.
+- Verification: bundled FFmpeg fixture measured ~244 kbps for requested 384 kbps before fix and ~386 kbps after fix on 60s stereo noise; esbuild syntax check and `git diff --check` passed. Dedicated normalize unit fixture is still pending.
+- Follow-up: normalize one real MP3/WAV/FLAC file at 128/192/256/320/384 kbps, probe codec/bitrate/sample rate/channels, verify output path and cancel cleanup.
+
 ## 2026-10-10 — Remove duplicate playlist controls
 
 - Changed: Removed the duplicated Crossfade/Loudnorm/seconds row from each genre card; one settings row remains and controls the active genre.

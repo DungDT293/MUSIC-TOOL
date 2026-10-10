@@ -319,7 +319,17 @@ async function normalizeSingleFile(
     if (format === 'mp3') {
       args.push('-acodec', 'libmp3lame', '-b:a', `${targetBitrate}k`)
     } else if (format === 'aac') {
-      args.push('-acodec', 'aac', '-b:a', `${targetBitrate}k`)
+      // Native AAC may undershoot target bitrate heavily on simple/low-entropy audio
+      // because perceptual tools spend fewer bits. Disable those tools so the selected
+      // bitrate remains stable enough for batch normalization (AAC remains lossy).
+      args.push(
+        '-acodec', 'aac',
+        '-aac_pns', '0',
+        '-aac_tns', '0',
+        '-aac_is', '0',
+        '-aac_ms', '0',
+        '-b:a', `${targetBitrate}k`,
+      )
     } else if (format === 'wav') {
       args.push('-acodec', 'pcm_s16le')
     } else if (format === 'flac') {
