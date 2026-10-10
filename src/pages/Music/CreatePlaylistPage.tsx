@@ -82,6 +82,7 @@ function CreatePlaylistPage() {
   const [creatingGenreId, setCreatingGenreId] = useState<string | null>(null)
   const [isCreatingAllGenres, setIsCreatingAllGenres] = useState(false)
   const [settingsSavedAt, setSettingsSavedAt] = useState<string | null>(null)
+  const [showPlaylistGuide, setShowPlaylistGuide] = useState(false)
   const [genreConfig, setGenreConfig] = useState<Record<string, { playlistCount: string; hours: string; minutes: string; priority: string; crossfade: boolean; crossfadeSeconds: string; loudnorm: boolean; pinnedTrackIds: string[]; endingTrackIds: string[] }>>({})
   const GENRE_WORKSPACE_KEY = 'musicGenreWorkspaceV1'
 
@@ -647,12 +648,27 @@ function CreatePlaylistPage() {
             <button type="button" onClick={handleSaveGenreSettings} disabled={creatingGenreId !== null || isCreatingAllGenres} style={{ padding: '8px 11px', background: '#374151', color: '#fff', border: '1px solid #4b5563', borderRadius: '5px', cursor: creatingGenreId !== null || isCreatingAllGenres ? 'not-allowed' : 'pointer' }}>
               Lưu cài đặt
             </button>
+            <button type="button" onClick={() => setShowPlaylistGuide((value) => !value)} aria-expanded={showPlaylistGuide} style={{ padding: '8px 11px', background: '#1f4b6e', color: '#fff', border: '1px solid #3979a8', borderRadius: '5px', cursor: 'pointer' }}>
+              {showPlaylistGuide ? 'Ẩn hướng dẫn' : 'Hướng dẫn'}
+            </button>
             <button type="button" onClick={() => void handleRecreateAllGenres()} disabled={creatingGenreId !== null || isCreatingAllGenres || availableGenres.length === 0} style={{ padding: '8px 11px', background: '#16a34a', color: '#fff', border: 0, borderRadius: '5px', cursor: creatingGenreId !== null || isCreatingAllGenres || availableGenres.length === 0 ? 'not-allowed' : 'pointer', fontWeight: 700 }}>
               {isCreatingAllGenres ? 'Đang tạo toàn bộ...' : 'Tạo lại toàn bộ thể loại'}
             </button>
           </div>
         </div>
         <p style={{ margin: '0 0 16px', color: '#94a3b8', fontSize: '13px' }}>Tạo playlist riêng từng thể loại. Khi đã sẵn sàng, vào Xuất nhạc để chạy tuần tự theo thứ tự card.</p>
+        {showPlaylistGuide && (
+          <div style={{ marginBottom: '16px', padding: '12px 14px', background: '#172333', border: '1px solid #315a7d', borderRadius: '7px', color: '#dbeafe', fontSize: '12px', lineHeight: 1.6 }}>
+            <strong>Hướng dẫn nhanh</strong>
+            <ul style={{ margin: '6px 0 0 18px', padding: 0 }}>
+              <li><b>Crossfade:</b> chồng vài giây cuối bài trước với đầu bài sau để chuyển bài mượt hơn. Bật rồi nhập số giây, thường dùng 3–5 giây.</li>
+              <li><b>Loudnorm:</b> cân bằng âm lượng giữa các bài. Bật khi nguồn nhạc to nhỏ không đều; có thể làm xuất nhạc lâu hơn.</li>
+              <li><b>Nhạc ghim đứng đầu playlist:</b> mở mục này, tìm theo tên bài, chọn <b>Ghim</b>. Các bài được chọn sẽ ưu tiên đứng đầu playlist.</li>
+              <li><b>Nhạc cuối playlist:</b> chọn bài nối sau phần nhạc chính. Không chọn cùng bài ở cả hai nhóm.</li>
+              <li>Nhập số playlist và thời lượng, sau đó bấm <b>Tạo playlist</b> ở từng thể loại hoặc <b>Tạo lại toàn bộ thể loại</b>.</li>
+            </ul>
+          </div>
+        )}
         <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: '12px', marginBottom: '16px' }}>
           {availableGenres.map((genre) => {
             const cfg = getGenreConfig(genre.id)
@@ -664,6 +680,11 @@ function CreatePlaylistPage() {
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '6px', marginTop: '12px' }}>
                 {([['playlistCount', 'Số playlist'], ['hours', 'Giờ'], ['minutes', 'Phút'], ['priority', '% ưu tiên']] as const).map(([field, label]) => <label key={field} style={{ color: '#9ca3af', fontSize: '11px' }}>{label}<input value={cfg[field]} onChange={(event) => updateGenreConfig(genre.id, { [field]: event.target.value } as any)} placeholder={field === 'priority' ? '65-85' : ''} style={{ marginTop: '3px', width: '100%', boxSizing: 'border-box', background: '#111', color: '#fff', border: '1px solid #555', borderRadius: '4px', padding: '6px' }} /></label>)}
+              </div>
+              <div style={{ display: 'flex', gap: '14px', flexWrap: 'wrap', marginTop: '10px', fontSize: '12px', color: '#cbd5e1' }}>
+                <label><input type="checkbox" checked={cfg.crossfade} onChange={(event) => updateGenreConfig(genre.id, { crossfade: event.target.checked })} /> Crossfade</label>
+                <label><input type="checkbox" checked={cfg.loudnorm} onChange={(event) => updateGenreConfig(genre.id, { loudnorm: event.target.checked })} /> Loudnorm</label>
+                <label>Giây <input value={cfg.crossfadeSeconds} disabled={!cfg.crossfade} onChange={(event) => updateGenreConfig(genre.id, { crossfadeSeconds: event.target.value })} style={{ width: '45px', marginLeft: '4px' }} /></label>
               </div>
               <div style={{ display: 'flex', gap: '14px', flexWrap: 'wrap', marginTop: '10px', fontSize: '12px', color: '#cbd5e1' }}>
                 <label><input type="checkbox" checked={cfg.crossfade} onChange={(event) => updateGenreConfig(genre.id, { crossfade: event.target.checked })} /> Crossfade</label>

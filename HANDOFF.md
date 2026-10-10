@@ -1,5 +1,13 @@
 # HANDOFF
 
+## 2026-10-10 — Add Playlist Guide button
+
+- Changed: Function 2 now has a `Hướng dẫn` button next to `Lưu cài đặt`, explaining Crossfade, Loudnorm, pinned-first music, ending music, and playlist creation flow.
+- Files: [src/pages/Music/CreatePlaylistPage.tsx](src/pages/Music/CreatePlaylistPage.tsx), [HANDOFF.md](HANDOFF.md).
+- Preserved: existing settings, genre cards, pinned/ending selections, and playlist generation logic.
+- Verification: `npm run build` passed; playlist tests passed 2/2. Direct esbuild command failed due local esbuild executable wrapper, but Vite build compiled the page successfully.
+- Follow-up: open Function 2, click `Hướng dẫn`, verify panel visibility and text at desktop/mobile widths.
+
 ## 2026-10-10 — Restore pinned-track search and clarify playlist labels
 
 - Changed: Playlist cards now label the feature `Nhạc ghim đứng đầu playlist`, restore a per-genre song-name search field, and label ending tracks `Nhạc cuối playlist`.
