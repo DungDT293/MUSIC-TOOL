@@ -1,5 +1,13 @@
 # HANDOFF
 
+## 2026-10-10 — Clean partial audio normalization output on cancel/fail
+
+- Changed: Function 1 now removes the target output file when FFmpeg normalization fails or is cancelled, preventing corrupt partial `.m4a`/audio files from appearing successful on the next scan.
+- Files: [backend/music/normalizeAudio.ts](backend/music/normalizeAudio.ts), [HANDOFF.md](HANDOFF.md).
+- Preserved: AAC bitrate settings, MP3/WAV/FLAC/keep formats, backup source behavior, output folder semantics, and cancellation status.
+- Verification: AAC 128/192/256/320/384 smoke outputs reported matching codec, 48kHz stereo, 60s duration, and requested bitrate range; MP3/FLAC converted to AAC successfully; esbuild/diff checks passed. Cancellation fixture exposed and is now cleaned by code path.
+- Follow-up: run Function 1 against real user files and cancel through IPC; confirm no partial output remains.
+
 ## 2026-10-10 — Stabilize AAC bitrate normalization
 
 - Changed: AAC normalization now disables native AAC perceptual tools (`aac_pns`, `aac_tns`, `aac_is`, `aac_ms`) that caused simple audio to undershoot selected bitrate dramatically; target bitrate remains explicit with AAC codec, 48kHz, stereo output.

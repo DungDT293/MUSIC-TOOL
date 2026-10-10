@@ -230,6 +230,7 @@ async function normalizeSingleFile(
   loudnessPreset?: 'streaming' | 'youtube' | 'broadcast' | 'club',
   ctx?: NormalizeJobContext // FIX M6: Per-job context
 ): Promise<{ success: boolean; outputFile?: string; error?: string }> {
+  let outputFilePath: string | null = null
   try {
     // Kiểm tra file tồn tại
     if (!fs.existsSync(inputFile)) {
@@ -267,6 +268,7 @@ async function normalizeSingleFile(
     // Tạo output path — giữ nguyên tên file gốc, chỉ đổi extension nếu cần
     const inputName = path.basename(inputFile, path.extname(inputFile))
     const outputFile = path.join(outputDir, `${inputName}${extension}`)
+    outputFilePath = outputFile
 
     // Nếu output trùng với input (cùng folder, cùng extension) → báo lỗi.
     // User nên chỉ định outputFolder (subfolder) để tránh ghi đè file gốc.
@@ -392,6 +394,9 @@ async function normalizeSingleFile(
 
     return { success: true, outputFile }
   } catch (error: any) {
+    if (outputFilePath) {
+      try { if (fs.existsSync(outputFilePath)) fs.unlinkSync(outputFilePath) } catch {}
+    }
     return { success: false, error: error.message || String(error) }
   }
 }
