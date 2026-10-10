@@ -671,13 +671,26 @@ function CreatePlaylistPage() {
                 <label>Giây <input value={cfg.crossfadeSeconds} disabled={!cfg.crossfade} onChange={(event) => updateGenreConfig(genre.id, { crossfadeSeconds: event.target.value })} style={{ width: '45px', marginLeft: '4px' }} /></label>
               </div>
               <details style={{ marginTop: '10px' }}>
-                <summary style={{ cursor: 'pointer', color: '#94a3b8', fontSize: '12px' }}>Bài hát ghim/cuối</summary>
+                <summary style={{ cursor: 'pointer', color: '#94a3b8', fontSize: '12px' }}>Nhạc ghim đứng đầu playlist</summary>
+                <div style={{ marginTop: '6px' }}>
+                  <input
+                    type="search"
+                    value={searchQuery}
+                    onChange={(event) => setSearchQuery(event.target.value)}
+                    placeholder="Tìm tên bài hát để ghim..."
+                    aria-label={`Tìm bài hát trong thể loại ${genre.name}`}
+                    style={{ width: '100%', boxSizing: 'border-box', padding: '6px 8px', background: '#111', color: '#fff', border: '1px solid #374151', borderRadius: '4px', fontSize: '12px' }}
+                  />
+                </div>
                 <div style={{ maxHeight: '130px', overflowY: 'auto', marginTop: '6px', border: '1px solid #374151', borderRadius: '4px', padding: '4px' }}>
-                  {tracksForGenre(scanResult, genre.id).filter((track) => track.folderType !== 'opening').map((track) => <label key={track.id} style={{ display: 'flex', gap: '5px', alignItems: 'center', fontSize: '11px', padding: '3px' }}><input type="checkbox" checked={cfg.pinnedTrackIds.includes(track.id)} onChange={(event) => updateGenreConfig(genre.id, { pinnedTrackIds: event.target.checked ? [...cfg.pinnedTrackIds, track.id] : cfg.pinnedTrackIds.filter((id) => id !== track.id) })} /> Ghim {track.fileName}</label>)}
+                  {tracksForGenre(scanResult, genre.id)
+                    .filter((track) => track.folderType !== 'opening')
+                    .filter((track) => track.fileName.toLowerCase().includes(searchQuery.trim().toLowerCase()))
+                    .map((track) => <label key={track.id} style={{ display: 'flex', gap: '5px', alignItems: 'center', fontSize: '11px', padding: '3px' }}><input type="checkbox" checked={cfg.pinnedTrackIds.includes(track.id)} onChange={(event) => updateGenreConfig(genre.id, { pinnedTrackIds: event.target.checked ? [...cfg.pinnedTrackIds, track.id] : cfg.pinnedTrackIds.filter((id) => id !== track.id) })} /> Ghim {track.fileName}</label>)}
                 </div>
               </details>
               <details style={{ marginTop: '6px' }}>
-                <summary style={{ cursor: 'pointer', color: '#94a3b8', fontSize: '12px' }}>Nhạc cuối</summary>
+                <summary style={{ cursor: 'pointer', color: '#94a3b8', fontSize: '12px' }}>Nhạc cuối playlist</summary>
                 <div style={{ maxHeight: '100px', overflowY: 'auto', marginTop: '6px' }}>{tracksForGenre(scanResult, genre.id).filter((track) => track.folderType !== 'opening').map((track) => <label key={track.id} style={{ display: 'flex', gap: '5px', alignItems: 'center', fontSize: '11px', padding: '3px' }}><input type="checkbox" checked={cfg.endingTrackIds.includes(track.id)} onChange={(event) => updateGenreConfig(genre.id, { endingTrackIds: event.target.checked ? [...cfg.endingTrackIds, track.id] : cfg.endingTrackIds.filter((id) => id !== track.id) })} /> Cuối {track.fileName}</label>)}</div>
               </details>
               {generated.length > 0 && (

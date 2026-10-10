@@ -1,5 +1,13 @@
 # HANDOFF
 
+## 2026-10-10 — Restore pinned-track search and clarify playlist labels
+
+- Changed: Playlist cards now label the feature `Nhạc ghim đứng đầu playlist`, restore a per-genre song-name search field, and label ending tracks `Nhạc cuối playlist`.
+- Files: [src/pages/Music/CreatePlaylistPage.tsx](src/pages/Music/CreatePlaylistPage.tsx), [HANDOFF.md](HANDOFF.md).
+- Preserved: pinned tracks remain mutually exclusive with ending tracks and playlist engine ordering still places pinned music first; ending-track behavior unchanged.
+- Verification: esbuild UI syntax check passed; playlist opening/genre tests passed 2/2.
+- Follow-up: open Create Playlist with a large genre, search a song, pin/unpin it, create playlist, and confirm first track/order in preview.
+
 ## 2026-10-01 — Align scan IPC source contracts
 
 - Changed: Video/image scan IPC payloads now require non-null source types where schemas/handlers already require them; `scanImageSource` is required in `IPCAPI` and renderer no longer silently optional-chains it.
