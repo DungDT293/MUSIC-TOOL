@@ -98,6 +98,7 @@ const api: IPCAPI = {
       ipcRenderer.on(ch, fn)
       return () => ipcRenderer.removeListener(ch, fn)
     },
+    previewMix: (opts: any) => ipcRenderer.invoke('music:previewMix', opts),
   },
   preset: {
     list: () => ipcRenderer.invoke('preset:list'),

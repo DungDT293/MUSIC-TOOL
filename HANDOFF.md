@@ -1,5 +1,67 @@
 # HANDOFF
 
+## 2026-10-14 — Tính năng Nhạc nền (Background Music) & Hòa âm âm lượng (CreatePlaylist, ExportAudio, Autopilot)
+
+- Bối cảnh:
+  - Người dùng yêu cầu thêm chức năng Nhạc nền (Background Music):
+    1. Chức năng 1 (Quét nhạc): Chọn thư mục nhạc nền (`backgroundFolders`) cho từng thể loại.
+    2. Chức năng tạo playlist: Thể loại nào có thêm nhạc nền sẽ hiển thị ô chỉnh sửa âm lượng của nhạc nền (mặc định -4 dB) và nhạc ghép (mặc định +2 dB, gồm các bài lấy từ opening, ưu tiên, random). Cả hai thông số cho phép người dùng tùy chỉnh, và có nút "Nghe thử hòa âm" (20 giây) ngay tại giao diện.
+    3. Export Audio: Hòa âm nhạc nền chạy ngầm lặp lại suốt playlist với nhạc chính đã ghép qua FFmpeg `amix`.
+    4. Autopilot: Đồng bộ cấu hình thư mục nhạc nền và cân bằng âm lượng tương ứng.
+  - Tuân thủ quy tắc UI: TUYỆT ĐỐI KHÔNG ĐƯỢC TỰ Ý THÊM ICON HOẶC EMOJI VÀO GIAO DIỆN (UI) theo `AGENTS.md` và `GEMINI.md`.
+
+- Bối cảnh & Chẩn đoán hiển thị:
+  - Khi khởi động dev app trên Windows qua Agent CLI, app cần được gọi qua `scripts/launch-dev-desktop.ps1` để gắn đúng vào interactive desktop station (`winsta0\default`). Đã kích hoạt dev app thành công.
+  - Về tính năng Nhạc nền: Tại Tab 2 ("Tạo playlist"), nếu thể loại chưa được quét thư mục Nhạc nền ở Tab 1, giao diện trước đó ẩn hoàn toàn khối điều khiển. Đã bổ sung khối thông tin hướng dẫn nét đứt tối giản: "Nhạc nền: Chưa có bài hát (thêm thư mục tại Tab 1 Quét nhạc để kích hoạt hòa âm) · Mặc định hòa âm: Nền -4 dB / Ghép +2 dB" để người dùng luôn thấy rõ tính năng đã sẵn sàng và hiểu cách kích hoạt.
+  - **Sửa lỗi trùng folder Nhạc nền & Nhạc ưu tiên/random (`backend/music/scanMusic.ts`, `backend/music/playlistEngine.ts`, `backend/music/scanStore.ts`)**:
+    - Khi người dùng chọn cùng một thư mục (ví dụ `open a Tùng`) cho cả Nhạc ưu tiên và Nhạc nền, bộ quét trước đó dùng chung `genreSeenRealPaths` khiến toàn bộ bài nhạc nền bị bỏ qua do trùng lặp (`Duplicate file via symlink, skipping`).
+    - Đã tách riêng tập `genreBackgroundSeenRealPaths` cho nhạc nền, giúp các bài trong thư mục nhạc nền được quét độc lập hoàn toàn mà không bị loại trừ bởi nhạc chính.
+    - Tạo ID duy nhất cho bài nhạc nền dạng `${genreId}:background:${canonicalPath}` và cập nhật `isCurrentTrackId`.
+    - Loại bỏ lọc loại trừ `backgroundPathSet` trong `mainTracks` tại `playlistEngine.ts` để bài hát chính không bị biến mất nếu có mặt trong cả 2 thư mục.
+  - **Bổ sung Nhạc nền vào Autopilot Batch Mode (`src/pages/Autopilot/BatchModeTab.tsx`)**:
+    - Trước đó Nhạc nền mới chỉ có ở Plan Mode. Đã bổ sung trường `Nhạc nền (tùy chọn)` (`backgroundMusicFolder`) vào từng thẻ thể loại của Batch Mode.
+    - Kết nối `backgroundMusicFolder` vào cấu hình lưu trữ, xuất/nhập JSON, khởi chạy `w.api.autopilot.start`, và truyền vào `DayPlanDetailDialog` để mở bộ cân bằng âm lượng (-4 dB / +2 dB) khi xem chi tiết ngày.
+
+- Tính năng & Cải tiến:
+  1. IPC & Data Contracts (`src/types/ipc.ts`, `shared/ipcSchemas.ts`):
+     - Mở rộng `MusicFolderType` thêm `'background'`.
+     - Thêm `backgroundFolders?: string[]` vào `MusicScanGenre`, `ScanMusicFoldersPayload`.
+     - Thêm `backgroundTrack?: ScannedTrack`, `bgMusicVolumeDb?: number`, `mainMusicVolumeDb?: number` vào `PlaylistDefinition`.
+     - Thêm `backgroundTracks?: ScannedTrack[]`, `selectedBackgroundTrackId?: string`, `bgMusicVolumeDb?: number`, `mainMusicVolumeDb?: number` vào `BuildPlaylistsOptions`.
+     - Thêm `backgroundTrackPath?: string`, `bgMusicVolumeDb?: number`, `mainMusicVolumeDb?: number` vào `ExportPlaylistRequest`.
+     - Thêm `backgroundMusicFolder?: string` vào `AutopilotFoldersConfig`.
+     - Thêm `bgMusicVolumeDb?: number | ''`, `mainMusicVolumeDb?: number | ''` vào `AutopilotDayPlan.overrides`.
+     - Thêm IPC API `music.previewMix({ mainTrackPath, bgTrackPath, mainVolumeDb, bgMusicVolumeDb, durationSec })`.
+  2. Engine Quét nhạc & Bộ nhớ đệm (`backend/music/scanMusic.ts`, `backend/music/scanStore.ts`):
+     - Quét thêm folderType `background`, tính toán `backgroundCount` và `backgroundDuration`.
+     - Thêm `backgroundFolders` vào `scanConfigKey` để cache hash tự động làm mới khi đổi thư mục nhạc nền.
+  3. Engine Tạo Playlist (`backend/music/playlistEngine.ts`):
+     - Tách riêng `backgroundTracks` khỏi `mainTracks` để không bị chọn lẫn vào bài hát chính.
+     - Tự động gán `backgroundTrack`, `bgMusicVolumeDb: -4`, `mainMusicVolumeDb: 2` vào từng playlist (hỗ trợ xoay vòng hoặc chỉ định bài cụ thể).
+  4. Engine Xuất Audio & Hòa âm (`backend/music/exportAudio.ts`):
+     - Khi playlist có `backgroundTrackPath`, render bài chính ra file tạm thời rồi chạy lệnh FFmpeg mix:
+       `-stream_loop -1 -i <bgTrack>` cùng bộ lọc `amix=inputs=2:duration=first:dropout_transition=2:normalize=0` với âm lượng tương ứng `volume=<mainVolumeDb>dB` và `volume=<bgMusicVolumeDb>dB`.
+  5. Module Nghe thử hòa âm (`backend/music/previewMix.ts`):
+     - Trích xuất 20 giây nhạc chính mẫu hòa âm với nhạc nền lặp, xuất trực tiếp sang Data URL Base64 (`data:audio/mp3;base64,...`) an toàn với CSP Electron.
+  6. Giao diện Tab 1 ("Quét nhạc" / `ScanMusicPage.tsx`):
+     - Bổ sung trường chọn thư mục "Nhạc nền" màu tím nhạt (`#a78bfa`), hiển thị thống kê số lượng bài nhạc nền và tổng thời lượng.
+  7. Giao diện Tab 2 ("Tạo playlist" / `CreatePlaylistPage.tsx`):
+     - Với mỗi thể loại có thư mục nhạc nền: hiển thị hộp điều khiển "Nhạc nền (X bài)".
+     - Slider & input âm lượng nhạc nền (mặc định `-4 dB`, khoảng -30 đến +6 dB).
+     - Slider & input âm lượng nhạc ghép (mặc định `+2 dB`, khoảng -12 đến +12 dB).
+     - Nút "Nghe thử hòa âm (20s)" tích hợp trình phát audio inline ngay trong thẻ thể loại.
+     - Hiển thị thông tin nhạc nền và mức âm lượng trong chi tiết từng playlist đã tạo.
+  8. Giao diện Tab 3 ("Xuất nhạc" / `ExportAudioPage.tsx`):
+     - Truyền thông tin `backgroundTrackPath`, `bgMusicVolumeDb`, `mainMusicVolumeDb` vào export request.
+     - Hiển thị nhãn `Nhạc nền (-4dB / +2dB)` trên từng thẻ playlist.
+  9. Autopilot (`backend/autopilot/autopilotRunner.ts`, `src/pages/AutopilotPage.tsx`):
+     - Hỗ trợ cấu hình `Thư mục nhạc nền (tùy chọn)`.
+     - Cho phép tùy chỉnh âm lượng nhạc nền và nhạc ghép trong hộp thoại cấu hình chi tiết ngày.
+     - Tự động quét và hòa âm nhạc nền xuyên suốt các playlist của Autopilot.
+  10. Kiểm thử & Đảm bảo chất lượng:
+     - `npm run build` hoàn thành 0 lỗi.
+     - Toàn bộ 39 test files (263 tests) chạy pass 100%.
+
 ## 2026-10-14 — Nâng cấp bảng phát hiện file chưa chuẩn AAC (Xem đường dẫn, tự tạo folder _chuanhoa, xóa file gốc)
 
 - Bối cảnh:

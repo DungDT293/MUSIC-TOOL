@@ -21,6 +21,9 @@ export interface PlaylistDefinition {
   randomCount: number
   endingDurationSec?: number
   endingCount?: number
+  backgroundTrack?: ScannedTrack
+  bgMusicVolumeDb?: number
+  mainMusicVolumeDb?: number
   tracks: PlaylistTrack[]
   createdAt: number
   genreId?: string
@@ -56,6 +59,10 @@ export interface BuildPlaylistsOptions {
   pinnedOpeningTrackIds?: string[]
   combineAllPinnedOpenings?: boolean
   endingTracks?: ScannedTrack[]
+  backgroundTracks?: ScannedTrack[]
+  selectedBackgroundTrackId?: string
+  bgMusicVolumeDb?: number
+  mainMusicVolumeDb?: number
   /** Thời lượng crossfade (giây). Nếu có, target sẽ được inflate để sau crossfade vẫn đạt đủ thời lượng */
   crossfadeDurationSec?: number
   /** Renderer batch flow: append instead of replacing previous genre playlists. */
@@ -386,7 +393,20 @@ export function buildPlaylists(options: BuildPlaylistsOptions): BuildPlaylistsRe
   })
   const openingPathSet = new Set(uniqueOpeningTracks.map(t => t.path.toLowerCase()))
   const endingPathSet = new Set(uniqueEndingTracks.map(t => t.path.toLowerCase()))
-  const mainTracks = scopedTracks.filter(t => !openingPathSet.has(t.path.toLowerCase()) && !endingPathSet.has(t.path.toLowerCase()) && t.folderType !== 'opening')
+  const uniqueBackgroundTracks = (targetGenreId
+    ? (options.backgroundTracks || scopedTracks.filter((t) => t.folderType === 'background')).filter((t) => !t.genreId || t.genreId === targetGenreId)
+    : (options.backgroundTracks || scopedTracks.filter((t) => t.folderType === 'background'))
+  ).filter((track, index, list) => {
+    if (!track?.path || !track.duration || track.duration <= 0) return false
+    const key = track.path.toLowerCase()
+    return list.findIndex(t => t.path?.toLowerCase() === key) === index
+  })
+  const mainTracks = scopedTracks.filter(t =>
+    !openingPathSet.has(t.path.toLowerCase()) &&
+    !endingPathSet.has(t.path.toLowerCase()) &&
+    t.folderType !== 'opening' &&
+    t.folderType !== 'background'
+  )
   const pinnedTracks = mainTracks.filter(t => pinnedTrackIds.includes(t.id))
   const priorityTracks = mainTracks.filter(t => t.folderType === 'priority' && !pinnedTrackIds.includes(t.id))
   const randomTracks = mainTracks.filter(t => t.folderType === 'random' && !pinnedTrackIds.includes(t.id))
@@ -538,6 +558,15 @@ export function buildPlaylists(options: BuildPlaylistsOptions): BuildPlaylistsRe
           message: `Playlist ${i + 1}: chỉ đạt ${Math.round(mainDurationSec / 60)} phút / ${targetDurationMinutes} phút trước nhạc thêm cuối do thư viện không đủ bài.`,
         })
       }
+    }
+
+    if (uniqueBackgroundTracks.length > 0) {
+      const pickedBg = options.selectedBackgroundTrackId
+        ? (uniqueBackgroundTracks.find(t => t.id === options.selectedBackgroundTrackId) || uniqueBackgroundTracks[i % uniqueBackgroundTracks.length])
+        : uniqueBackgroundTracks[i % uniqueBackgroundTracks.length]
+      playlist.backgroundTrack = pickedBg
+      playlist.bgMusicVolumeDb = options.bgMusicVolumeDb ?? -4
+      playlist.mainMusicVolumeDb = options.mainMusicVolumeDb ?? 2
     }
 
     playlists.push(playlist)

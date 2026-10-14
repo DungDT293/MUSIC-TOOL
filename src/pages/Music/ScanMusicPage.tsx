@@ -22,6 +22,7 @@ function formatDurationShort(seconds: number): string {
 function getFolderTypeLabel(type?: string): { label: string; color: string } {
   if (type === 'priority') return { label: 'Nhạc ưu tiên', color: '#38bdf8' }
   if (type === 'opening') return { label: 'Nhạc mở đầu', color: '#f472b6' }
+  if (type === 'background') return { label: 'Nhạc nền', color: '#a78bfa' }
   return { label: 'Nhạc ngẫu nhiên', color: '#4ade80' }
 }
 
@@ -42,6 +43,7 @@ function loadSavedGenres(): MusicScanGenre[] {
           priorityFolders: Array.isArray(genre.priorityFolders) ? genre.priorityFolders : [],
           randomFolders: Array.isArray(genre.randomFolders) ? genre.randomFolders : [],
           openingFolders: Array.isArray(genre.openingFolders) ? genre.openingFolders : [],
+          backgroundFolders: Array.isArray(genre.backgroundFolders) ? genre.backgroundFolders : [],
         }))
       : [createDefaultGenre()]
   } catch {
@@ -60,6 +62,7 @@ function createDefaultGenre(name = 'Mặc định'): MusicScanGenre {
     priorityFolders: [],
     randomFolders: [],
     openingFolders: [],
+    backgroundFolders: [],
   }
 }
 
@@ -98,7 +101,7 @@ function isInsideWindowsFolder(candidate: string, folder: string): boolean {
 
 function getAutoNormalizeOutputFolder(genres: MusicScanGenre[], fallbackFile: string): string | null {
   const roots = genres
-    .flatMap((genre) => [...genre.priorityFolders, ...genre.randomFolders, ...genre.openingFolders])
+    .flatMap((genre) => [...genre.priorityFolders, ...genre.randomFolders, ...genre.openingFolders, ...(genre.backgroundFolders ?? [])])
     .map(normalizeWindowsFolder)
     .filter((folder): folder is string => !!folder)
 
@@ -125,7 +128,8 @@ function cleanupGenres(genres: MusicScanGenre[]): MusicScanGenre[] {
     priorityFolders: mergeFolders([], genre.priorityFolders ?? []),
     randomFolders: mergeFolders([], genre.randomFolders ?? []),
     openingFolders: mergeFolders([], genre.openingFolders ?? []),
-  })).filter((genre) => genre.priorityFolders.length > 0 || genre.randomFolders.length > 0 || genre.openingFolders.length > 0)
+    backgroundFolders: mergeFolders([], genre.backgroundFolders ?? []),
+  })).filter((genre) => (genre.priorityFolders?.length ?? 0) > 0 || (genre.randomFolders?.length ?? 0) > 0 || (genre.openingFolders?.length ?? 0) > 0 || (genre.backgroundFolders?.length ?? 0) > 0)
 }
 
 function genresFromResult(result: ScanMusicResult | null): MusicScanGenre[] {
@@ -137,6 +141,7 @@ function genresFromResult(result: ScanMusicResult | null): MusicScanGenre[] {
     priorityFolders: Array.isArray(genre.priorityFolders) ? genre.priorityFolders : [],
     randomFolders: Array.isArray(genre.randomFolders) ? genre.randomFolders : [],
     openingFolders: Array.isArray(genre.openingFolders) ? genre.openingFolders : [],
+    backgroundFolders: Array.isArray(genre.backgroundFolders) ? genre.backgroundFolders : [],
   }))
 }
 
@@ -312,7 +317,7 @@ function ScanMusicPage() {
     setError(null)
   }
 
-  const handleSelectGenreFolders = async (id: string, field: 'priorityFolders' | 'randomFolders' | 'openingFolders') => {
+  const handleSelectGenreFolders = async (id: string, field: 'priorityFolders' | 'randomFolders' | 'openingFolders' | 'backgroundFolders') => {
     try {
       const dialogResult = await window.api.dialog?.openFile?.({
         title: 'Chọn thư mục nhạc',
@@ -767,6 +772,7 @@ function ScanMusicPage() {
               ['priorityFolders', 'Nhạc ưu tiên'],
               ['randomFolders', 'Nhạc random'],
               ['openingFolders', 'Nhạc mở đầu'],
+              ['backgroundFolders', 'Nhạc nền'],
             ] as const).map(([field, label]) => (
               <div key={field} style={{ display: 'grid', gridTemplateColumns: '110px minmax(0, 1fr) auto auto', gap: '8px', alignItems: 'start', marginBottom: '8px' }}>
                 <label style={{ color: '#9ca3af', fontSize: '12px', paddingTop: '8px' }}>{label}</label>
@@ -1712,7 +1718,8 @@ function ScanMusicPage() {
                 ['Tổng', result.summary.totalCount, result.summary.totalDuration, '#93c5fd'],
                 ['Mở đầu', result.summary.openingCount ?? 0, result.summary.openingDuration ?? 0, '#38bdf8'],
                 ['Ưu tiên', result.summary.priorityCount, result.summary.priorityDuration, '#fbbf24'],
-                ['Random', result.summary.randomCount, result.summary.randomDuration, '#a78bfa'],
+                ['Random', result.summary.randomCount, result.summary.randomDuration, '#4ade80'],
+                ['Nhạc nền', result.summary.backgroundCount ?? 0, result.summary.backgroundDuration ?? 0, '#a78bfa'],
               ].map(([label, count, duration, color]) => (
                 <div key={label as string} style={{ padding: '12px', backgroundColor: '#1e1e1e', borderRadius: '6px', border: '1px solid #333' }}>
                   <div style={{ color: '#9ca3af', fontSize: '12px', marginBottom: '4px' }}>{label}</div>
@@ -1729,7 +1736,10 @@ function ScanMusicPage() {
                     <div key={genre.genreId} style={{ padding: '10px', backgroundColor: '#1e1e1e', borderRadius: '4px', border: '1px solid #333' }}>
                       <div style={{ color: '#fff', fontWeight: 'bold', marginBottom: '4px' }}>{genre.genreName}</div>
                       <div style={{ color: '#ccc', fontSize: '13px' }}>{genre.totalCount} bài • {formatDuration(genre.totalDuration)}</div>
-                      <div style={{ color: '#888', fontSize: '12px' }}>Ưu tiên {genre.priorityCount} · Random {genre.randomCount}</div>
+                      <div style={{ color: '#888', fontSize: '12px' }}>
+                        Ưu tiên {genre.priorityCount} · Random {genre.randomCount}
+                        {(genre.backgroundCount ?? 0) > 0 ? ` · Nhạc nền ${genre.backgroundCount}` : ''}
+                      </div>
                     </div>
                   ))}
                 </div>

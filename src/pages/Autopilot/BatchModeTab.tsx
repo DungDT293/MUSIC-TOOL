@@ -19,6 +19,7 @@ interface BatchGenre {
   priorityMusicFolder: string
   randomMusicFolder: string
   openingMusicFolder: string
+  backgroundMusicFolder?: string
   priorityVideoFolder: string
   endingAudioPaths: string[]
   autoCreateDailySubfolder: boolean
@@ -82,6 +83,7 @@ function createDefaultBatch(): BatchGenre {
     priorityMusicFolder: '',
     randomMusicFolder: '',
     openingMusicFolder: '',
+    backgroundMusicFolder: '',
     priorityVideoFolder: '',
     endingAudioPaths: [],
     autoCreateDailySubfolder: true,
@@ -104,6 +106,7 @@ function serializeBatchConfig(batches: BatchGenre[]) {
     priorityMusicFolder: batch.priorityMusicFolder,
     randomMusicFolder: batch.randomMusicFolder,
     openingMusicFolder: batch.openingMusicFolder,
+    backgroundMusicFolder: batch.backgroundMusicFolder || '',
     priorityVideoFolder: batch.priorityVideoFolder,
     endingAudioPaths: batch.endingAudioPaths,
     autoCreateDailySubfolder: batch.autoCreateDailySubfolder,
@@ -504,6 +507,7 @@ export default function BatchModeTab() {
           priorityMusicFolder: batch.priorityMusicFolder,
           randomMusicFolder: batch.randomMusicFolder,
           openingMusicFolder: batch.openingMusicFolder,
+          backgroundMusicFolder: batch.backgroundMusicFolder,
           priorityVideoFolder: batch.priorityVideoFolder,
           endingAudioPaths: batch.endingAudioPaths,
           minVideoClipsTarget: clampNumberOrDefault(batch.minVideoClipsTarget, 1000, 100, 100000),
@@ -892,6 +896,7 @@ export default function BatchModeTab() {
                     ['priorityMusicFolder', 'Nhạc ưu tiên'],
                     ['randomMusicFolder', 'Nhạc random'],
                     ['openingMusicFolder', 'Nhạc mở đầu (tùy chọn)'],
+                    ['backgroundMusicFolder', 'Nhạc nền (tùy chọn)'],
                     ['priorityVideoFolder', 'Video ưu tiên (tùy chọn)'],
                   ] as const).map(([field, label]) => (
                     <div key={field} style={{ display: 'flex', alignItems: 'flex-start', gap: '6px' }}>
@@ -1063,6 +1068,7 @@ export default function BatchModeTab() {
                       priorityMusicFolder: batch.priorityMusicFolder,
                       randomMusicFolder: batch.randomMusicFolder,
                       openingMusicFolder: batch.openingMusicFolder,
+                      backgroundMusicFolder: batch.backgroundMusicFolder,
                       priorityVideoFolder: batch.priorityVideoFolder,
                       endingAudioPaths: batch.endingAudioPaths,
                     }}

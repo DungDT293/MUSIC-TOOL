@@ -7,6 +7,10 @@ import type { ScanMusicConfig, ScanMusicResult } from './scanMusic'
 function isCurrentTrackId(track: ScanMusicResult['tracks'][number]): boolean {
   try {
     const canonicalPath = fs.realpathSync(track.path)
+    if (track.folderType === 'background') {
+      const bgHash = createHash('md5').update(`${track.genreId || 'default'}:background:${canonicalPath}`).digest('hex')
+      if (track.id === bgHash) return true
+    }
     const rawHash = createHash('md5').update(canonicalPath).digest('hex')
     if (track.id === rawHash) return true
     if (track.genreId && track.id === createHash('md5').update(`${track.genreId}:${canonicalPath}`).digest('hex')) {
@@ -50,6 +54,7 @@ export function scanConfigKey(config?: ScanMusicConfig): string {
       priorityFolders: [...(genre.priorityFolders ?? [])].map((f) => f.trim()).filter(Boolean).sort((a, b) => a.localeCompare(b)),
       randomFolders: [...(genre.randomFolders ?? [])].map((f) => f.trim()).filter(Boolean).sort((a, b) => a.localeCompare(b)),
       openingFolders: [...(genre.openingFolders ?? [])].map((f) => f.trim()).filter(Boolean).sort((a, b) => a.localeCompare(b)),
+      backgroundFolders: [...(genre.backgroundFolders ?? [])].map((f) => f.trim()).filter(Boolean).sort((a, b) => a.localeCompare(b)),
     })).sort((a, b) => a.id.localeCompare(b.id)),
   })
 }

@@ -49,6 +49,17 @@ function getOpeningTracksForGenre(scanResult: ScanMusicResult | null, genreId: s
   )
 }
 
+function getBackgroundTracksForGenre(scanResult: ScanMusicResult | null, genreId: string): ScannedTrack[] {
+  if (!scanResult) return []
+  const genreSpecific = scanResult.tracks.filter(
+    (track) => track.folderType === 'background' && track.genreId === genreId
+  )
+  if (genreSpecific.length > 0) return genreSpecific
+  return scanResult.tracks.filter(
+    (track) => track.folderType === 'background' && (!track.genreId || track.genreId === 'default' || genreId === 'all')
+  )
+}
+
 function getAvailableGenres(scanResult: ScanMusicResult | null): Array<{ id: string; name: string; count: number }> {
   if (!scanResult) return []
   const configGenres = scanResult.config?.genres ?? []
@@ -82,6 +93,9 @@ interface GenreConfigItem {
   endingTrackIds: string[]
   pinnedOpeningTrackIds: string[]
   combineAllPinnedOpenings?: boolean
+  selectedBackgroundTrackId?: string
+  bgMusicVolumeDb?: number
+  mainMusicVolumeDb?: number
 }
 
 function CreatePlaylistPage() {
@@ -113,6 +127,9 @@ function CreatePlaylistPage() {
   const [genreOpeningSearch, setGenreOpeningSearch] = useState<Record<string, string>>({})
   const [genrePinnedSearch, setGenrePinnedSearch] = useState<Record<string, string>>({})
   const [genreEndingSearch, setGenreEndingSearch] = useState<Record<string, string>>({})
+  const [previewLoadingGenreId, setPreviewLoadingGenreId] = useState<string | null>(null)
+  const [previewUrlMap, setPreviewUrlMap] = useState<Record<string, string>>({})
+  const [previewErrorMap, setPreviewErrorMap] = useState<Record<string, string>>({})
   const GENRE_WORKSPACE_KEY = 'musicGenreWorkspaceV1'
 
   // Helper clamp
@@ -307,11 +324,75 @@ function CreatePlaylistPage() {
       endingTrackIds: cfg?.endingTrackIds ?? [],
       pinnedOpeningTrackIds: cfg?.pinnedOpeningTrackIds ?? [],
       combineAllPinnedOpenings: cfg?.combineAllPinnedOpenings ?? false,
+      selectedBackgroundTrackId: cfg?.selectedBackgroundTrackId ?? '',
+      bgMusicVolumeDb: typeof cfg?.bgMusicVolumeDb === 'number' ? cfg.bgMusicVolumeDb : -4,
+      mainMusicVolumeDb: typeof cfg?.mainMusicVolumeDb === 'number' ? cfg.mainMusicVolumeDb : 2,
     }
   }
 
   const updateGenreConfig = (genreId: string, patch: Partial<ReturnType<typeof getGenreConfig>>) => {
     setGenreConfig((prev) => ({ ...prev, [genreId]: { ...getGenreConfig(genreId), ...patch } }))
+  }
+
+  const handlePreviewMix = async (genreId: string) => {
+    if (!scanResult) return
+    const cfg = getGenreConfig(genreId)
+    const genreBgTracks = getBackgroundTracksForGenre(scanResult, genreId)
+    if (genreBgTracks.length === 0) return
+
+    const bgTrack = (cfg.selectedBackgroundTrackId
+      ? genreBgTracks.find((t) => t.id === cfg.selectedBackgroundTrackId)
+      : null) || genreBgTracks[0]
+
+    const genreMainTracks = tracksForGenre(scanResult, genreId).filter((t) => t.folderType !== 'background')
+    const sampleMain = (cfg.pinnedTrackIds.length > 0
+      ? genreMainTracks.find((t) => cfg.pinnedTrackIds.includes(t.id))
+      : null) || genreMainTracks[0]
+
+    if (!sampleMain) {
+      setPreviewErrorMap((prev) => ({ ...prev, [genreId]: 'Thể loại này chưa có bài nhạc chính để nghe thử hòa âm.' }))
+      return
+    }
+
+    if (!bgTrack) {
+      setPreviewErrorMap((prev) => ({ ...prev, [genreId]: 'Không tìm thấy file nhạc nền.' }))
+      return
+    }
+
+    setPreviewLoadingGenreId(genreId)
+    setPreviewErrorMap((prev) => ({ ...prev, [genreId]: '' }))
+
+    try {
+      if (!window.api?.music?.previewMix) {
+        throw new Error('Chức năng nghe thử hòa âm chưa được hỗ trợ trên hệ thống.')
+      }
+      const res = await window.api.music.previewMix({
+        mainTrackPath: sampleMain.path,
+        bgTrackPath: bgTrack.path,
+        mainVolumeDb: typeof cfg.mainMusicVolumeDb === 'number' ? cfg.mainMusicVolumeDb : 2,
+        bgMusicVolumeDb: typeof cfg.bgMusicVolumeDb === 'number' ? cfg.bgMusicVolumeDb : -4,
+        durationSec: 20,
+      })
+
+      if (res.success && res.previewUrl) {
+        setPreviewUrlMap((prev) => ({ ...prev, [genreId]: res.previewUrl! }))
+      } else {
+        setPreviewErrorMap((prev) => ({ ...prev, [genreId]: res.error || 'Không tạo được đoạn nghe thử.' }))
+      }
+    } catch (err: any) {
+      setPreviewErrorMap((prev) => ({ ...prev, [genreId]: err?.message || String(err) }))
+    } finally {
+      setPreviewLoadingGenreId(null)
+    }
+  }
+
+  const handleStopPreview = (genreId: string) => {
+    setPreviewUrlMap((prev) => {
+      const next = { ...prev }
+      delete next[genreId]
+      return next
+    })
+    setPreviewErrorMap((prev) => ({ ...prev, [genreId]: '' }))
   }
 
   const handleSaveGenreSettings = () => {
@@ -336,7 +417,7 @@ function CreatePlaylistPage() {
     const genre = availableGenres.find((item) => item.id === genreId)
     if (!genre) return
     const tracks = getActiveTracks(scanResult, genreId)
-    const body = tracks.filter((track) => track.folderType !== 'opening')
+    const body = tracks.filter((track) => track.folderType !== 'opening' && track.folderType !== 'background')
     if (body.length === 0) {
       setGenreErrors((prev) => ({ ...prev, [genreId]: 'Thể loại này không có bài nhạc chính.' }))
       return
@@ -358,6 +439,8 @@ function CreatePlaylistPage() {
       ? genreOpening.filter((t) => validPinnedOpeningIds.includes(t.id))
       : genreOpening
 
+    const genreBackground = getBackgroundTracksForGenre(scanResult, genreId)
+
     setCreatingGenreId(genreId)
     setGenreErrors((prev) => ({ ...prev, [genreId]: '' }))
     try {
@@ -370,6 +453,10 @@ function CreatePlaylistPage() {
         endingTracks: config.endingTrackIds
           .map((id) => body.find((track) => track.id === id))
           .filter((track): track is ScannedTrack => !!track),
+        backgroundTracks: genreBackground,
+        selectedBackgroundTrackId: config.selectedBackgroundTrackId || undefined,
+        bgMusicVolumeDb: typeof config.bgMusicVolumeDb === 'number' ? config.bgMusicVolumeDb : -4,
+        mainMusicVolumeDb: typeof config.mainMusicVolumeDb === 'number' ? config.mainMusicVolumeDb : 2,
         playlistCount: count,
         targetDurationMinutes: minutes,
         priorityRatioMin: priority,
@@ -731,13 +818,14 @@ function CreatePlaylistPage() {
             const filteredOpeningTracks = genreOpeningTracks.filter((track) =>
               track.fileName.toLowerCase().includes(openingQuery)
             )
+            const genreBackgroundTracks = getBackgroundTracksForGenre(scanResult, genre.id)
             const pinnedQuery = (genrePinnedSearch[genre.id] ?? '').trim().toLowerCase()
             const filteredBodyTracks = tracksForGenre(scanResult, genre.id)
-              .filter((track) => track.folderType !== 'opening')
+              .filter((track) => track.folderType !== 'opening' && track.folderType !== 'background')
               .filter((track) => track.fileName.toLowerCase().includes(pinnedQuery))
             const endingQuery = (genreEndingSearch[genre.id] ?? '').trim().toLowerCase()
             const filteredEndingTracks = tracksForGenre(scanResult, genre.id)
-              .filter((track) => track.folderType !== 'opening')
+              .filter((track) => track.folderType !== 'opening' && track.folderType !== 'background')
               .filter((track) => track.fileName.toLowerCase().includes(endingQuery))
 
             return <section key={genre.id} style={{ padding: '14px', background: '#252526', border: `1px solid ${generated.length ? '#166534' : '#444'}`, borderRadius: '8px' }}>
@@ -1131,6 +1219,246 @@ function CreatePlaylistPage() {
                   )}
                 </div>
               </details>
+
+              {/* 4. Nhạc nền & Hòa âm âm lượng */}
+              {genreBackgroundTracks.length > 0 ? (
+                <div
+                  style={{
+                    marginTop: '10px',
+                    padding: '10px 12px',
+                    background: '#1e1b4b',
+                    border: '1px solid #6366f1',
+                    borderRadius: '6px',
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+                    <div style={{ color: '#c7d2fe', fontSize: '12px', fontWeight: 700 }}>
+                      Nhạc nền ({genreBackgroundTracks.length} bài)
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                      {previewUrlMap[genre.id] ? (
+                        <button
+                          type="button"
+                          onClick={() => handleStopPreview(genre.id)}
+                          style={{
+                            padding: '4px 10px',
+                            background: '#dc2626',
+                            color: '#fff',
+                            border: 0,
+                            borderRadius: '4px',
+                            fontSize: '11px',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          Đóng nghe thử
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => handlePreviewMix(genre.id)}
+                          disabled={previewLoadingGenreId === genre.id}
+                          style={{
+                            padding: '4px 10px',
+                            background: previewLoadingGenreId === genre.id ? '#4b5563' : '#4f46e5',
+                            color: '#fff',
+                            border: 0,
+                            borderRadius: '4px',
+                            fontSize: '11px',
+                            cursor: previewLoadingGenreId === genre.id ? 'not-allowed' : 'pointer',
+                          }}
+                        >
+                          {previewLoadingGenreId === genre.id ? 'Đang hòa âm...' : 'Nghe thử hòa âm (20s)'}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div style={{ color: '#a5b4fc', fontSize: '11px', marginTop: '4px', lineHeight: 1.4 }}>
+                    Thể loại này có thư mục nhạc nền. Nhạc nền sẽ chạy ngầm song song lặp lại suốt toàn bộ playlist với độ cân bằng âm lượng bên dưới.
+                  </div>
+
+                  {/* Chọn bài nhạc nền nếu có từ 2 bài trở lên */}
+                  {genreBackgroundTracks.length > 1 && (
+                    <div style={{ marginTop: '8px' }}>
+                      <label style={{ color: '#c7d2fe', fontSize: '11px', display: 'block', marginBottom: '3px' }}>
+                        Chọn bài nhạc nền:
+                      </label>
+                      <select
+                        value={cfg.selectedBackgroundTrackId || ''}
+                        onChange={(e) => updateGenreConfig(genre.id, { selectedBackgroundTrackId: e.target.value })}
+                        style={{
+                          width: '100%',
+                          padding: '5px 8px',
+                          background: '#0f172a',
+                          color: '#fff',
+                          border: '1px solid #4338ca',
+                          borderRadius: '4px',
+                          fontSize: '11px',
+                        }}
+                      >
+                        <option value="">Tự động xoay vòng qua các bài nhạc nền</option>
+                        {genreBackgroundTracks.map((bg) => (
+                          <option key={bg.id} value={bg.id}>
+                            {bg.fileName} ({formatDurationShort(bg.duration)})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
+                  {/* Điều chỉnh âm lượng nhạc nền và nhạc ghép */}
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: '1fr 1fr',
+                      gap: '12px',
+                      marginTop: '10px',
+                      padding: '8px',
+                      background: '#0f172a',
+                      borderRadius: '5px',
+                      border: '1px solid #312e81',
+                    }}
+                  >
+                    {/* Nhạc nền: Mặc định -4 dB */}
+                    <div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ color: '#e0e7ff', fontSize: '11px', fontWeight: 600 }}>
+                          Âm lượng nhạc nền:
+                        </span>
+                        <span style={{ color: '#a5b4fc', fontSize: '11px', fontWeight: 700 }}>
+                          {cfg.bgMusicVolumeDb ?? -4} dB
+                        </span>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px' }}>
+                        <input
+                          type="range"
+                          min={-30}
+                          max={6}
+                          step={1}
+                          value={cfg.bgMusicVolumeDb ?? -4}
+                          onChange={(e) => updateGenreConfig(genre.id, { bgMusicVolumeDb: Number(e.target.value) })}
+                          style={{ flex: 1, cursor: 'pointer' }}
+                        />
+                        <input
+                          type="number"
+                          min={-30}
+                          max={6}
+                          value={cfg.bgMusicVolumeDb ?? -4}
+                          onChange={(e) => updateGenreConfig(genre.id, { bgMusicVolumeDb: Number(e.target.value) })}
+                          style={{
+                            width: '50px',
+                            background: '#1e1b4b',
+                            color: '#fff',
+                            border: '1px solid #4338ca',
+                            borderRadius: '4px',
+                            padding: '2px 4px',
+                            fontSize: '11px',
+                            textAlign: 'center',
+                          }}
+                        />
+                      </div>
+                      <div style={{ color: '#818cf8', fontSize: '10px', marginTop: '2px' }}>
+                        Mặc định: -4 dB (nhỏ hơn nhạc ghép để nghe rõ lời)
+                      </div>
+                    </div>
+
+                    {/* Nhạc ghép (chính): Mặc định +2 dB */}
+                    <div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ color: '#e0e7ff', fontSize: '11px', fontWeight: 600 }}>
+                          Âm lượng nhạc ghép:
+                        </span>
+                        <span style={{ color: '#a5b4fc', fontSize: '11px', fontWeight: 700 }}>
+                          {((cfg.mainMusicVolumeDb ?? 2) >= 0 ? '+' : '') + (cfg.mainMusicVolumeDb ?? 2)} dB
+                        </span>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px' }}>
+                        <input
+                          type="range"
+                          min={-12}
+                          max={12}
+                          step={1}
+                          value={cfg.mainMusicVolumeDb ?? 2}
+                          onChange={(e) => updateGenreConfig(genre.id, { mainMusicVolumeDb: Number(e.target.value) })}
+                          style={{ flex: 1, cursor: 'pointer' }}
+                        />
+                        <input
+                          type="number"
+                          min={-12}
+                          max={12}
+                          value={cfg.mainMusicVolumeDb ?? 2}
+                          onChange={(e) => updateGenreConfig(genre.id, { mainMusicVolumeDb: Number(e.target.value) })}
+                          style={{
+                            width: '50px',
+                            background: '#1e1b4b',
+                            color: '#fff',
+                            border: '1px solid #4338ca',
+                            borderRadius: '4px',
+                            padding: '2px 4px',
+                            fontSize: '11px',
+                            textAlign: 'center',
+                          }}
+                        />
+                      </div>
+                      <div style={{ color: '#818cf8', fontSize: '10px', marginTop: '2px' }}>
+                        Mặc định: +2 dB (các bài từ opening, ưu tiên, random)
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Inline Audio Player nghe thử */}
+                  {previewUrlMap[genre.id] && (
+                    <div
+                      style={{
+                        marginTop: '10px',
+                        padding: '8px 10px',
+                        background: '#172554',
+                        border: '1px solid #3b82f6',
+                        borderRadius: '5px',
+                      }}
+                    >
+                      <div style={{ color: '#93c5fd', fontSize: '11px', fontWeight: 600, marginBottom: '6px' }}>
+                        Đoạn nghe thử hòa âm (20 giây):
+                      </div>
+                      <audio
+                        controls
+                        autoPlay
+                        src={previewUrlMap[genre.id]}
+                        style={{ width: '100%', height: '36px' }}
+                      />
+                    </div>
+                  )}
+
+                  {previewErrorMap[genre.id] && (
+                    <div style={{ color: '#fca5a5', fontSize: '11px', marginTop: '6px' }}>
+                      {previewErrorMap[genre.id]}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div
+                  style={{
+                    marginTop: '10px',
+                    padding: '8px 12px',
+                    background: '#18181b',
+                    border: '1px dashed #3f3f46',
+                    borderRadius: '6px',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    gap: '8px',
+                    flexWrap: 'wrap',
+                  }}
+                >
+                  <span style={{ color: '#9ca3af', fontSize: '11px' }}>
+                    Nhạc nền: Chưa có bài hát (thêm thư mục tại Tab 1 Quét nhạc để kích hoạt hòa âm)
+                  </span>
+                  <span style={{ color: '#6b7280', fontSize: '10px' }}>
+                    Mặc định hòa âm: Nền -4 dB / Ghép +2 dB
+                  </span>
+                </div>
+              )}
+
               {generated.length > 0 && (
                 <div style={{ marginTop: '10px' }}>
                   <div style={{ color: '#86efac', fontSize: '13px', fontWeight: 700, marginBottom: '8px' }}>
@@ -1154,6 +1482,11 @@ function CreatePlaylistPage() {
                           {playlist.name}
                           <div style={{ color: '#94a3b8', fontSize: '11px', fontWeight: 400, marginTop: '4px' }}>
                             Thời lượng: {formatDuration(playlist.totalDurationSec)} · Main: {formatDuration(mainDurationSec)} · Nhạc cuối: {playlist.endingCount ?? 0} · Số bài: {playlist.tracks.length} · Ưu tiên: {priorityPercent}% · Random: {randomPercent}%
+                            {playlist.backgroundTrack && (
+                              <span style={{ color: '#c7d2fe' }}>
+                                {' '}· Nhạc nền: {playlist.backgroundTrack.fileName} (Nền {playlist.bgMusicVolumeDb ?? -4}dB / Ghép {((playlist.mainMusicVolumeDb ?? 2) >= 0 ? '+' : '') + (playlist.mainMusicVolumeDb ?? 2)}dB)
+                              </span>
+                            )}
                           </div>
                         </summary>
                         <div style={{ overflowX: 'auto', maxHeight: '260px', overflowY: 'auto' }}>

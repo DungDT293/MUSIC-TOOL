@@ -51,6 +51,7 @@ export const MusicScanGenreSchema = z.object({
   priorityFolders: z.array(z.string()).optional().default([]),
   randomFolders: z.array(z.string()).optional().default([]),
   openingFolders: z.array(z.string()).optional().default([]),
+  backgroundFolders: z.array(z.string()).optional().default([]),
 })
 
 export const MusicScanFoldersSchema = z.object({
@@ -58,11 +59,15 @@ export const MusicScanFoldersSchema = z.object({
   randomFolder: z.string().nullable().optional(),
   genres: z.array(MusicScanGenreSchema).optional(),
   forceRescan: z.boolean().optional(),
+  openingFolders: z.array(z.string()).optional(),
+  backgroundFolders: z.array(z.string()).optional(),
 }).transform((data) => ({
   priorityFolder: data.priorityFolder ?? null,
   randomFolder: data.randomFolder ?? null,
   genres: data.genres,
   forceRescan: data.forceRescan ?? false,
+  openingFolders: data.openingFolders,
+  backgroundFolders: data.backgroundFolders,
 }))
 
 const ScannedTrackSchema = z.object({
@@ -72,7 +77,7 @@ const ScannedTrackSchema = z.object({
   fileName: z.string().optional(),
   duration: z.number().optional(),
   durationSec: z.number().optional(),
-  folderType: z.enum(['priority', 'random', 'opening']).optional(),
+  folderType: z.enum(['priority', 'random', 'opening', 'background']).optional(),
 }).passthrough()
 
 export const BuildPlaylistsOptionsSchema = z.object({
@@ -80,6 +85,10 @@ export const BuildPlaylistsOptionsSchema = z.object({
   tracks: z.array(ScannedTrackSchema).optional(),
   openingTracks: z.array(ScannedTrackSchema).optional(),
   endingTracks: z.array(ScannedTrackSchema).optional(),
+  backgroundTracks: z.array(ScannedTrackSchema).optional(),
+  selectedBackgroundTrackId: z.string().optional(),
+  bgMusicVolumeDb: z.number().optional(),
+  mainMusicVolumeDb: z.number().optional(),
   pinnedTrackIds: z.array(z.string()).optional(),
   playlistCount: z.number().int().positive().optional(),
   targetDurationMinutes: z.number().positive().optional(),
@@ -96,6 +105,9 @@ export const ExportPlaylistRequestSchema = z.object({
   bitrateKbps: z.number().int().positive().max(512).optional(),
   smoothTransitions: z.boolean().optional(),
   crossfadeDurationSec: z.number().positive().max(10).optional(),
+  backgroundTrackPath: z.string().optional(),
+  bgMusicVolumeDb: z.number().optional(),
+  mainMusicVolumeDb: z.number().optional(),
   outputPath: z.string().optional(), // For internal use
   playlistName: z.string().optional(), // For internal use
   currentIndex: z.number().int().nonnegative().optional(), // For internal use

@@ -27,6 +27,10 @@ export interface DayPlanDetailOverrides {
   prioritySelectionMode?: 'auto' | 'manual'
   /** Danh sách track id ưu tiên (chọn tay) dùng khi prioritySelectionMode === 'manual' */
   priorityPinnedTrackIds?: string[]
+  /** Âm lượng nhạc nền (dB, mặc định -4 dB) */
+  bgMusicVolumeDb?: number | ''
+  /** Âm lượng nhạc ghép (dB, mặc định +2 dB) */
+  mainMusicVolumeDb?: number | ''
 }
 
 export interface DayPlanUI {
@@ -46,6 +50,7 @@ export interface AutopilotFoldersConfig {
   priorityMusicFolder: string
   randomMusicFolder: string
   openingMusicFolder?: string
+  backgroundMusicFolder?: string
   priorityVideoFolder?: string
   /** File nhạc nối cuối mỗi playlist/video. */
   endingAudioPaths?: string[]
@@ -423,6 +428,8 @@ export function DayPlanDetailDialog({
     topDj: overrides.topDj ?? 'Tiësto',
     useCustomTitles: overrides.useCustomTitles ?? false,
     customTitles: overrides.customTitles ?? [],
+    bgMusicVolumeDb: typeof overrides.bgMusicVolumeDb === 'number' ? overrides.bgMusicVolumeDb : (overrides.bgMusicVolumeDb === '' ? '' : -4),
+    mainMusicVolumeDb: typeof overrides.mainMusicVolumeDb === 'number' ? overrides.mainMusicVolumeDb : (overrides.mainMusicVolumeDb === '' ? '' : 2),
   })
   // Lưu giá trị thô của textarea để cho phép gõ dấu cách tự do
   const [customTitlesRaw, setCustomTitlesRaw] = useState<string>(
@@ -443,6 +450,8 @@ export function DayPlanDetailDialog({
       topDj: overrides.topDj ?? 'Tiësto',
       useCustomTitles: overrides.useCustomTitles ?? false,
       customTitles: newCustomTitles,
+      bgMusicVolumeDb: typeof overrides.bgMusicVolumeDb === 'number' ? overrides.bgMusicVolumeDb : (overrides.bgMusicVolumeDb === '' ? '' : -4),
+      mainMusicVolumeDb: typeof overrides.mainMusicVolumeDb === 'number' ? overrides.mainMusicVolumeDb : (overrides.mainMusicVolumeDb === '' ? '' : 2),
     })
     setCustomTitlesRaw(newCustomTitles.join('\n'))
     setPriorityTracks(null)
@@ -539,6 +548,8 @@ export function DayPlanDetailDialog({
       unifyVideoFormat: !!local.unifyVideoFormat,
       targetResolution: local.unifyVideoFormat ? (local.targetResolution || '1920x1080') : undefined,
       targetFps: local.unifyVideoFormat ? (local.targetFps || '30') : undefined,
+      bgMusicVolumeDb: typeof local.bgMusicVolumeDb === 'number' ? local.bgMusicVolumeDb : (local.bgMusicVolumeDb === '' ? undefined : -4),
+      mainMusicVolumeDb: typeof local.mainMusicVolumeDb === 'number' ? local.mainMusicVolumeDb : (local.mainMusicVolumeDb === '' ? undefined : 2),
     }
     onSave(normalized)
     onClose()
@@ -776,6 +787,63 @@ export function DayPlanDetailDialog({
                 }}
               />
             </label>
+          )}
+
+          {/* Cấu hình âm lượng hòa âm nhạc nền */}
+          {Boolean(foldersConfig.backgroundMusicFolder) && (
+            <div
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '8px',
+                padding: '10px',
+                background: '#0f172a',
+                border: '1px solid #312e81',
+                borderRadius: '6px',
+              }}
+            >
+              <span style={{ fontWeight: 600, color: '#c7d2fe', fontSize: '13px' }}>
+                Cân bằng âm lượng hòa âm nhạc nền
+              </span>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  <span style={{ fontSize: '12px', color: '#cbd5e1' }}>Âm lượng nhạc nền (dB)</span>
+                  <NumericDraftInput
+                    min={-30}
+                    max={6}
+                    allowBlank
+                    value={typeof local.bgMusicVolumeDb === 'number' ? local.bgMusicVolumeDb : (local.bgMusicVolumeDb === '' ? '' : -4)}
+                    onCommit={(value) => setLocal((prev) => ({ ...prev, bgMusicVolumeDb: value }))}
+                    style={{
+                      padding: '6px 8px',
+                      borderRadius: '4px',
+                      border: '1px solid #4b5563',
+                      backgroundColor: '#020617',
+                      color: '#e5e7eb',
+                    }}
+                  />
+                  <span style={{ fontSize: '10px', color: '#818cf8' }}>Mặc định: -4 dB</span>
+                </label>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  <span style={{ fontSize: '12px', color: '#cbd5e1' }}>Âm lượng nhạc ghép (dB)</span>
+                  <NumericDraftInput
+                    min={-12}
+                    max={12}
+                    allowBlank
+                    value={typeof local.mainMusicVolumeDb === 'number' ? local.mainMusicVolumeDb : (local.mainMusicVolumeDb === '' ? '' : 2)}
+                    onCommit={(value) => setLocal((prev) => ({ ...prev, mainMusicVolumeDb: value }))}
+                    style={{
+                      padding: '6px 8px',
+                      borderRadius: '4px',
+                      border: '1px solid #4b5563',
+                      backgroundColor: '#020617',
+                      color: '#e5e7eb',
+                    }}
+                  />
+                  <span style={{ fontSize: '10px', color: '#818cf8' }}>Mặc định: +2 dB</span>
+                </label>
+              </div>
+            </div>
           )}
 
           {/* UI mới cho Custom preset: video 1-N hoặc tùy chỉnh */}
@@ -1163,7 +1231,7 @@ function FoldersAndSourcesSection({ foldersConfig, onChange, videoSelectionInfo 
     }
   }
 
-  const handleChooseMusicFolder = async (key: 'priorityMusicFolder' | 'randomMusicFolder' | 'openingMusicFolder') => {
+  const handleChooseMusicFolder = async (key: 'priorityMusicFolder' | 'randomMusicFolder' | 'openingMusicFolder' | 'backgroundMusicFolder') => {
     const w = window
 
     if (w.api?.selectFolder) {
@@ -1406,6 +1474,12 @@ function FoldersAndSourcesSection({ foldersConfig, onChange, videoSelectionInfo 
               onClear={() => onChange({ openingMusicFolder: '' })}
             />
             <MusicFolderRow
+              label="Thư mục nhạc nền (tùy chọn)"
+              value={foldersConfig.backgroundMusicFolder || ''}
+              onChoose={() => handleChooseMusicFolder('backgroundMusicFolder')}
+              onClear={() => onChange({ backgroundMusicFolder: '' })}
+            />
+            <MusicFolderRow
               label="Nhạc nối cuối (tùy chọn)"
               value={(foldersConfig.endingAudioPaths ?? []).join('\n')}
               onChoose={handleChooseEndingAudio}
@@ -1416,6 +1490,7 @@ function FoldersAndSourcesSection({ foldersConfig, onChange, videoSelectionInfo 
           <span style={{ display: 'block', marginTop: '10px', fontSize: '11px', color: '#9ca3af', lineHeight: 1.5 }}>
             - Nhạc ưu tiên sẽ luôn được ưu tiên mở đầu playlist (65–80% thời lượng).<br />
             - Nhạc random bổ sung phần còn lại để đủ thời lượng và tạo độ đa dạng.<br />
+            - Nhạc nền chạy ngầm hòa âm xuyên suốt playlist (mặc định -4 dB, nhạc ghép +2 dB).<br />
             - Nhạc nối cuối được append sau target chính của từng playlist/video.<br />
             - Có thể chọn 1 hoặc cả 2 thư mục, Autopilot sẽ tự cân đối.
           </span>
@@ -1875,6 +1950,8 @@ export function createDefaultOverrides(): DayPlanDetailOverrides {
     targetFps: '30',
     prioritySelectionMode: 'auto',
     priorityPinnedTrackIds: [],
+    bgMusicVolumeDb: -4,
+    mainMusicVolumeDb: 2,
   }
 }
 
@@ -1979,13 +2056,14 @@ function AutopilotPageLegacy() {
   const [foldersConfig, setFoldersConfig] = useState<AutopilotFoldersConfig>(() => {
     if (typeof window === 'undefined') {
       return {
-    rootAudio: '',
-    rootVideo: '',
-    rootFinal: '',
-    autoCreateDailySubfolder: true,
-    priorityMusicFolder: '',
-    randomMusicFolder: '',
-    openingMusicFolder: '',
+        rootAudio: '',
+        rootVideo: '',
+        rootFinal: '',
+        autoCreateDailySubfolder: true,
+        priorityMusicFolder: '',
+        randomMusicFolder: '',
+        openingMusicFolder: '',
+        backgroundMusicFolder: '',
         priorityVideoFolder: '',
       }
     }
@@ -2000,6 +2078,7 @@ function AutopilotPageLegacy() {
           priorityMusicFolder: '',
           randomMusicFolder: '',
           openingMusicFolder: '',
+          backgroundMusicFolder: '',
         }
       }
       const parsed = JSON.parse(raw) as AutopilotConfig
@@ -2014,6 +2093,7 @@ function AutopilotPageLegacy() {
         priorityMusicFolder: parsed?.folders?.priorityMusicFolder || '',
         randomMusicFolder: parsed?.folders?.randomMusicFolder || '',
         openingMusicFolder: parsed?.folders?.openingMusicFolder || '',
+        backgroundMusicFolder: parsed?.folders?.backgroundMusicFolder || '',
         priorityVideoFolder: parsed?.folders?.priorityVideoFolder || '',
         endingAudioPaths: Array.isArray(parsed?.folders?.endingAudioPaths) ? parsed.folders.endingAudioPaths : [],
         minVideoClipsTarget: typeof parsed?.folders?.minVideoClipsTarget === 'number' ? parsed.folders.minVideoClipsTarget : 1000,
@@ -2027,6 +2107,7 @@ function AutopilotPageLegacy() {
         priorityMusicFolder: '',
         randomMusicFolder: '',
         openingMusicFolder: '',
+        backgroundMusicFolder: '',
         priorityVideoFolder: '',
       }
     }

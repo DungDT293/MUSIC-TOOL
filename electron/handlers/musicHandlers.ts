@@ -27,6 +27,7 @@ import {
 } from '../../backend/music/exportAudio'
 import { normalizeAudio, cancelNormalizeAudio, type NormalizeAudioRequest, type NormalizeAudioProgress } from '../../backend/music/normalizeAudio'
 import { enhanceAudio, cancelEnhanceAudio, renderPreviewClip, type EnhanceAudioRequest } from '../../backend/music/enhanceAudio/index'
+import { renderPreviewMix } from '../../backend/music/previewMix'
 import { getSpotifyMeta, resolveBrowserSpotifyMetadata, resolvePublicSpotifyMetadata, resolveSpotifyMetadata } from '../../backend/music/spotifyMeta'
 import { readSpotifyPlaylistWithBrowser } from '../spotifyMetadataBrowser'
 import { getSpotifyCookieString, getSpotifyCookies } from '../youtube/youtubeHandlers'
@@ -56,6 +57,7 @@ export function registerMusicHandlers(getMainWindow: () => Electron.BrowserWindo
       for (const folder of genre.priorityFolders ?? []) validateFolder(folder, `${genre.name} priority`)
       for (const folder of genre.randomFolders ?? []) validateFolder(folder, `${genre.name} random`)
       for (const folder of genre.openingFolders ?? []) validateFolder(folder, `${genre.name} opening`)
+      for (const folder of genre.backgroundFolders ?? []) validateFolder(folder, `${genre.name} background`)
     }
 
     console.log('[IPC] music:scanFolders', {
@@ -205,6 +207,11 @@ export function registerMusicHandlers(getMainWindow: () => Electron.BrowserWindo
       console.error('[IPC] music:enhance:renderPreview error', err)
       return { success: false, error: String(err) }
     }
+  })
+
+  // Preview mix (nghe thử hòa âm nhạc ghép và nhạc nền)
+  ipcMain.handle('music:previewMix', async (_event, payload) => {
+    return renderPreviewMix(payload)
   })
 
   // Export playlist

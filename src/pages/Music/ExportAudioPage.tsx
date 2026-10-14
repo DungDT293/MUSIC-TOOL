@@ -736,6 +736,9 @@ const selectedHistoryGenre = selectedHistoryPlaylist?.genreName || 'Playlist cũ
             : undefined,
           normalizeLoudness: useLoudnorm,
           loudnessTargetLufs: useLoudnorm ? -14 : undefined,
+          backgroundTrackPath: pl.backgroundTrack?.path,
+          bgMusicVolumeDb: pl.bgMusicVolumeDb,
+          mainMusicVolumeDb: pl.mainMusicVolumeDb,
         }
 
         try {
@@ -1068,6 +1071,7 @@ const selectedHistoryGenre = selectedHistoryPlaylist?.genreName || 'Playlist cũ
                       </div>
                       <div style={{ fontSize: '11px', color: '#888', marginBottom: '4px' }}>
                         Ưu tiên: {priorityPercent}% • Random: {randomPercent}%
+                        {pl.backgroundTrack && ` • Nhạc nền (${pl.bgMusicVolumeDb ?? -4}dB / +${pl.mainMusicVolumeDb ?? 2}dB)`}
                       </div>
                       <div
                         style={{

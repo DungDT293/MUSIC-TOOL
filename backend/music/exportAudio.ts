@@ -26,6 +26,12 @@ export interface ExportPlaylistRequest {
   normalizeLoudness?: boolean
   /** Target LUFS (default -14 = YouTube/Spotify standard) */
   loudnessTargetLufs?: number
+  /** Đường dẫn file nhạc nền trộn kèm (nếu có) */
+  backgroundTrackPath?: string
+  /** Âm lượng nhạc nền tính theo dB (mặc định -4 dB) */
+  bgMusicVolumeDb?: number
+  /** Âm lượng nhạc ghép chính tính theo dB (mặc định +2 dB) */
+  mainMusicVolumeDb?: number
   /** Internal: Job queue request ID */
   requestId?: string
   /** Internal: AbortSignal from job queue for cancellation */
@@ -489,6 +495,21 @@ export async function exportPlaylistToFile(
       fs.mkdirSync(tempDir, { recursive: true })
     }
 
+    // 5a. Cấu hình hòa âm nhạc nền (nếu có)
+    const bgTrackPath = req.backgroundTrackPath || playlist.backgroundTrack?.path
+    const hasBgMusic = Boolean(bgTrackPath && fs.existsSync(bgTrackPath))
+    const bgMusicVolumeDb = req.bgMusicVolumeDb ?? playlist.bgMusicVolumeDb ?? -4
+    const mainMusicVolumeDb = req.mainMusicVolumeDb ?? playlist.mainMusicVolumeDb ?? 2
+
+    // Nếu có nhạc nền, main audio sẽ được render vào intermediateMainPath trước, rồi mix với nhạc nền ra outputPath
+    const intermediateMainPath = hasBgMusic
+      ? path.join(tempDir, `main_${req.playlistId}_${Date.now()}${ext}`)
+      : outputPath
+    if (hasBgMusic) {
+      tempFiles.add(intermediateMainPath)
+    }
+    const targetRenderPath = intermediateMainPath
+
     // 5b. Loudness normalization config (EBU R128) — sẽ thực hiện per-track SAU khi playlist final
     const loudnormEnabled = !!req.normalizeLoudness
     const loudnormLufs = req.loudnessTargetLufs ?? -14
@@ -571,7 +592,7 @@ export async function exportPlaylistToFile(
             '-i', listFile,
             '-vn',
             '-c', 'copy',
-            outputPath,
+            targetRenderPath,
           ]
         } else if (req.format === 'mp3') {
           args = [
@@ -592,7 +613,7 @@ export async function exportPlaylistToFile(
             '2',
             '-b:a',
             `${(bitrate ?? 320)}k`,
-            outputPath,
+            targetRenderPath,
           ]
         } else if (req.format === 'aac') {
           // AAC input nhưng không phải tất cả là m4a/aac → re-encode bình thường
@@ -614,7 +635,7 @@ export async function exportPlaylistToFile(
             '2',
             '-b:a',
             `${(bitrate ?? 384)}k`,
-            outputPath,
+            targetRenderPath,
           ]
         } else {
           // WAV
@@ -634,7 +655,7 @@ export async function exportPlaylistToFile(
             '48000',
             '-ac',
             '2',
-            outputPath,
+            targetRenderPath,
           ]
         }
         
@@ -872,7 +893,7 @@ export async function exportPlaylistToFile(
 
         args = buildCrossfadeRenderArgs(
           playlist.tracks.map((track) => track.path),
-          outputPath,
+          targetRenderPath,
           req.format,
           bitrate,
           crossfadeDurationSec,
@@ -976,7 +997,7 @@ export async function exportPlaylistToFile(
         finalProgressSpanPercent = 25
         args = buildCrossfadeRenderArgs(
           batchOutputFiles,
-          outputPath,
+          targetRenderPath,
           req.format,
           bitrate,
           crossfadeDurationSec,
@@ -1018,7 +1039,50 @@ export async function exportPlaylistToFile(
     })
 
     // 8. Kiểm tra kết quả
-    if (result.code === 0 && fs.existsSync(outputPath)) {
+    if (result.code === 0 && fs.existsSync(targetRenderPath)) {
+      if (hasBgMusic && bgTrackPath) {
+        console.log(`[ExportAudio] Đang hòa âm nhạc nền: ${bgTrackPath} (${bgMusicVolumeDb} dB) với nhạc ghép (${mainMusicVolumeDb} dB)...`)
+        const mixArgs = [
+          '-hide_banner',
+          '-y',
+          '-i', targetRenderPath,
+          '-stream_loop', '-1',
+          '-i', bgTrackPath,
+          '-filter_complex',
+          `[0:a]volume=${mainMusicVolumeDb}dB[main];[1:a]volume=${bgMusicVolumeDb}dB[bg];[main][bg]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[out]`,
+          '-map', '[out]',
+          ...(req.format === 'mp3' ? [
+            '-acodec', 'libmp3lame',
+            '-ar', '48000',
+            '-ac', '2',
+            '-b:a', `${(bitrate ?? 320)}k`,
+          ] : req.format === 'aac' ? [
+            '-acodec', 'aac',
+            '-ar', '48000',
+            '-ac', '2',
+            '-b:a', `${(bitrate ?? 384)}k`,
+          ] : [
+            '-acodec', 'pcm_s16le',
+            '-ar', '48000',
+            '-ac', '2',
+          ]),
+          outputPath,
+        ]
+
+        const mixResult = await runFfmpeg({
+          args: mixArgs,
+          timeoutMs: 3600000,
+          requestId,
+          signal: req.signal,
+        })
+
+        if (mixResult.code !== 0 || !fs.existsSync(outputPath)) {
+          return {
+            success: false,
+            error: `Lỗi hòa âm nhạc nền: ${mixResult.stderr || 'FFmpeg failed'}`,
+          }
+        }
+      }
       // Đảm bảo emit progress 100% khi hoàn thành (tránh progress đứng ở ~99%)
       if (progressEmitter && totalDurationSec) {
         progressEmitter({

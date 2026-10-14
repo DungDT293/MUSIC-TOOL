@@ -5,7 +5,7 @@ import { createHash } from 'crypto'
 import { probeFile } from '../ffmpeg/probe'
 import { loadReusableScanResult, saveScanResult } from './scanStore'
 
-export type MusicFolderType = 'priority' | 'random' | 'opening'
+export type MusicFolderType = 'priority' | 'random' | 'opening' | 'background'
 
 export interface MusicScanGenre {
   id: string
@@ -13,6 +13,7 @@ export interface MusicScanGenre {
   priorityFolders: string[]
   randomFolders: string[]
   openingFolders?: string[]
+  backgroundFolders?: string[]
 }
 
 export interface ScanMusicConfig {
@@ -40,10 +41,12 @@ export interface GenreScanSummary {
   openingCount?: number
   priorityCount: number
   randomCount: number
+  backgroundCount?: number
   totalCount: number
   openingDuration?: number
   priorityDuration: number
   randomDuration: number
+  backgroundDuration?: number
   totalDuration: number
 }
 
@@ -51,10 +54,12 @@ export interface ScanSummary {
   openingCount?: number
   priorityCount: number
   randomCount: number
+  backgroundCount?: number
   totalCount: number
   openingDuration?: number // seconds
   priorityDuration: number // seconds
   randomDuration: number // seconds
+  backgroundDuration?: number // seconds
   totalDuration: number // seconds
   genres?: GenreScanSummary[]
 }
@@ -76,6 +81,7 @@ export interface ScanMusicPayload {
   forceRescan?: boolean
   persist?: boolean
   openingFolders?: string[]
+  backgroundFolders?: string[]
 }
 
 export interface ScanMusicProgress {
@@ -126,7 +132,8 @@ export function normalizeScanPayload(payload: ScanMusicPayload): ScanMusicConfig
     priorityFolders: normalizeFolderList(genre.priorityFolders),
     randomFolders: normalizeFolderList(genre.randomFolders),
     openingFolders: normalizeFolderList(genre.openingFolders ?? payload.openingFolders),
-  })).filter((genre) => genre.priorityFolders.length > 0 || genre.randomFolders.length > 0 || genre.openingFolders.length > 0)
+    backgroundFolders: normalizeFolderList(genre.backgroundFolders ?? payload.backgroundFolders),
+  })).filter((genre) => genre.priorityFolders.length > 0 || genre.randomFolders.length > 0 || genre.openingFolders.length > 0 || genre.backgroundFolders.length > 0)
 
   if (genres.length > 0) {
     const usedIds = new Set<string>()
@@ -320,8 +327,11 @@ async function scanSingleFile(
     }
 
     const canonicalPath = await fsp.realpath(filePath)
-    const id = meta.genreId && meta.genreId !== 'default'
-      ? createHash('md5').update(`${meta.genreId}:${canonicalPath}`).digest('hex')
+    const idPrefix = folderType === 'background'
+      ? `${meta.genreId || 'default'}:background`
+      : (meta.genreId && meta.genreId !== 'default' ? meta.genreId : '')
+    const id = idPrefix
+      ? createHash('md5').update(`${idPrefix}:${canonicalPath}`).digest('hex')
       : createHash('md5').update(canonicalPath).digest('hex')
     const fileName = path.basename(filePath)
     const duration = probeResult.format.duration || 0
@@ -388,21 +398,25 @@ function buildSummary(tracks: ScannedTrack[], config: ScanMusicConfig): ScanSumm
   const openingTracks = tracks.filter((track) => track.folderType === 'opening')
   const priorityTracks = tracks.filter((track) => track.folderType === 'priority')
   const randomTracks = tracks.filter((track) => track.folderType === 'random')
+  const backgroundTracks = tracks.filter((track) => track.folderType === 'background')
   const genres = config.genres.map((genre) => {
     const genreTracks = tracks.filter((track) => track.genreId === genre.id)
     const genreOpening = genreTracks.filter((track) => track.folderType === 'opening')
     const genrePriority = genreTracks.filter((track) => track.folderType === 'priority')
     const genreRandom = genreTracks.filter((track) => track.folderType === 'random')
+    const genreBackground = genreTracks.filter((track) => track.folderType === 'background')
     return {
       genreId: genre.id,
       genreName: genre.name,
       openingCount: genreOpening.length,
       priorityCount: genrePriority.length,
       randomCount: genreRandom.length,
+      backgroundCount: genreBackground.length,
       totalCount: genreTracks.length,
       openingDuration: genreOpening.reduce((sum, track) => sum + track.duration, 0),
       priorityDuration: genrePriority.reduce((sum, track) => sum + track.duration, 0),
       randomDuration: genreRandom.reduce((sum, track) => sum + track.duration, 0),
+      backgroundDuration: genreBackground.reduce((sum, track) => sum + track.duration, 0),
       totalDuration: genreTracks.reduce((sum, track) => sum + track.duration, 0),
     }
   })
@@ -411,10 +425,12 @@ function buildSummary(tracks: ScannedTrack[], config: ScanMusicConfig): ScanSumm
     openingCount: openingTracks.length,
     priorityCount: priorityTracks.length,
     randomCount: randomTracks.length,
+    backgroundCount: backgroundTracks.length,
     totalCount: tracks.length,
     openingDuration: openingTracks.reduce((sum, track) => sum + track.duration, 0),
     priorityDuration: priorityTracks.reduce((sum, track) => sum + track.duration, 0),
     randomDuration: randomTracks.reduce((sum, track) => sum + track.duration, 0),
+    backgroundDuration: backgroundTracks.reduce((sum, track) => sum + track.duration, 0),
     totalDuration: tracks.reduce((sum, track) => sum + track.duration, 0),
     genres,
   }
@@ -439,22 +455,28 @@ export async function scanMusicFolders(
   throwIfAborted(options.signal)
 
   // Quét độc lập theo từng thể loại để cách ly tuyệt đối, không gây rò rỉ hay tranh chấp file giữa các thể loại.
-  // Trong mỗi thể loại, quét opening -> priority -> random để đảm bảo độ ưu tiên phân loại đúng.
+  // Trong mỗi thể loại, quét opening -> priority -> random -> background để đảm bảo độ ưu tiên phân loại đúng.
   for (const genre of config.genres) {
     const genreSeenRealPaths = new Set<string>()
-    for (const folderType of ['opening', 'priority', 'random'] as const) {
+    const genreBackgroundSeenRealPaths = new Set<string>()
+    for (const folderType of ['opening', 'priority', 'random', 'background'] as const) {
       const folders = folderType === 'priority'
         ? genre.priorityFolders
-        : folderType === 'random' ? genre.randomFolders : genre.openingFolders ?? []
+        : folderType === 'random'
+          ? genre.randomFolders
+          : folderType === 'opening'
+            ? (genre.openingFolders ?? [])
+            : (genre.backgroundFolders ?? [])
       for (const folder of folders) {
         throwIfAborted(options.signal)
         if (!fs.existsSync(folder)) {
-          const label = folderType === 'priority' ? 'Priority' : folderType === 'random' ? 'Random' : 'Opening'
+          const label = folderType === 'priority' ? 'Priority' : folderType === 'random' ? 'Random' : folderType === 'opening' ? 'Opening' : 'Background'
           throw new Error(`${label} folder does not exist: ${folder}`)
         }
 
         console.log(`[ScanMusic] Scanning ${folderType} folder (${genre.name}): ${folder}`)
-        const discoveredFiles = await getAllAudioFiles(folder, folderType, genreSeenRealPaths, options)
+        const seenSet = folderType === 'background' ? genreBackgroundSeenRealPaths : genreSeenRealPaths
+        const discoveredFiles = await getAllAudioFiles(folder, folderType, seenSet, options)
         console.log(`[ScanMusic] ${folderType} files (${genre.name}): ${discoveredFiles.length}`)
 
         const tracks = await runWithConcurrency(

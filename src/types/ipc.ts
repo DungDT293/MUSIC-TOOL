@@ -172,7 +172,7 @@ export interface DiskInfoSummary {
   updatedAt: number
 }
 
-export type MusicFolderType = 'priority' | 'random' | 'opening'
+export type MusicFolderType = 'priority' | 'random' | 'opening' | 'background'
 
 export interface MusicScanGenre {
   id: string
@@ -180,6 +180,7 @@ export interface MusicScanGenre {
   priorityFolders: string[]
   randomFolders: string[]
   openingFolders?: string[]
+  backgroundFolders?: string[]
 }
 
 export interface ScanMusicConfig {
@@ -207,10 +208,12 @@ export interface GenreScanSummary {
   openingCount?: number
   priorityCount: number
   randomCount: number
+  backgroundCount?: number
   totalCount: number
   openingDuration?: number
   priorityDuration: number
   randomDuration: number
+  backgroundDuration?: number
   totalDuration: number
 }
 
@@ -218,10 +221,12 @@ export interface ScanSummary {
   openingCount?: number
   priorityCount: number
   randomCount: number
+  backgroundCount?: number
   totalCount: number
   openingDuration?: number
   priorityDuration: number
   randomDuration: number
+  backgroundDuration?: number
   totalDuration: number
   genres?: GenreScanSummary[]
 }
@@ -242,6 +247,7 @@ export interface ScanMusicFoldersPayload {
   genres?: MusicScanGenre[]
   forceRescan?: boolean
   openingFolders?: string[]
+  backgroundFolders?: string[]
 }
 
 export interface PlaylistTrack extends ScannedTrack {
@@ -263,6 +269,9 @@ export interface PlaylistDefinition {
   randomCount: number
   endingDurationSec?: number
   endingCount?: number
+  backgroundTrack?: ScannedTrack
+  bgMusicVolumeDb?: number
+  mainMusicVolumeDb?: number
   tracks: PlaylistTrack[]
   createdAt: number
   genreId?: string
@@ -352,6 +361,10 @@ export interface BuildPlaylistsOptions {
   pinnedOpeningTrackIds?: string[]
   combineAllPinnedOpenings?: boolean
   endingTracks?: ScannedTrack[]
+  backgroundTracks?: ScannedTrack[]
+  selectedBackgroundTrackId?: string
+  bgMusicVolumeDb?: number
+  mainMusicVolumeDb?: number
   // Tham số cho crossfade: nếu có, sẽ tính toán target duration để đảm bảo sau crossfade vẫn đạt target
   crossfadeDurationSec?: number // Thời lượng crossfade (giây), nếu có thì sẽ điều chỉnh target duration
   replaceExisting?: boolean
@@ -376,6 +389,12 @@ export interface ExportPlaylistRequest {
   normalizeLoudness?: boolean
   /** Target LUFS (default -14 = YouTube/Spotify standard) */
   loudnessTargetLufs?: number
+  /** Đường dẫn file nhạc nền trộn kèm (nếu có) */
+  backgroundTrackPath?: string
+  /** Âm lượng nhạc nền tính theo dB (mặc định -4 dB) */
+  bgMusicVolumeDb?: number
+  /** Âm lượng nhạc ghép chính tính theo dB (mặc định +2 dB) */
+  mainMusicVolumeDb?: number
   /** Tùy chọn: scanResult truyền trực tiếp */
   scanResult?: ScanMusicResult
 }
@@ -816,6 +835,8 @@ export interface AutopilotDayPlan {
     normalizeVideoInput?: boolean
     prioritySelectionMode?: 'auto' | 'manual'
     priorityPinnedTrackIds?: string[]
+    bgMusicVolumeDb?: number | ''
+    mainMusicVolumeDb?: number | ''
   }
 }
 
@@ -827,6 +848,7 @@ export interface AutopilotFoldersConfig {
   priorityMusicFolder: string
   randomMusicFolder: string
   openingMusicFolder?: string
+  backgroundMusicFolder?: string
   priorityVideoFolder?: string
   endingAudioPaths?: string[]
   minVideoClipsTarget?: number
@@ -950,6 +972,17 @@ export interface IPCAPI {
     cancelEnhanceAudio?: () => Promise<any>
     renderLoudnormPreview?: (opts: any) => Promise<any>
     onEnhanceProgress?: (handler: (p: any) => void) => () => void
+    previewMix?: (opts: {
+      mainTrackPath: string
+      bgTrackPath: string
+      mainVolumeDb?: number
+      bgMusicVolumeDb?: number
+      durationSec?: number
+    }) => Promise<{
+      success: boolean
+      previewUrl?: string
+      error?: string
+    }>
   }
   probeFile: (path: string) => Promise<ProbeResult>
   preset?: {

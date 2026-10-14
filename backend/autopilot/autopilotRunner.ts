@@ -49,6 +49,10 @@ export interface DayPlanDetailOverrides {
   prioritySelectionMode?: 'auto' | 'manual'
   /** Danh sách track id ưu tiên (chọn tay) dùng khi prioritySelectionMode === 'manual' */
   priorityPinnedTrackIds?: string[]
+  /** Âm lượng nhạc nền tính theo dB (mặc định -4 dB) */
+  bgMusicVolumeDb?: number
+  /** Âm lượng nhạc ghép tính theo dB (mặc định +2 dB) */
+  mainMusicVolumeDb?: number
 }
 
 export interface DayPlanConfig {
@@ -69,6 +73,8 @@ export interface AutopilotFoldersConfig {
   randomMusicFolder?: string
   /** Thư mục nhạc mở đầu tùy chọn, được thêm đầu mỗi playlist. */
   openingMusicFolder?: string
+  /** Thư mục nhạc nền tùy chọn, hòa âm chạy ngầm suốt playlist. */
+  backgroundMusicFolder?: string
   /** Thư mục video ưu tiên (tùy chọn) – các clip trong thư mục này sẽ được ưu tiên xuất hiện đầu video khi Final Export */
   priorityVideoFolder?: string
   /** Nhạc nối thêm cuối mỗi playlist audio. */
@@ -753,7 +759,7 @@ export async function startAutopilot(
 
   try {
     const prepared = preparedConfig ?? await validateAutopilotStartConfig(config)
-    const { validPlans, priorityFolder, randomFolder, openingFolder } = prepared
+    const { validPlans, priorityFolder, randomFolder, openingFolder, backgroundFolder } = prepared
     const normalizedPlans = validPlans.map((plan) => ({
       ...plan,
       dateCode: resolveAutopilotDateCode(plan.dateCode),
@@ -763,7 +769,7 @@ export async function startAutopilot(
     emit({
       currentStep: 1,
       stepPercent: 5,
-      message: 'Đang quét thư mục nhạc ưu tiên / random...',
+      message: 'Đang quét thư mục nhạc ưu tiên / random / nhạc nền...',
     })
 
     const scanController = new AbortController()
@@ -778,13 +784,14 @@ export async function startAutopilot(
       scanResult = await withTimeout(
         scanMusicFolders(
           {
-            // Dùng genre rõ ràng để scanner giữ folderType opening thay vì bỏ qua payload legacy.
+            // Dùng genre rõ ràng để scanner giữ folderType opening/background thay vì bỏ qua payload legacy.
             genres: [{
               id: 'autopilot',
               name: 'Autopilot',
               priorityFolders: priorityFolder ? [priorityFolder] : [],
               randomFolders: randomFolder ? [randomFolder] : [],
               openingFolders: openingFolder ? [openingFolder] : [],
+              backgroundFolders: backgroundFolder ? [backgroundFolder] : [],
             }],
             forceRescan: true,
             persist: false,
@@ -847,7 +854,7 @@ export async function startAutopilot(
     emit({
       currentStep: 1,
       stepPercent: 15,
-      message: `Đã quét ${scanResult.summary.totalCount} bài nhạc (ưu tiên ${scanResult.summary.priorityCount}, random ${scanResult.summary.randomCount}).`,
+      message: `Đã quét ${scanResult.summary.totalCount} bài nhạc (ưu tiên ${scanResult.summary.priorityCount}, random ${scanResult.summary.randomCount}${scanResult.summary.backgroundCount ? `, nhạc nền ${scanResult.summary.backgroundCount}` : ''}).`,
     })
 
     const failedDays: { dateCode: string; error: string }[] = []
@@ -1037,6 +1044,7 @@ export interface PreparedAutopilotStartContext {
   priorityFolder: string | null
   randomFolder: string | null
   openingFolder: string | null
+  backgroundFolder: string | null
 }
 
 const AUTOPILOT_RX_PIPE = /\|/g
@@ -1152,6 +1160,7 @@ export async function validateAutopilotStartConfig(
   const priorityFolder = pickFirstFolder(config.folders.priorityMusicFolder)
   const randomFolder = pickFirstFolder(config.folders.randomMusicFolder)
   const openingFolder = pickFirstFolder(config.folders.openingMusicFolder)
+  const backgroundFolder = pickFirstFolder(config.folders.backgroundMusicFolder)
   if (!priorityFolder && !randomFolder) {
     throw new Error('Hay chon it nhat mot thu muc nhac uu tien hoac nhac random cho Autopilot.')
   }
@@ -1164,6 +1173,9 @@ export async function validateAutopilotStartConfig(
   }
   if (openingFolder) {
     await validateFolder(openingFolder, 'Thu muc nhac mo dau')
+  }
+  if (backgroundFolder) {
+    await validateFolder(backgroundFolder, 'Thu muc nhac nen')
   }
 
   await fsp.mkdir(config.folders.rootAudio, { recursive: true }).catch(() => {})
@@ -1203,6 +1215,7 @@ export async function validateAutopilotStartConfig(
     priorityFolder,
     randomFolder,
     openingFolder,
+    backgroundFolder,
   }
 }
 
@@ -2465,11 +2478,26 @@ async function runAutopilotForDay(
     emitLog('info', `[Bước 2] Nhạc cuối: ${endingTracks.length} file (${formatDuration(Math.round(endingDurationSec))}) sẽ nối sau mỗi playlist.`)
   }
 
+  const backgroundTracks = scan.tracks.filter((t) => t.folderType === 'background')
+  const bgMusicVolumeDb = typeof plan.overrides?.bgMusicVolumeDb === 'number'
+    ? plan.overrides.bgMusicVolumeDb
+    : -4
+  const mainMusicVolumeDb = typeof plan.overrides?.mainMusicVolumeDb === 'number'
+    ? plan.overrides.mainMusicVolumeDb
+    : 2
+
+  if (backgroundTracks.length > 0) {
+    emitLog('info', `[Bước 2] Nhạc nền: ${backgroundTracks.length} file (Âm lượng: Nền ${bgMusicVolumeDb}dB / Ghép +${mainMusicVolumeDb}dB).`)
+  }
+
   const buildOptions: BuildPlaylistsOptions = {
     tracks: scan.tracks,
     openingTracks,
     pinnedTrackIds: pinnedFromOverrides,
     endingTracks,
+    backgroundTracks,
+    bgMusicVolumeDb,
+    mainMusicVolumeDb,
     playlistCount,
     targetDurationMinutes: minutesPerPlaylist,
     priorityRatioMin: 0.65,
@@ -2529,6 +2557,9 @@ async function runAutopilotForDay(
       // Chỉ truyền crossfadeDurationSec khi smoothTransitions = true, giống với xuất nhạc thông thường
       crossfadeDurationSec: smoothTransitions ? crossfadeSec : undefined,
       scanResult: scan, // Đồng bộ scanResult trực tiếp từ bộ quét Autopilot để bù bài chuẩn xác
+      backgroundTrackPath: pl.backgroundTrack?.path,
+      bgMusicVolumeDb: pl.bgMusicVolumeDb,
+      mainMusicVolumeDb: pl.mainMusicVolumeDb,
     }
     
     // Pass requestId để có thể cancel
