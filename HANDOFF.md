@@ -1,6 +1,6 @@
 # HANDOFF
 
-## 2026-10-14 — Tính năng Nhạc nền (Background Music) & Hòa âm âm lượng (CreatePlaylist, ExportAudio, Autopilot)
+## 2026-10-14 — Phiên bản v4.5.4: Tính năng Nhạc nền (Background Music), Hòa âm âm lượng & Đóng gói Installer
 
 - Bối cảnh:
   - Người dùng yêu cầu thêm chức năng Nhạc nền (Background Music):
