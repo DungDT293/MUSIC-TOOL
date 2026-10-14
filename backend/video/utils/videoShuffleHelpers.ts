@@ -28,19 +28,12 @@ export function shuffleOnce(clips: ClipItem[], randomFn: () => number = Math.ran
   if (!clips.length) return []
   if (clips.length === 1) return [...clips]
   
-  // Deep copy để tránh reference tới cùng phần tử khi shuffle nhiều lần
+  // Deep copy để tránh mutate input
   const result = clips.map((clip) => ({ ...clip }))
   
-  // Fisher-Yates shuffle với cải thiện: đảm bảo randomness tốt hơn
-  // Dùng nhiều lần random để tránh bias
+  // Standard unbiased Fisher-Yates shuffle
   for (let i = result.length - 1; i > 0; i--) {
-    // Lấy random value và đảm bảo nó trong range [0, i]
-    // Dùng multiple calls để tăng entropy
-    let r = randomFn()
-    // Nếu randomFn trả về giá trị quá gần 0 hoặc 1, lấy thêm một lần nữa
-    if (r < 0.0001 || r > 0.9999) {
-      r = randomFn()
-    }
+    const r = Math.min(0.999999999, Math.max(0, randomFn()))
     const j = Math.floor(r * (i + 1))
     ;[result[i], result[j]] = [result[j], result[i]]
   }
@@ -50,27 +43,31 @@ export function shuffleOnce(clips: ClipItem[], randomFn: () => number = Math.ran
 
 export const shuffleClipsOnce = shuffleOnce
 
-function createSeededRandom(seed: number): () => number {
-  // Cải thiện PRNG để đảm bảo randomness tốt hơn
-  let state = seed >>> 0
+export function createSeededRandom(seed: number): () => number {
+  // Mulberry32 PRNG - fast, high quality 32-bit state, full 2^32 period
+  let s = (seed >>> 0) || 0x12345678
   return () => {
-    // Xorshift32 algorithm - tốt hơn cho shuffle
-    state ^= state << 13
-    state ^= state >>> 17
-    state ^= state << 5
-    return ((state >>> 0) / 4294967296)
+    s = (s + 0x6d2b79f5) >>> 0
+    let t = Math.imul(s ^ (s >>> 15), 1 | s)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
   }
 }
 
 /**
  * Tạo seed unique cho mỗi merge job
- * Dùng crypto random để đảm bảo không trùng
+ * Dùng crypto random bytes để đảm bảo entropy tối đa
  */
-function generateUniqueSeed(baseSeed: number, index: number): number {
-  // Dùng crypto random bytes để tạo entropy tốt hơn
-  const randomPart = randomBytes(4).readUInt32BE(0)
-  // Kết hợp với baseSeed và index để đảm bảo unique
-  return (baseSeed ^ randomPart) + index * 0x9e3779b9 + (index * index * 0x6d2b79f5)
+export function generateUniqueSeed(baseSeed: number, index: number): number {
+  let randomPart = 0
+  try {
+    randomPart = randomBytes(4).readUInt32BE(0)
+  } catch {
+    randomPart = (Math.random() * 0xffffffff) >>> 0
+  }
+  const h = Math.imul((baseSeed ^ randomPart) >>> 0, 0x85ebca6b)
+  const mixed = Math.imul((h ^ (index + 1)) >>> 0, 0x9e3779b9)
+  return (mixed >>> 0) || 0x1337c0de
 }
 
 /**
@@ -78,7 +75,6 @@ function generateUniqueSeed(baseSeed: number, index: number): number {
  * 
  * - Trả về array 2D: mỗi phần tử là 1 permutation của toàn bộ clips
  * - repeatCount lần, mỗi lần gọi shuffleOnce()
- * - Ví dụ: 100 clips, repeatCount = 3 → output: [[100], [100], [100]]
  * 
  * @param clips - Tập clips gốc
  * @param repeatCount - Số lần tạo permutation
@@ -89,10 +85,13 @@ export function buildRandomPermutations(
   repeatCount: number
 ): ClipItem[][] {
   if (!clips.length || repeatCount <= 0) return []
+  if (clips.length === 1) {
+    return Array(repeatCount).fill(null).map(() => [...clips])
+  }
   
   const permutations: ClipItem[][] = []
   const signatures = new Set<string>()
-  const MAX_ATTEMPTS = 10
+  const MAX_ATTEMPTS = 30
   console.log(`[buildRandomPermutations] Creating ${repeatCount} permutations from ${clips.length} clips`)
   
   // Tạo base seed unique cho toàn bộ batch
@@ -104,7 +103,6 @@ export function buildRandomPermutations(
     let attempt = 0
     
     while (attempt < MAX_ATTEMPTS) {
-      // Dùng generateUniqueSeed để đảm bảo mỗi permutation có seed hoàn toàn khác nhau
       const seed = generateUniqueSeed(baseSeed, i * 1000 + attempt)
       const rng = createSeededRandom(seed)
       permutation = shuffleOnce(clips, rng)
@@ -113,14 +111,15 @@ export function buildRandomPermutations(
         break
       }
       attempt++
-      console.warn(`[buildRandomPermutations] Duplicate permutation detected (perm ${i + 1}, attempt ${attempt}). Retrying...`)
     }
     
+    // Nếu hết số permutations duy nhất khả dĩ (ví dụ pool chỉ có 2 clip nhưng yêu cầu 5 lần ghép),
+    // không throw lỗi sập hệ thống mà chấp nhận permutation đã shuffle để hoàn tất job.
     if (signatures.has(signature)) {
-      throw new Error(`[buildRandomPermutations] Failed to create unique permutation cho lần ${i + 1} sau ${MAX_ATTEMPTS} attempts.`)
+      console.warn(`[buildRandomPermutations] Hết hoán vị hoàn toàn mới tại lần ${i + 1}/${repeatCount} (có ${clips.length} clip). Dùng hoán vị ngẫu nhiên tốt nhất.`)
+    } else {
+      signatures.add(signature)
     }
-    
-    signatures.add(signature)
     
     const first3 = permutation.slice(0, 3).map((c) => path.basename(c.path))
     console.log(`  Permutation ${i + 1}/${repeatCount} first 3 clips: ${first3.join(', ')}`)
@@ -128,7 +127,7 @@ export function buildRandomPermutations(
     permutations.push(permutation)
   }
   
-  console.log(`[buildRandomPermutations] ✓ Created ${permutations.length} unique permutations`)
+  console.log(`[buildRandomPermutations] ✓ Created ${permutations.length} permutations (${signatures.size} unique signatures)`)
   return permutations
 }
 
@@ -189,7 +188,7 @@ export function buildPlaylistToFillDuration(
       if (shuffle) {
         // Mỗi lần reshuffle, dùng seed hoàn toàn khác nhau để tránh trùng pattern
         // Dùng generateUniqueSeed để đảm bảo seed unique và randomness tốt
-        const reshuffleSeed = generateUniqueSeed(baseSeed, reshuffleCount * 10000)
+        const reshuffleSeed = generateUniqueSeed(baseSeed, (reshuffleCount + 1) * 10000)
         const reshuffleRng = createSeededRandom(reshuffleSeed)
         currentClips = shuffleOnce(clips, reshuffleRng)
       } else {

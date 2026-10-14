@@ -72,7 +72,7 @@ function MergeTab() {
   const [outputDir, setOutputDir] = useState<string>('')
   const [outputFileName, setOutputFileName] = useState<string>('merged.mp4')
 
-  const [shuffleOrder, setShuffleOrder] = useState<boolean>(false)
+  const [shuffleOrder, setShuffleOrder] = useState<boolean>(true)
   const [muteAudio, setMuteAudio] = useState<boolean>(false)
   const [forceReencode, setForceReencode] = useState<boolean>(false)
   const [useGpuEncoding, setUseGpuEncoding] = useState<boolean>(false) // false = CPU, true = GPU
@@ -659,7 +659,7 @@ function MergeTab() {
             }}
             title="Tự động chọn clip ít được dùng nhất từ thư mục (tránh lặp lại)"
           >
-            🎲 Chọn từ Pool
+            Chọn từ Pool
           </button>
           <button
             onClick={handleClearList}

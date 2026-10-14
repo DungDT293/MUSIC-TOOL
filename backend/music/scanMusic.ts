@@ -320,7 +320,9 @@ async function scanSingleFile(
     }
 
     const canonicalPath = await fsp.realpath(filePath)
-    const id = createHash('md5').update(canonicalPath).digest('hex')
+    const id = meta.genreId && meta.genreId !== 'default'
+      ? createHash('md5').update(`${meta.genreId}:${canonicalPath}`).digest('hex')
+      : createHash('md5').update(canonicalPath).digest('hex')
     const fileName = path.basename(filePath)
     const duration = probeResult.format.duration || 0
     const minDurationSeconds = 5
@@ -434,12 +436,13 @@ export async function scanMusicFolders(
   }
 
   const allTracks: ScannedTrack[] = []
-  const globalSeenRealPaths = new Set<string>()
   throwIfAborted(options.signal)
 
-  // Scan priority roots before random roots so shared physical files retain priority ownership.
-  for (const folderType of ['priority', 'random', 'opening'] as const) {
-    for (const genre of config.genres) {
+  // Quét độc lập theo từng thể loại để cách ly tuyệt đối, không gây rò rỉ hay tranh chấp file giữa các thể loại.
+  // Trong mỗi thể loại, quét opening -> priority -> random để đảm bảo độ ưu tiên phân loại đúng.
+  for (const genre of config.genres) {
+    const genreSeenRealPaths = new Set<string>()
+    for (const folderType of ['opening', 'priority', 'random'] as const) {
       const folders = folderType === 'priority'
         ? genre.priorityFolders
         : folderType === 'random' ? genre.randomFolders : genre.openingFolders ?? []
@@ -451,7 +454,7 @@ export async function scanMusicFolders(
         }
 
         console.log(`[ScanMusic] Scanning ${folderType} folder (${genre.name}): ${folder}`)
-        const discoveredFiles = await getAllAudioFiles(folder, folderType, globalSeenRealPaths, options)
+        const discoveredFiles = await getAllAudioFiles(folder, folderType, genreSeenRealPaths, options)
         console.log(`[ScanMusic] ${folderType} files (${genre.name}): ${discoveredFiles.length}`)
 
         const tracks = await runWithConcurrency(

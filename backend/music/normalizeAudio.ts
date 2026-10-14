@@ -25,6 +25,15 @@ export interface NormalizeAudioRequest {
    * - undefined:   Chỉ convert bitrate, không normalize loudness
    */
   loudnessPreset?: 'streaming' | 'youtube' | 'broadcast' | 'club'
+  /**
+   * Tự động xóa file nguồn unnormalized sau khi đã convert và verify thành công sang output
+   */
+  deleteOriginalOnSuccess?: boolean
+  /**
+   * Hậu tố thư mục output riêng cho từng folder nguồn (ví dụ: '_chuanhoa').
+   * Nếu được truyền, outputDir cho file `F/abc.wav` sẽ là `F_chuanhoa/abc.m4a`
+   */
+  perSourceFolderSuffix?: string
 }
 
 export interface NormalizeAudioProgress {
@@ -43,6 +52,7 @@ export interface NormalizeAudioResult {
   failed: number
   errors: Array<{ file: string; error: string }>
   outputFiles: string[]
+  deletedOriginalFiles?: string[]
 }
 
 const SUPPORTED_AUDIO_EXTENSIONS = ['.mp3', '.wav', '.flac', '.aac', '.m4a', '.ogg', '.opus']
@@ -228,8 +238,10 @@ async function normalizeSingleFile(
   backupOriginal: boolean,
   outputFolder?: string,
   loudnessPreset?: 'streaming' | 'youtube' | 'broadcast' | 'club',
-  ctx?: NormalizeJobContext // FIX M6: Per-job context
-): Promise<{ success: boolean; outputFile?: string; error?: string }> {
+  ctx?: NormalizeJobContext, // FIX M6: Per-job context
+  perSourceFolderSuffix?: string,
+  deleteOriginalOnSuccess?: boolean
+): Promise<{ success: boolean; outputFile?: string; deletedOriginal?: boolean; error?: string }> {
   let outputFilePath: string | null = null
   try {
     // Kiểm tra file tồn tại
@@ -258,7 +270,14 @@ async function normalizeSingleFile(
 
     // Xác định thư mục output
     const inputDir = path.dirname(inputFile)
-    const outputDir = outputFolder || inputDir
+    let outputDir = inputDir
+
+    if (perSourceFolderSuffix && perSourceFolderSuffix.trim()) {
+      const cleanInputDir = inputDir.replace(/[\\/]+$/, '')
+      outputDir = `${cleanInputDir}${perSourceFolderSuffix.trim()}`
+    } else if (outputFolder && outputFolder.trim()) {
+      outputDir = outputFolder.trim()
+    }
 
     // Tạo thư mục output nếu chưa tồn tại
     if (!fs.existsSync(outputDir)) {
@@ -387,12 +406,30 @@ async function normalizeSingleFile(
       }
     })
 
-    // Kiểm tra output file đã tạo
+    // Kiểm tra output file đã tạo và có dung lượng hợp lệ
     if (!fs.existsSync(outputFile)) {
       return { success: false, error: 'File output không được tạo' }
     }
+    const stat = fs.statSync(outputFile)
+    if (stat.size === 0) {
+      try { if (fs.existsSync(outputFile)) fs.unlinkSync(outputFile) } catch {}
+      return { success: false, error: 'File output rỗng (0 bytes)' }
+    }
 
-    return { success: true, outputFile }
+    let deletedOriginal = false
+    if (deleteOriginalOnSuccess && path.resolve(outputFile) !== path.resolve(inputFile)) {
+      try {
+        if (fs.existsSync(inputFile)) {
+          fs.unlinkSync(inputFile)
+          deletedOriginal = true
+          console.log(`[normalizeAudio] Đã xóa file gốc sau khi chuẩn hóa thành công: ${inputFile}`)
+        }
+      } catch (delErr: any) {
+        console.warn(`[normalizeAudio] Không thể xóa file gốc ${inputFile}:`, delErr?.message || delErr)
+      }
+    }
+
+    return { success: true, outputFile, deletedOriginal }
   } catch (error: any) {
     if (outputFilePath) {
       try { if (fs.existsSync(outputFilePath)) fs.unlinkSync(outputFilePath) } catch {}
@@ -437,6 +474,7 @@ export async function normalizeAudio(
       failed: 0,
       errors: [],
       outputFiles: [],
+      deletedOriginalFiles: [],
     }
   }
 
@@ -446,6 +484,7 @@ export async function normalizeAudio(
     failed: 0,
     errors: [],
     outputFiles: [],
+    deletedOriginalFiles: [],
   }
 
   const totalFiles = filesToProcess.length
@@ -510,7 +549,9 @@ export async function normalizeAudio(
       request.backupOriginal ?? false,
       request.outputFolder,
       request.loudnessPreset,
-      ctx // FIX M6: Pass per-job context
+      ctx, // FIX M6: Pass per-job context
+      request.perSourceFolderSuffix,
+      request.deleteOriginalOnSuccess
     )
 
     // Lưu thời gian xử lý file này
@@ -538,6 +579,9 @@ export async function normalizeAudio(
     if (normalizeResult.success && normalizeResult.outputFile) {
       result.processed++
       result.outputFiles.push(normalizeResult.outputFile)
+      if (normalizeResult.deletedOriginal) {
+        result.deletedOriginalFiles?.push(file)
+      }
     } else {
       result.failed++
       result.errors.push({

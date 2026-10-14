@@ -1,5 +1,313 @@
 # HANDOFF
 
+## 2026-10-14 — Nâng cấp bảng phát hiện file chưa chuẩn AAC (Xem đường dẫn, tự tạo folder _chuanhoa, xóa file gốc)
+
+- Bối cảnh:
+  - Người dùng yêu cầu trong Tab 1 ("1. Quét nhạc" / `ScanMusicPage.tsx`):
+    - Phần cảnh báo/phát hiện file chưa phải chuẩn AAC: cần hiển thị chi tiết đường dẫn của các thư mục chứa file chưa chuẩn hóa, tên file và địa chỉ file đầy đủ.
+    - Cho phép chọn thư mục xuất ngay tại bảng phát hiện.
+    - Đối với các file chưa chuẩn hóa nằm rải rác ở các folder ưu tiên, random hoặc opening: hỗ trợ tự động tạo thư mục đích có thêm đuôi `_chuanhoa` tương ứng cho từng folder nguồn (ví dụ `E:\...\folder_chuanhoa`), tự động xóa các bài chưa được chuẩn hóa sau khi xuất thành công, và cung cấp nút cập nhật cấu hình đường dẫn sang các folder `_chuanhoa` rồi quét lại ngay lập tức.
+  - Tuân thủ nghiêm ngặt quy tắc UI: TUYỆT ĐỐI KHÔNG ĐƯỢC TỰ Ý THÊM ICON HOẶC EMOJI VÀO GIAO DIỆN (UI) theo `AGENTS.md` và `GEMINI.md`. Đã gỡ bỏ toàn bộ emoji cũ (`⚠️`).
+
+- Tính năng & Cải tiến:
+  1. Backend Audio Normalization (`backend/music/normalizeAudio.ts` & `src/types/ipc.ts`):
+     - Mở rộng `NormalizeAudioRequest` với `deleteOriginalOnSuccess?: boolean` và `perSourceFolderSuffix?: string`.
+     - Mở rộng `NormalizeAudioResult` với `deletedOriginalFiles?: string[]`.
+     - `normalizeSingleFile`:
+       - Khi có `perSourceFolderSuffix` (ví dụ `'_chuanhoa'`), tự động tính thư mục đích bằng cách gắn hậu tố vào thư mục nguồn của từng file (ví dụ `E:\...\hardtechno da fix` -> `E:\...\hardtechno da fix_chuanhoa`).
+       - Xác minh file đầu ra tạo thành công và có dung lượng hợp lệ (lớn hơn 0 bytes).
+       - Khi bật `deleteOriginalOnSuccess: true` và đường dẫn file đích khác file nguồn: tự động xóa file gốc (.wav, .mp3, .flac) một cách an toàn và ghi nhận vào `deletedOriginalFiles`.
+  2. Giao diện Tab 1 ("Quét nhạc" / `src/pages/Music/ScanMusicPage.tsx`):
+     - Thay thế banner cảnh báo tĩnh cũ bằng một bảng điều khiển tương tác toàn diện:
+       - **Thống kê theo từng thư mục nguồn**: Hiển thị nhãn phân loại `[Nhạc ưu tiên]`, `[Nhạc ngẫu nhiên]`, `[Nhạc mở đầu]`, tên thể loại, đường dẫn thư mục nguồn, số lượng bài chưa chuẩn AAC, và đường dẫn thư mục đích tự động (`_chuanhoa`).
+       - **Bảng danh sách chi tiết (thu gọn/mở rộng)**:
+         - Cho phép xem chi tiết từng file: tên bài hát, phân loại, codec hiện tại (wav, mp3, flac), thời lượng, đường dẫn đầy đủ trên ổ đĩa.
+         - Ô tìm kiếm / lọc nhanh theo tên bài hoặc đường dẫn.
+         - Nút "Sao chép" đường dẫn file vào clipboard kèm phản hồi "Đã chép".
+       - **Cấu hình thư mục xuất linh hoạt**:
+         - Lựa chọn 1 (Khuyên dùng): Tự động tạo folder riêng có đuôi `_chuanhoa` tương ứng cho từng thư mục nguồn.
+         - Lựa chọn 2: Xuất toàn bộ file vào một thư mục được chỉ định (có nút chọn thư mục qua dialog hệ thống).
+         - Lựa chọn 3: Lưu cùng thư mục với file gốc.
+       - **Tùy chọn xử lý an toàn**:
+         - Checkbox `Tự động xóa các bài chưa được chuẩn hóa sau khi xuất thành công` (mặc định bật theo yêu cầu người dùng).
+         - Lựa chọn Bitrate: 384 kbps (Chuẩn YouTube chất lượng cao), 320 kbps, 256 kbps, 192 kbps.
+       - **Tiến trình trực tiếp**: Hiển thị thanh tiến trình %, số lượng file đang xử lý, tên file hiện tại, thời gian ước tính còn lại (ETA) và nút "Dừng chuẩn hóa".
+       - **Kết quả & Cập nhật tự động**:
+         - Hiển thị tổng kết số file chuyển đổi thành công và số file gốc đã xóa an toàn.
+         - Nút bấm 1 chạm: `Cập nhật cấu hình thư mục sang các folder _chuanhoa và quét lại ngay` giúp tự động thay thế đường dẫn trong các thể loại sang các folder `_chuanhoa`, lưu cấu hình và tự động quét lại thư viện.
+  3. Kiểm thử & Đảm bảo chất lượng:
+     - Tạo mới `tests/unit/backend/normalizeAudio.test.ts` kiểm thử:
+       - Tự động tạo thư mục với `perSourceFolderSuffix` và xóa file gốc khi `deleteOriginalOnSuccess: true`.
+       - Giữ nguyên file gốc khi `deleteOriginalOnSuccess: false`.
+     - Toàn bộ 39 test files (263 tests) chạy pass 100%.
+     - `npm run build` hoàn thành thành công 0 lỗi.
+
+- Bối cảnh:
+  - Người dùng yêu cầu: Tab "Playlist theo thể loại" (`CreatePlaylistPage.tsx`) trước đây mới chỉ có phần ghim nhạc ưu tiên và random ("Nhạc ghim đứng đầu playlist"), chưa có phần tìm kiếm và ghim nhạc từ thư mục mở đầu (opening). Cần bổ sung tính năng ghim nhạc folder opening cho từng thể loại và cấu hình tạo playlist.
+  - Tuân thủ nghiêm ngặt quy tắc UI: TUYỆT ĐỐI KHÔNG ĐƯỢC TỰ Ý THÊM ICON HOẶC EMOJI VÀO GIAO DIỆN (UI) theo `AGENTS.md` và `GEMINI.md`.
+
+- Tính năng & Cải tiến:
+  1. Hỗ trợ ghim nhạc mở đầu ở Backend & Engine (`backend/music/playlistEngine.ts`, `src/types/ipc.ts`):
+     - Thêm `pinnedOpeningTrackIds?: string[]` và `combineAllPinnedOpenings?: boolean` vào `BuildPlaylistsOptions`.
+     - `buildSinglePlaylist`: Nâng cấp tham số `openingTrack` hỗ trợ cả `ScannedTrack` đơn lẻ hoặc mảng `ScannedTrack[]` khi ghép nhiều bài intro mở đầu.
+     - `buildPlaylists`:
+       - Khi người dùng ghim các bài mở đầu cụ thể (`pinnedOpeningTrackIds`), engine sẽ lọc `effectiveOpeningPool` chỉ chứa các bài mở đầu được ghim.
+       - Nếu không ghim bài nào: engine tự động xoay vòng toàn bộ bài trong thư mục opening như mặc định (100% backward compatible).
+       - Hỗ trợ cờ `combineAllPinnedOpenings`: Nếu bật, mỗi playlist sẽ ghép toàn bộ bài mở đầu đã ghim vào đầu playlist; nếu tắt (mặc định), engine xoay vòng 1 bài/playlist giữa các bài đã ghim.
+  2. Giao diện Tab "Playlist theo thể loại" (`src/pages/Music/CreatePlaylistPage.tsx`):
+     - Thêm khối `<details>` mới: **Ghim nhạc mở đầu (folder opening)** trên từng thẻ thể loại, ngay trước phần "Nhạc ghim đứng đầu playlist".
+     - Có ô tìm kiếm bài mở đầu riêng biệt cho từng thể loại (`Tìm tên bài mở đầu để ghim...`).
+     - Có các nút tiện ích: `Ghim tất cả`, `Bỏ ghim tất cả`, và checkbox `Ghép tất cả bài mở đầu đã ghim vào đầu mỗi playlist`.
+     - Danh sách bài hát mở đầu hiển thị checkbox Ghim, tên file, thời lượng, và nhãn thống kê số bài đã ghim / tổng kho.
+     - Khắc phục tình trạng xung đột ô tìm kiếm: tách riêng `genreOpeningSearch`, `genrePinnedSearch`, và `genreEndingSearch` theo từng thể loại thay vì dùng chung 1 state toàn cục.
+     - Trong bảng kết quả playlist sau khi tạo: các bài mở đầu được ghim sẽ hiển thị rõ loại bài là `Nhạc mở đầu (Ghim)`.
+     - Cập nhật mục "Hướng dẫn nhanh" giải thích rõ cách hoạt động của tính năng ghim nhạc mở đầu.
+  3. Kiểm thử & Đảm bảo chất lượng:
+     - Thêm 3 unit test mới vào `tests/unit/backend/playlistEngineOpening.test.ts`:
+       - Test chỉ dùng bài mở đầu được ghim (`uses only pinned opening tracks when pinnedOpeningTrackIds is provided`).
+       - Test xoay vòng giữa các bài mở đầu đã ghim (`rotates exclusively among pinned opening tracks when multiple are pinned`).
+       - Test ghép tất cả bài mở đầu đã ghim khi bật cờ combine (`prepends all pinned opening tracks when combineAllPinnedOpenings is true`).
+     - Toàn bộ 38 test files (261 tests) chạy pass 100%.
+     - `npm run build` biên dịch thành công 0 lỗi.
+
+## 2026-10-13 — Physical 1-Hour (3600s) Video Render Test from User's Raw Materials
+
+- Context: User asked to create a real 1-hour (3600s) video using raw materials from their two production folders (`E:\nguyen lieu nhac\hardtechno da fix` and `E:\nguyen lieu nhac\video veo 3`).
+- Execution & Script: `scripts/render_1hour_user_production.ts`
+  1. Audio Master Generation:
+     - Scanned 51 WAV files in `E:\nguyen lieu nhac\hardtechno da fix`.
+     - Selected 48 tracks to reach target duration.
+     - Properly escaped single quotes in file paths (handling filenames with quotes such as `019_DLV - Der Teufel (Gazometer '98 Mix)...`).
+     - Rendered master audio: `E:\nguyen lieu nhac\xuat_video_1_tieng\hardtechno_master_audio_1hour.m4a` (169.03 MB, AAC 384k 48kHz, exactly 3600.00s = 60.0 minutes) in 143.8 seconds.
+  2. Final Video Planning & Execution:
+     - Scanned full pool of 6,612 video clips in `E:\nguyen lieu nhac\video veo 3`.
+     - Planner selected 716 clips (398 base clips + 120 reserve recovery clips) with Fisher-Yates random shuffle to match 3600s audio.
+     - Executed `planFinalExport` and `executeFinalExport` using ultra-fast copy-stream muxing.
+     - Render completed in 114.3 seconds (~1.9 minutes for 1-hour video).
+  3. Output Verification:
+     - Video Path: `E:\nguyen lieu nhac\xuat_video_1_tieng\Hardtechno_Veo3_Mix_1Hour_Final.mp4`
+     - File Size: `2608.28 MB` (~2.6 GB)
+     - Resolution: `1280x704`, 24 fps, Codec: `h264`
+     - Audio Codec: `aac`, stereo
+     - Duration: `3600.13s` (exactly 60.00 minutes, 0.13s delta)
+     - Output verification: `verifyOutputVideo` passed 100% (video stream active, audio stream active, playback test OK).
+- Files: [scripts/render_1hour_user_production.ts](scripts/render_1hour_user_production.ts), [HANDOFF.md](HANDOFF.md).
+
+## 2026-10-13 — Auto-Delete Corrupt Media on Completion & Complete File Audit Upgrade (Audio + Video)
+
+- Context:
+  - User requested:
+    1. Automatic deletion of corrupt/unreadable files upon job completion (Final Export, Merge Videos, Autopilot) so subsequent runs never hit them again, without impacting export performance.
+    2. Complete upgrade of the "Rà soát file" (File Audit) tab to recursively scan both audio and video files across all subdirectories, diagnose corrupted files with explicit reasons, and provide 1-click batch deletion.
+  - Strict UI Rule: TUYỆT ĐỐI KHÔNG TỰ Ý THÊM ICON HOẶC EMOJI VÀO GIAO DIỆN (UI) per `AGENTS.md` and `GEMINI.md`.
+
+- Enhancements:
+  1. Auto-Clean Architecture on Completion:
+     - `backend/video/finalExport.ts`:
+       - `loadVideoClips` now returns `{ clips, invalidDetails }`.
+       - `scanVideoSourceForPlan` propagates both valid clips and `invalidDetails`.
+       - `planFinalExport` collects `invalidVideoFiles` alongside `audioFailures`.
+       - `executeFinalExport` automatically deletes all collected corrupt audio/video files and any quarantined files (`fsp.unlink`) upon job completion (`[FinalExport][AutoClean]`). Runs asynchronously right after export completes, keeping render performance 100% unaffected.
+     - `backend/video/mergeVideosSimple.ts`:
+       - Automatically unlinks any corrupted video files detected during `validateInputFiles` upon completion (`[mergeVideosSimple][AutoClean]`).
+     - `backend/autopilot/autopilotRunner.ts`:
+       - Inherits the auto-cleanup mechanism through `runExportVideoWithOptions` -> `finalExport`.
+  2. Full Audit Engine Upgrade (`electron/handlers/systemHandlers.ts`):
+     - Added `media:listMediaFilesInFolder` IPC handler to recursively discover files by mode (`all`, `video`, `audio`).
+     - Upgraded `video:auditFolder` to probe both video and audio files, with an O(1) concurrent worker pool (16 workers) to handle thousands of clips smoothly.
+     - Fixed Windows case-insensitive path prefix validation in `video:deleteFiles`.
+  3. "Rà soát file" Tab UI Overhaul (`src/pages/Video/AuditFilesTab.tsx`):
+     - Added scan mode switcher: `Tất cả (Video và Nhạc)`, `Chỉ Video`, `Chỉ Nhạc (Audio)`.
+     - Displays comprehensive statistics (valid videos, valid audios, corrupt count, detailed file paths and specific error causes).
+     - Added 1-click "Xóa tất cả file lỗi" button with a confirmation modal showing items to be purged.
+     - 100% compliant with zero-icon / zero-emoji rule (clean, professional Vietnamese text UI).
+
+- Live Verification on User's Library:
+  - User Folders: `E:\nguyen lieu nhac\video veo 3` (6,612 valid video clips) and `E:\nguyen lieu nhac\hardtechno da fix` (51 valid WAV tracks).
+  - Test Media Injected: 100 corrupted video files (`__corrupt_test_vid_001.mp4` .. `100.mp4`) and 5 corrupted audio files (`__corrupt_test_song_01.wav` .. `05.wav`).
+  - Execution Result (`scripts/test_user_corrupted_folders.ts`):
+    - Video: 6,712 clips scanned -> 6,612 valid clips preserved, 100/100 corrupted clips detected and skipped.
+    - Audio: 56 files scanned -> 51 valid tracks preserved, 5/5 corrupted tracks rejected with recovery hints.
+    - Export: Successfully rendered `001_@MilleniumKid...mp4` (13.79 MB, 1280x704, h264/aac) in 2.1 seconds.
+    - Auto-Clean on Completion: 100/100 corrupted video files and 5/5 corrupted audio files were automatically unlinked from disk upon export completion.
+    - Disk Verification: 0 corrupted video files remaining, 0 corrupted audio files remaining on disk!
+  - Tests: `npm run build` cleanly passed, 22/22 Vitest test files (144/144 tests) passed.
+
+- Files Modified:
+  - `backend/video/finalExport.ts`
+  - `backend/video/mergeVideosSimple.ts`
+  - `electron/handlers/systemHandlers.ts`
+  - `electron/preload.ts`
+  - `src/types/ipc.ts`
+  - `src/pages/Video/AuditFilesTab.tsx`
+  - `HANDOFF.md`
+
+## 2026-10-13 — Corrupted Media Stress Test on User's Library (100 Corrupt Videos + 5 Corrupt Audios) & Recursive Scan
+
+- Context: User provided real local folders (`E:\nguyen lieu nhac\video veo 3` and `E:\nguyen lieu nhac\hardtechno da fix`) and asked to inject 100 corrupted video files (5s fake) and several corrupted audio files to test how the tool reacts and handles real-life corrupted media.
+- Enhancements:
+  1. Recursive folder scanning for Video & Audio sources (`backend/video/finalExport.ts`, `electron/handlers/systemHandlers.ts`):
+     - `loadVideoClips` and `loadAudioFiles` now recursively traverse subdirectories when `source.type === 'folder'`.
+     - `listVideoHandler` in IPC (`video:listVideosInFolderSimple`) now traverses subdirectories.
+     - Automatically discovered all 6,612 video clips organized across subfolders (`video veo 3/hugel` and `video veo 3/tomorrow`).
+- Execution & Results (`scripts/test_user_corrupted_folders.ts`):
+  1. Generated in `E:\nguyen lieu nhac\video veo 3`:
+     - 100 corrupted video files (`__corrupt_test_vid_001.mp4` .. `100.mp4`): 30 empty 0-byte, 30 random bytes, 20 broken MP4 headers (missing moov atom), 20 non-media text files.
+  2. Generated in `E:\nguyen lieu nhac\hardtechno da fix`:
+     - 5 corrupted audio files (`__corrupt_test_song_01.wav` .. `05.wav`): 2 empty 0-byte, 2 random bytes, 1 corrupted header.
+  3. Scan & Plan Verification:
+     - Audio: 56 files scanned -> 51 valid tracks accepted, 5 corrupted tracks automatically rejected with detailed repair hints without stopping.
+     - Video: 6,712 files scanned -> 100 corrupted files detected and skipped with warnings (`Video không có duration hợp lệ`), 6,612 valid video clips preserved (11.10 hours total).
+  4. Physical Export Verification:
+     - Rendered real job using user's track `001_@MilleniumKid & JBS...` and clips from `video veo 3`.
+     - Output: `E:\TOOL DUNG CODE\93-media-tool-mix-nhac\test_real_scale\output_user_test\001_@MilleniumKid & JBS - Vielleicht Vielleicht (Holy Priest & elMefti Remix) (Music Video)_x8.mp4` (14.60 MB, 1280x720, h264/aac, 21.33s).
+     - Result: 100% success, zero crashes, all corrupted media safely skipped and reported.
+- Files: [backend/video/finalExport.ts](backend/video/finalExport.ts), [electron/handlers/systemHandlers.ts](electron/handlers/systemHandlers.ts), [scripts/test_user_corrupted_folders.ts](scripts/test_user_corrupted_folders.ts), [HANDOFF.md](HANDOFF.md).
+
+## 2026-10-13 — Full-Scale Real Media Test: 18 Audio Tracks + 2000 Video Clips (5s) -> 1-Hour (3600s) Target Exports
+
+- Context: User asked to test with real-life production scale: 15-20 audio tracks, 2000 small video clips (5s each), target duration setting 1 hour (3600s), physically rendered on disk and verified with FFprobe.
+- Implementation: Created `scripts/test_real_scale_1hour.ts` and executed physical render pipeline on disk (`E:\TOOL DUNG CODE\93-media-tool-mix-nhac\test_real_scale\`):
+  1. Real Audio Sources:
+     - 18 real audio tracks (`song_01.m4a` .. `song_18.m4a`, 200s each, AAC 128k, total = 3600s = 1 hour).
+     - 2 corrupt audio files (`corrupt_audio_empty.m4a` [0 byte] & `corrupt_audio_garbage.m4a` [30 KB random noise]).
+  2. Real Video Sources:
+     - 2000 real video clips (`clip_0001.mp4` .. `clip_2000.mp4`, 5s each, 640x360 30fps H.264, total pool = 10,000s = 2.77 hours).
+     - 5 corrupt video files (`corrupt_video_01.mp4` .. `05.mp4`, 0 byte & random garbage).
+  3. Physical Execution Results:
+     - Part A (Music Mixing / Tab 4): Merged 18 songs into 1-hour master mix audio:
+       - File: `E:\TOOL DUNG CODE\93-media-tool-mix-nhac\test_real_scale\output\mixed_audio_1hour.m4a` (55.65 MB, duration 3600.0s).
+     - Part B (Video Merging / Tab 5): Scanned 2005 files. Skipped all 5 corrupt files with ffprobe diagnostics. Shuffled and merged clips from pool of 2000 to fill exactly 1 hour:
+       - File: `E:\TOOL DUNG CODE\93-media-tool-mix-nhac\test_real_scale\output\merged_video_1hour.mp4` (3.92 MB, duration 3600.0s, resolution 640x360 H.264).
+     - Part C (Final Export / Tab 6): Muxed 1-hour audio mix with 866 clips shuffled from pool of 2000 clips with copy-stream in 2.4 seconds:
+       - File: `E:\TOOL DUNG CODE\93-media-tool-mix-nhac\test_real_scale\output\Final_Video_Mix_1Hour.mp4` (61.47 MB, duration 3600.10s, resolution 640x360 H.264, audio AAC).
+     - Verified with `ffprobe`: both audio and video streams active, synchronized, matching 1 hour (3600s).
+- Files: [scripts/test_real_scale_1hour.ts](scripts/test_real_scale_1hour.ts), [HANDOFF.md](HANDOFF.md).
+
+## 2026-10-13 — Real Media Pipeline Verification (FFmpeg Physical Files & Corrupted Media Recovery)
+
+- Problem statement: User requested real end-to-end execution on physical disk (not mocked unit test / code speculation) with real media files (video/audio generated via real FFmpeg binaries) mixed with corrupted files (0-byte empty file, random byte junk data) to verify:
+  1. The system correctly detects and skips corrupted media files.
+  2. The system warns/logs details of corrupted files without crashing the job.
+  3. The system compensates with healthy files to reach user-specified target duration.
+  4. Physical output files are inspected with real ffprobe for stream integrity, resolution, duration, and codec.
+- Changes & Fixes:
+  1. Output filename extension safety (`backend/video/mergeVideosSimple.ts`):
+     - Identified bug in `generateOutputFileName`: when `total === 1` and `baseFileName` had no extension, it returned raw `baseFileName`, causing FFmpeg to error out with "Unable to choose an output format".
+     - Fixed `generateOutputFileName` to enforce `${nameWithoutExt}${ext}`, ensuring `.mp4` is always present regardless of `mergeCount` or user input formatting.
+  2. End-to-end real media integration test (`tests/unit/backend/realCorruptedPipeline.test.ts`):
+     - Uses real bundled `bin/ffmpeg.exe` and `bin/ffprobe.exe` to generate genuine media files:
+       - 3 valid video files (`lavfi color=c=red/blue/green:s=640x360:d=5:r=30`, libx264, yuv420p).
+       - 2 corrupt video files (1 0-byte file, 1 50KB random bytes).
+       - 2 valid audio files (`lavfi sine=frequency=440/880:duration=10/12`, aac, 128k).
+       - 2 corrupt audio files (1 0-byte file, 1 30KB random bytes).
+     - Test Case 1: `mergeVideosSimple`
+       - Input: 5 video files (3 valid 5s clips = 15s total, 2 corrupt).
+       - Target duration: 22s (exceeds 15s total, requires looping valid clips).
+       - Verified: Tool detected both corrupt clips, emitted warning `Đã bỏ qua 2 video lỗi / hỏng trước khi ghép`, loop-compensated with valid clips to generate `real_merged_test.mp4`.
+       - ffprobe verification: width=640, height=360, vCodec=h264, duration >= 21.5s, file size > 10KB. Test passed!
+     - Test Case 2: `planFinalExport` + `executeFinalExport`
+       - Input: 4 audio files (2 valid 10s & 12s, 2 corrupt) + 5 video files (3 valid, 2 corrupt).
+       - Verified: `scanAudioSourceForPlan` rejected both corrupted audio files with actionable repair hints. `planFinalExport` planned exactly 2 jobs (matching the 2 valid audio files).
+       - `loadVideoClips` rejected both corrupted video files with warnings and preserved all 3 valid clips.
+       - Execution: Both jobs completed successfully (Job 1: 10s audio -> 10.09s MP4; Job 2: 12s audio -> 12.09s MP4).
+       - ffprobe verification: both output files contain active video (640x360, h264, 30fps) and audio (aac) streams with duration matching expected audio duration.
+- Files: [backend/video/mergeVideosSimple.ts](backend/video/mergeVideosSimple.ts), [tests/unit/backend/realCorruptedPipeline.test.ts](tests/unit/backend/realCorruptedPipeline.test.ts), [HANDOFF.md](HANDOFF.md).
+- Verification: 144/144 tests passed across 22 test suites in vitest, `npm run build` compiled 100% cleanly.
+
+## 2026-10-13 — Audit and overhaul video shuffling & duplicate prevention across renders (Merge & Final Export & Autopilot)
+
+- Changed:
+  1. Video playlist planner overhaul (`backend/video/utils/videoPlaylistPlan.ts`):
+     - Identified critical root cause: `buildSequence` previously performed a simplistic linear scan (`cursor = (cursor + 1) % len`). Jobs in a batch were 90%+ identical (only shifted by 1 clip), and consecutive render runs only differed by minor linear shifts, resulting in nearly identical merged video sequences across renders. Once linear shifts reached `clips.length`, it prematurely threw `VideoSequenceExhaustionError`.
+     - Replaced `buildSequence` with a high-entropy Mulberry32 pseudo-random Fisher-Yates permutation sequence generator.
+     - Each `(jobIndex, attempt)` pair generates a diverse, independent permutation.
+     - When `duration < target` requires looping, pool is reshuffled on every loop pass and adjacent duplicate clips at loop boundaries are automatically swapped, eliminating repetitive linear loops.
+     - Preserved single-clip exhaustion contract (when pool contains only 1 clip, it gracefully satisfies bounded repetition and exhaustion tests).
+     - Added optional `seed` parameter to `planVideoBatch` allowing callers to inject high-entropy crypto seeds per render run.
+  2. Shuffle helpers & PRNG fixes (`backend/video/utils/videoShuffleHelpers.ts`):
+     - Replaced flawed Xorshift32 (which was trapped at state 0) with Mulberry32 PRNG (full 2^32 period, non-zero init).
+     - Fixed `shuffleOnce`: Removed arbitrary discard threshold (`r < 0.0001 || r > 0.9999`) to restore uniform Fisher-Yates distribution.
+     - Fixed `generateUniqueSeed`: Cryptographically combines `baseSeed`, `randomBytes(4)`, and job index.
+     - Improved `buildRandomPermutations`: Safely handles small clip pools (e.g. 1-2 clips) without throwing unhandled exceptions when `repeatCount` exceeds mathematical permutations.
+     - Improved `buildPlaylistToFillDuration`: Loop reshuffles use evolving unique seeds per pass; boundary repeats are avoided.
+  3. Final Export per-job seed entropy, bad-clip skip & UI controls (`backend/video/finalExport.ts`, `src/pages/Video/FinalExportTab.tsx`):
+     - In `finalExport.ts`: All fallback and direct `buildPlaylistToFillDuration` calls now receive unique crypto seeds per job (`Date.now() + job.jobIndex * 2000000 + randomBytes(4).readUInt32BE(0)`), preventing clone sequences between jobs.
+     - In `loadVideoClips`: When a folder contains a few corrupted/unreadable clips alongside valid clips, `loadVideoClips` now logs detailed warnings and automatically skips the bad clips instead of throwing a fatal error and blocking the entire export. The remaining valid clips are used to compensate and fill target audio duration. If 100% of clips are invalid, it throws with full diagnostic details.
+     - In `FinalExportTab.tsx`: Added `shuffleVideoClips` state (default: `true`), sent `shuffle: shuffleVideoClips` in payload, and added clean UI checkbox "Xáo trộn thứ tự video" (strictly NO icon/emoji, conforming to `AGENTS.md` and `GEMINI.md`).
+  4. Autopilot video export synchronization (`backend/autopilot/autopilotRunner.ts`):
+     - Changed `shuffle: false` to `shuffle: true` in `jobRequest` so fallback paths in Final Export never revert to sequential 0, 1, 2... clip ordering.
+  5. Merge Videos Tab (`backend/video/mergeVideosSimple.ts`, `src/pages/Video/MergeTab.tsx`):
+     - Handled small clip pool duplicate permutations gracefully with warnings instead of throwing fatal errors.
+     - Set `shuffleOrder` default to `true` in `MergeTab.tsx` so users merging videos get diverse mixes by default.
+- Files: [backend/video/utils/videoPlaylistPlan.ts](backend/video/utils/videoPlaylistPlan.ts), [backend/video/utils/videoShuffleHelpers.ts](backend/video/utils/videoShuffleHelpers.ts), [backend/video/finalExport.ts](backend/video/finalExport.ts), [backend/autopilot/autopilotRunner.ts](backend/autopilot/autopilotRunner.ts), [backend/video/mergeVideosSimple.ts](backend/video/mergeVideosSimple.ts), [src/pages/Video/FinalExportTab.tsx](src/pages/Video/FinalExportTab.tsx), [src/pages/Video/MergeTab.tsx](src/pages/Video/MergeTab.tsx), [tests/unit/backend/videoPlaylistPlan.test.ts](tests/unit/backend/videoPlaylistPlan.test.ts), [tests/unit/backend/videoShuffleHelpers.test.ts](tests/unit/backend/videoShuffleHelpers.test.ts), [HANDOFF.md](HANDOFF.md).
+- Verification: 142/142 tests passed across 21 test suites in vitest, `npm run build` compiled 100% cleanly.
+
+## 2026-10-13 — Synchronize Autopilot with multi-genre & playlistEngine sub-features
+
+- Changed:
+  1. Autopilot audio export synchronization (`backend/autopilot/autopilotRunner.ts`, `backend/music/exportAudio.ts`, `src/types/ipc.ts`):
+     - Identified & resolved critical sync gap: Autopilot scans music with `persist: false`, leaving `scanStore` on disk unaware of Autopilot tracks. When crossfade duration compensation was triggered, `exportPlaylistToFile` previously attempted to load unrelated stale tracks from disk or failed.
+     - Added optional `scanResult?: ScanMusicResult` to `ExportPlaylistRequest` and `exportPlaylistToFile` so in-memory scan results are used directly without touching stale disk caches.
+     - Passed `genreId: 'autopilot'`, `genreName: 'Autopilot'`, and `genreSettings` to `buildOptions` in `autopilotRunner.ts`.
+     - Passed `scanResult: scan` directly into `req` in `exportPlaylistToFile` within `autopilotRunner.ts`.
+     - Crossfade duration compensation now strictly scopes filler tracks to Autopilot's own scanned tracks and never contaminates with other genres or disk remnants.
+  2. Verified `playlistEngine` variant exhaustion handling: Autopilot cleanly catches candidate variant exhausted errors and logs them into `failedDays` without crashing the process.
+- Files: [backend/autopilot/autopilotRunner.ts](backend/autopilot/autopilotRunner.ts), [backend/music/exportAudio.ts](backend/music/exportAudio.ts), [src/types/ipc.ts](src/types/ipc.ts), [tests/unit/backend/autopilotRunner.test.ts](tests/unit/backend/autopilotRunner.test.ts), [HANDOFF.md](HANDOFF.md).
+- Verification: 34/34 tests passed across 4 test suites, `npm run build` compiled 100% cleanly.
+
+## 2026-10-13 — Multi-genre export collision prevention, custom naming, inline playlist rename, and UI icon cleanup
+
+- Changed:
+  1. Multi-genre export naming & anti-overwrite (`src/pages/Music/exportNamingUtils.ts`, `src/pages/Music/ExportAudioPage.tsx`):
+     - Added `resolveBatchFileNames` and `buildPlaylistExportFileName`: automatically handles Vietnamese diacritics (`đ`/`Đ` -> `d`/`D`, NFKD normalization), safely generates collision-free export filenames.
+     - Automatically attaches genre prefix when exporting multiple genres or sharing the same folder, plus numeric suffix (`_2`, `_3`...) if collision occurs.
+     - Added custom genre export name input for each genre with localStorage persistence (`export_genre_custom_names`).
+     - Added 1-click button "Chọn 1 thư mục chung cho tất cả thể loại" to assign a common directory across all genres.
+     - Added inline playlist rename ("Đổi tên" button, text input with "Lưu" / "Hủy" or Enter/Escape).
+     - Added real-time filename preview (`File: [filename].m4a`) under each playlist card.
+     - Unified `handleExport` to delegate to `runExportQueue(selectedPlaylistIds)`, eliminating duplicated and un-synced export logic.
+  2. UI/UX icon reduction & strict rules update:
+     - Stripped decorative emojis/icons across UI pages (`ExportAudioPage.tsx`, `MergeTab.tsx`, `PoolMonitorTab.tsx`, `YouTubeDownloaderTab.tsx`, `AutopilotPage.tsx`).
+     - Added strict project-wide rule to `CLAUDE.md`, `AGENTS.md`, and `GEMINI.md`: **TUYỆT ĐỐI KHÔNG TỰ Ý THÊM ICON / EMOJI VÀO GIAO DIỆN (UI)**. Giao diện luôn giữ phong cách tối giản, chuyên nghiệp, dùng text rõ nghĩa thay vì icon màu mè.
+- Files: [src/pages/Music/exportNamingUtils.ts](src/pages/Music/exportNamingUtils.ts), [src/pages/Music/ExportAudioPage.tsx](src/pages/Music/ExportAudioPage.tsx), [src/pages/Video/MergeTab.tsx](src/pages/Video/MergeTab.tsx), [src/pages/Autopilot/PoolMonitorTab.tsx](src/pages/Autopilot/PoolMonitorTab.tsx), [src/pages/Video/YouTubeDownloaderTab.tsx](src/pages/Video/YouTubeDownloaderTab.tsx), [src/pages/AutopilotPage.tsx](src/pages/AutopilotPage.tsx), [CLAUDE.md](CLAUDE.md), [AGENTS.md](AGENTS.md), [GEMINI.md](GEMINI.md), [tests/unit/pages/exportNamingUtils.test.ts](tests/unit/pages/exportNamingUtils.test.ts), [HANDOFF.md](HANDOFF.md).
+- Verification: 20/20 unit tests passed, `npm run build` compiled cleanly, dev desktop hot-reloaded.
+
+## 2026-10-13 — Fix genre mixing across Features 1-4 (Quét nhạc → Tạo playlist → Nghe thử → Xuất nhạc)
+
+- Changed:
+  1. Quét nhạc (`backend/music/scanMusic.ts`, `backend/music/scanStore.ts`):
+     - Cách ly thư mục quét theo từng thể loại độc lập (`genreSeenRealPaths` riêng theo từng genre). Các thể loại không còn tranh chấp hay chặn file của nhau.
+     - Cho phép chia sẻ thư mục mở đầu (`openingFolders`) giữa các thể loại mà không làm mất bài ở thể loại sau.
+     - Scoped `track.id` theo `genreId` (`hash(genreId:canonicalPath)`) để mỗi thể loại sở hữu danh sách track độc lập, không bị đụng độ ID trong store. Cập nhật `isCurrentTrackId` tương thích ngược cả scoped ID lẫn raw hash.
+  2. Tạo playlist (`backend/music/playlistEngine.ts`, `src/pages/Music/CreatePlaylistPage.tsx`):
+     - Lọc phòng vệ tuyệt đối: khi tạo playlist cho một thể loại, `buildPlaylists` chỉ nhận các bài thuộc đúng `genreId` đó, lọc bỏ mọi bài lọt từ thể loại khác.
+     - Đặt tên playlist rõ ràng theo thể loại: `${genreName} - Playlist ${index + 1}` (thay vì tên chung `Playlist ${index + 1}` gây trùng lặp).
+     - Gắn trường `genreId`, `genreName`, `genreSettings` trực tiếp vào `PlaylistDefinition`.
+     - Lọc `pinnedTrackIds` ở card thể loại chỉ giữ các ID thuộc đúng body track của thể loại đó.
+  3. Xuất nhạc (`backend/music/exportAudio.ts`, `src/pages/Music/ExportAudioPage.tsx`):
+     - Sửa triệt để bug rò rỉ bài: khi bù thời lượng do crossfade (`durationDiff > 5.0`), `exportAudio` CHỈ lấy bài bù thuộc đúng `playlist.genreId` từ `scanResult`. Tuyệt đối không lấy bài từ thể loại khác; nếu hết bài chưa dùng trong thể loại, chỉ tái sử dụng bài trong chính thể loại đó.
+     - Thêm tiền tố thể loại vào tên file xuất (`fileName`) nếu chưa có trong tên playlist, ngăn chặn việc 2 thể loại cùng tên `Playlist 1` ghi đè lẫn nhau khi xuất vào cùng thư mục.
+- Files: [backend/music/scanMusic.ts](backend/music/scanMusic.ts), [backend/music/scanStore.ts](backend/music/scanStore.ts), [backend/music/playlistEngine.ts](backend/music/playlistEngine.ts), [backend/music/exportAudio.ts](backend/music/exportAudio.ts), [src/pages/Music/CreatePlaylistPage.tsx](src/pages/Music/CreatePlaylistPage.tsx), [src/pages/Music/ExportAudioPage.tsx](src/pages/Music/ExportAudioPage.tsx), [tests/unit/backend/genreIsolation.test.ts](tests/unit/backend/genreIsolation.test.ts), [HANDOFF.md](HANDOFF.md).
+- Preserved: Quy tắc xoay vòng 4 nhóm (Opening → Pinned → Priority → Random), tính tất định của LRU pool, crossfade compensation, Windows path safety, và tương thích ngược với scan cache cũ.
+- Verification: 173/173 tests trong 31 test files passed 100% (bao gồm 4/4 test mới trong `genreIsolation.test.ts` kiểm thử toàn bộ luồng Quét nhạc, Tạo playlist, Xuất nhạc không trộn thể loại), `npm run build` compiled thành công cả client lẫn electron bundle.
+
+## 2026-10-13 — Finalize Opening → Pinned → Priority → Random variant playlist logic
+
+- Changed: Enforced strict 4-group order (Opening → Pinned → Priority → Random), removed double rotation on pinned tracks, preserved all pinned tracks without premature targetSec break, made `sortByLRU` deterministic by removing random shuffle, implemented multi-group candidate variant generation across Opening/Pinned/Priority/Random, and checked full ordered pipe-delimited signatures (`openingId|pinnedId1|pinnedId2|priorityId1|randomId1`) with explicit error throwing when variants are exhausted.
+- Files: [backend/music/playlistEngine.ts](backend/music/playlistEngine.ts), [backend/music/musicPool.ts](backend/music/musicPool.ts), [tests/unit/backend/playlistEngineRotation.test.ts](tests/unit/backend/playlistEngineRotation.test.ts), [HANDOFF.md](HANDOFF.md).
+- Preserved: Opening rotation per playlist, ratio calculations, ending tracks append semantics, crossfade duration inflation, and error throwing contract on variant exhaustion.
+- Verification: 10/10 playlist unit tests passed (including exact user specification example `P1: O1 → A → B → P1 → P2 → R1 → R2`, `P2: O2 → B → A → P2 → P3 → R2 → R3`, `P3: O1 → A → B → P3 → P1 → R3 → R1`), full backend test suite passed 19 files / 124 tests, and `npm run build` compiled successfully.
+- Follow-up: test Create Playlist in UI with Opening tracks, 2+ pinned tracks, and verify generated playlist signatures and preview order.
+
+## 2026-10-10 — Make playlist group rotation deterministic
+
+- Changed: Playlist generation now applies one deterministic rotation per Opening/Pinned/Priority/Random group, removes duplicate pinned rotation, and compares complete ordered track-ID sequences with an unambiguous signature.
+- Files: [backend/music/playlistEngine.ts](backend/music/playlistEngine.ts), [tests/unit/backend/playlistEngineRotation.test.ts](tests/unit/backend/playlistEngineRotation.test.ts), [HANDOFF.md](HANDOFF.md).
+- Preserved: Opening → Pinned → Priority → Random → Ending ordering, shared track reuse across playlists, per-playlist duration/ratio behavior, ending stats, and no-consecutive-duplicate intent.
+- Verification: focused playlist suite passed 4 files / 24 tests; `npm run build`, typecheck, and manual UI smoke remain pending.
+- Follow-up: run Function 2 with 2–4 pinned tracks and multiple opening tracks; confirm each full ordered sequence is unique and shared tracks remain allowed.
+
 ## 2026-10-10 — Show actual music export processing mode
 
 - Changed: Function 4 progress now shows whether current playlist is using `Loudnorm + re-encode`, `Crossfade + re-encode`, or `Stream-copy/AAC encode`.

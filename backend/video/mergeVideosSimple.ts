@@ -1121,7 +1121,7 @@ function generateOutputFileName(baseFileName: string, index: number, total: numb
   if (total > 1) {
     return `${nameWithoutExt}_${index}${ext}`
   } else {
-    return baseFileName
+    return `${nameWithoutExt}${ext}`
   }
 }
 
@@ -1299,14 +1299,15 @@ export async function mergeVideosSimple(
         generatedPermutations.forEach((perm, idx) => {
           const signature = perm.map((c) => c.path).join('|')
           if (permutationSignatures.has(signature)) {
-            throw new Error(`[merge][no-target] Duplicate permutation detected tại vị trí ${idx + 1}.`)
+            console.warn(`[merge][no-target] Trùng lặp permutation tại vị trí ${idx + 1}/${generatedPermutations.length} (tổng clip: ${baseClips.length}).`)
+          } else {
+            permutationSignatures.add(signature)
           }
-          permutationSignatures.add(signature)
           const preview = perm.slice(0, 5).map((c) => path.basename(c.path))
           console.log(`  Permutation ${idx + 1}/${generatedPermutations.length} first 5 clips: ${preview.join(', ')}`)
         })
         
-        console.log('[merge][no-target] ✓ All permutations are unique')
+        console.log(`[merge][no-target] ✓ Created ${generatedPermutations.length} permutations (${permutationSignatures.size} unique)`)
       } else {
         // Không shuffle: tất cả permutations giống nhau (giữ nguyên thứ tự)
         permutations = Array(mergeCount).fill(null).map(() => [...baseClips])
@@ -1889,6 +1890,20 @@ export async function mergeVideosSimple(
         percent: 100,
         completed: true,
       }))
+    }
+
+    if (invalid && invalid.length > 0) {
+      console.log(`[mergeVideosSimple][AutoClean] Phát hiện ${invalid.length} file video lỗi/hỏng. Tự động xóa khỏi ổ đĩa...`)
+      for (const invPath of invalid) {
+        try {
+          await fsp.unlink(invPath)
+          console.log(`[mergeVideosSimple][AutoClean] Đã tự động xóa file lỗi: ${invPath}`)
+        } catch (cleanErr: any) {
+          if (cleanErr?.code !== 'ENOENT') {
+            console.warn(`[mergeVideosSimple][AutoClean] Không thể xóa file lỗi ${invPath}:`, cleanErr?.message || cleanErr)
+          }
+        }
+      }
     }
     
     return {

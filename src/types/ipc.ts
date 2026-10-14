@@ -349,6 +349,8 @@ export interface BuildPlaylistsOptions {
   priorityRatioMin?: number
   priorityRatioMax?: number
   openingTracks?: ScannedTrack[]
+  pinnedOpeningTrackIds?: string[]
+  combineAllPinnedOpenings?: boolean
   endingTracks?: ScannedTrack[]
   // Tham số cho crossfade: nếu có, sẽ tính toán target duration để đảm bảo sau crossfade vẫn đạt target
   crossfadeDurationSec?: number // Thời lượng crossfade (giây), nếu có thì sẽ điều chỉnh target duration
@@ -374,6 +376,8 @@ export interface ExportPlaylistRequest {
   normalizeLoudness?: boolean
   /** Target LUFS (default -14 = YouTube/Spotify standard) */
   loudnessTargetLufs?: number
+  /** Tùy chọn: scanResult truyền trực tiếp */
+  scanResult?: ScanMusicResult
 }
 
 export interface ExportPlaylistResult {
@@ -906,12 +910,16 @@ export interface IPCAPI {
       outputFormat?: 'mp3' | 'aac' | 'keep'
       backupOriginal?: boolean
       outputFolder?: string
+      loudnessPreset?: 'streaming' | 'youtube' | 'broadcast' | 'club'
+      deleteOriginalOnSuccess?: boolean
+      perSourceFolderSuffix?: string
     }) => Promise<{
       success: boolean
       processed: number
       failed: number
       errors: Array<{ file: string; error: string }>
       outputFiles: string[]
+      deletedOriginalFiles?: string[]
     }>
     onNormalizeAudioProgress?: (handler: (progress: {
       currentFile: string
@@ -982,10 +990,11 @@ export interface IPCAPI {
   videoMergeFile?: (options: VideoMergeOptions) => Promise<VideoMergeResult> // DEPRECATED - use videoMergeSimple instead
   listVideosInFolder: (dir: string) => Promise<ListedVideoFile[]>
   listVideosInFolderSimple: (dir: string) => Promise<SimpleVideoFileEntry[]>
+  listMediaFilesInFolder?: (folderPath: string, mode?: 'all' | 'video' | 'audio') => Promise<Array<{ path: string; fileName: string; sizeBytes: number; kind: 'video' | 'audio' }>>
   videoAuditFolder: (paths: string[]) => Promise<{
-    valid: Array<{ path: string; durationSec: number; width?: number; height?: number; codecName?: string; fps?: number; sizeBytes?: number; formatName?: string; bitrateBps?: number }>
+    valid: Array<{ path: string; durationSec: number; width?: number; height?: number; codecName?: string; fps?: number; sizeBytes?: number; formatName?: string; bitrateBps?: number; kind?: 'video' | 'audio' }>
     invalid: string[]
-    invalidDetails?: Array<{ path: string; reason: string }>
+    invalidDetails?: Array<{ path: string; reason: string; kind?: 'video' | 'audio' }>
   }>
   videoDeleteFiles: (paths: string[], rootDir: string) => Promise<{ deleted: number; errors: Array<{ path: string; message: string }> }>
   ultraFastScanFolder: (folderPath: string) => Promise<SimpleVideoFile[]>

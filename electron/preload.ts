@@ -193,6 +193,7 @@ const api: IPCAPI = {
   }) => ipcRenderer.invoke('video:chromaKeyPreview', opts) as Promise<{ ok: boolean; previewPath?: string; error?: string }>,
   videoAuditFolder: (paths: string[]) => ipcRenderer.invoke('video:auditFolder', paths),
   videoDeleteFiles: (paths: string[], rootDir: string) => ipcRenderer.invoke('video:deleteFiles', paths, rootDir),
+  listMediaFilesInFolder: (folderPath: string, mode?: 'all' | 'video' | 'audio') => ipcRenderer.invoke('media:listMediaFilesInFolder', folderPath, mode),
   createDirectory: (dirPath: string) => ipcRenderer.invoke('system:createDirectory', dirPath),
   openPath: (pathToOpen: string) => ipcRenderer.invoke('system:openPath', pathToOpen),
   videoFinalExport: {

@@ -38,6 +38,17 @@ function getActiveTracks(scanResult: ScanMusicResult | null, genreId: string): S
 
 const tracksForGenre = getActiveTracks
 
+function getOpeningTracksForGenre(scanResult: ScanMusicResult | null, genreId: string): ScannedTrack[] {
+  if (!scanResult) return []
+  const genreSpecific = scanResult.tracks.filter(
+    (track) => track.folderType === 'opening' && track.genreId === genreId
+  )
+  if (genreSpecific.length > 0) return genreSpecific
+  return scanResult.tracks.filter(
+    (track) => track.folderType === 'opening' && (!track.genreId || track.genreId === 'default' || genreId === 'all')
+  )
+}
+
 function getAvailableGenres(scanResult: ScanMusicResult | null): Array<{ id: string; name: string; count: number }> {
   if (!scanResult) return []
   const configGenres = scanResult.config?.genres ?? []
@@ -59,10 +70,25 @@ function getAvailableGenres(scanResult: ScanMusicResult | null): Array<{ id: str
   return Array.from(byId.values())
 }
 
+interface GenreConfigItem {
+  playlistCount: string
+  hours: string
+  minutes: string
+  priority: string
+  crossfade: boolean
+  crossfadeSeconds: string
+  loudnorm: boolean
+  pinnedTrackIds: string[]
+  endingTrackIds: string[]
+  pinnedOpeningTrackIds: string[]
+  combineAllPinnedOpenings?: boolean
+}
+
 function CreatePlaylistPage() {
   const [scanResult, setScanResult] = useState<ScanMusicResult | null>(null)
   const [pinnedTrackIds, setPinnedTrackIds] = useState<string[]>([])
   const [endingTrackIds, setEndingTrackIds] = useState<string[]>([])
+  const [pinnedOpeningTrackIds, setPinnedOpeningTrackIds] = useState<string[]>([])
   const [playlistCountInput, setPlaylistCountInput] = useState<string>('5')
   const [targetHoursInput, setTargetHoursInput] = useState<string>('0')
   const [targetMinutesInput, setTargetMinutesInput] = useState<string>('30')
@@ -83,7 +109,10 @@ function CreatePlaylistPage() {
   const [isCreatingAllGenres, setIsCreatingAllGenres] = useState(false)
   const [settingsSavedAt, setSettingsSavedAt] = useState<string | null>(null)
   const [showPlaylistGuide, setShowPlaylistGuide] = useState(false)
-  const [genreConfig, setGenreConfig] = useState<Record<string, { playlistCount: string; hours: string; minutes: string; priority: string; crossfade: boolean; crossfadeSeconds: string; loudnorm: boolean; pinnedTrackIds: string[]; endingTrackIds: string[] }>>({})
+  const [genreConfig, setGenreConfig] = useState<Record<string, GenreConfigItem>>({})
+  const [genreOpeningSearch, setGenreOpeningSearch] = useState<Record<string, string>>({})
+  const [genrePinnedSearch, setGenrePinnedSearch] = useState<Record<string, string>>({})
+  const [genreEndingSearch, setGenreEndingSearch] = useState<Record<string, string>>({})
   const GENRE_WORKSPACE_KEY = 'musicGenreWorkspaceV1'
 
   // Helper clamp
@@ -202,6 +231,7 @@ function CreatePlaylistPage() {
     setWarnings([])
     setPinnedTrackIds((ids) => ids.filter((id) => bodyTracks.some((track) => track.id === id)))
     setEndingTrackIds((ids) => ids.filter((id) => bodyTracks.some((track) => track.id === id)))
+    setPinnedOpeningTrackIds((ids) => ids.filter((id) => openingTracks.some((track) => track.id === id)))
     if (scanResult) loadPoolStats(bodyTracks)
   }, [scanResult, selectedGenreId])
 
@@ -263,17 +293,22 @@ function CreatePlaylistPage() {
     if (scanResult) await loadPoolStats(bodyTracks)
   }
 
-  const getGenreConfig = (genreId: string) => genreConfig[genreId] ?? {
-    playlistCount: playlistCountInput,
-    hours: targetHoursInput,
-    minutes: targetMinutesInput,
-    priority: priorityRatioInput,
-    crossfade: false,
-    crossfadeSeconds: '4',
-    loudnorm: false,
-    pinnedTrackIds: [],
-    endingTrackIds: [],
-  } as const
+  const getGenreConfig = (genreId: string): GenreConfigItem => {
+    const cfg = genreConfig[genreId]
+    return {
+      playlistCount: cfg?.playlistCount ?? playlistCountInput,
+      hours: cfg?.hours ?? targetHoursInput,
+      minutes: cfg?.minutes ?? targetMinutesInput,
+      priority: cfg?.priority ?? priorityRatioInput,
+      crossfade: cfg?.crossfade ?? false,
+      crossfadeSeconds: cfg?.crossfadeSeconds ?? '4',
+      loudnorm: cfg?.loudnorm ?? false,
+      pinnedTrackIds: cfg?.pinnedTrackIds ?? [],
+      endingTrackIds: cfg?.endingTrackIds ?? [],
+      pinnedOpeningTrackIds: cfg?.pinnedOpeningTrackIds ?? [],
+      combineAllPinnedOpenings: cfg?.combineAllPinnedOpenings ?? false,
+    }
+  }
 
   const updateGenreConfig = (genreId: string, patch: Partial<ReturnType<typeof getGenreConfig>>) => {
     setGenreConfig((prev) => ({ ...prev, [genreId]: { ...getGenreConfig(genreId), ...patch } }))
@@ -315,13 +350,23 @@ function CreatePlaylistPage() {
       return
     }
 
+    const genreOpening = getOpeningTracksForGenre(scanResult, genreId)
+    const validPinnedOpeningIds = config.pinnedOpeningTrackIds.filter((id) =>
+      genreOpening.some((t) => t.id === id)
+    )
+    const selectedOpeningTracks = validPinnedOpeningIds.length > 0
+      ? genreOpening.filter((t) => validPinnedOpeningIds.includes(t.id))
+      : genreOpening
+
     setCreatingGenreId(genreId)
     setGenreErrors((prev) => ({ ...prev, [genreId]: '' }))
     try {
       const result = await window.api.createPlaylists({
         tracks: body,
-        openingTracks: tracks.filter((track) => track.folderType === 'opening'),
-        pinnedTrackIds: config.pinnedTrackIds,
+        openingTracks: selectedOpeningTracks,
+        pinnedOpeningTrackIds: validPinnedOpeningIds,
+        combineAllPinnedOpenings: config.combineAllPinnedOpenings,
+        pinnedTrackIds: config.pinnedTrackIds.filter((id) => body.some((track) => track.id === id)),
         endingTracks: config.endingTrackIds
           .map((id) => body.find((track) => track.id === id))
           .filter((track): track is ScannedTrack => !!track),
@@ -365,12 +410,19 @@ function CreatePlaylistPage() {
     setWarnings([])
 
     try {
+      const validPinnedOpeningIds = pinnedOpeningTrackIds.filter((id) =>
+        openingTracks.some((t) => t.id === id)
+      )
+      const selectedOpeningTracks = validPinnedOpeningIds.length > 0
+        ? openingTracks.filter((t) => validPinnedOpeningIds.includes(t.id))
+        : openingTracks
       const endingTracks = endingTrackIds
         .map((id) => bodyTracks.find((track) => track.id === id))
         .filter((track): track is ScannedTrack => Boolean(track))
       const options: BuildPlaylistsOptions = {
         tracks: bodyTracks,
-        openingTracks,
+        openingTracks: selectedOpeningTracks,
+        pinnedOpeningTrackIds: validPinnedOpeningIds,
         pinnedTrackIds: pinnedTrackIds.filter((id) => bodyTracks.some((track) => track.id === id)),
         endingTracks,
         playlistCount, // số đã clamp
@@ -663,7 +715,8 @@ function CreatePlaylistPage() {
             <ul style={{ margin: '6px 0 0 18px', padding: 0 }}>
               <li><b>Crossfade:</b> chồng vài giây cuối bài trước với đầu bài sau để chuyển bài mượt hơn. Bật rồi nhập số giây, thường dùng 3–5 giây.</li>
               <li><b>Loudnorm:</b> cân bằng âm lượng giữa các bài. Bật khi nguồn nhạc to nhỏ không đều; có thể làm xuất nhạc lâu hơn.</li>
-              <li><b>Nhạc ghim đứng đầu playlist:</b> mở mục này, tìm theo tên bài, chọn <b>Ghim</b>. Các bài được chọn sẽ ưu tiên đứng đầu playlist.</li>
+              <li><b>Ghim nhạc mở đầu:</b> chọn các bài trong folder opening để làm intro mở đầu playlist (xoay vòng hoặc ghép tất cả). Nếu không chọn, hệ thống tự động xoay vòng toàn bộ bài trong thư mục opening.</li>
+              <li><b>Nhạc ghim đứng đầu playlist:</b> mở mục này, tìm theo tên bài, chọn <b>Ghim</b>. Các bài được chọn sẽ ưu tiên đứng đầu phần nhạc chính.</li>
               <li><b>Nhạc cuối playlist:</b> chọn bài nối sau phần nhạc chính. Không chọn cùng bài ở cả hai nhóm.</li>
               <li>Nhập số playlist và thời lượng, sau đó bấm <b>Tạo playlist</b> ở từng thể loại hoặc <b>Tạo lại toàn bộ thể loại</b>.</li>
             </ul>
@@ -673,6 +726,20 @@ function CreatePlaylistPage() {
           {availableGenres.map((genre) => {
             const cfg = getGenreConfig(genre.id)
             const generated = genrePlaylists[genre.id] ?? []
+            const genreOpeningTracks = getOpeningTracksForGenre(scanResult, genre.id)
+            const openingQuery = (genreOpeningSearch[genre.id] ?? '').trim().toLowerCase()
+            const filteredOpeningTracks = genreOpeningTracks.filter((track) =>
+              track.fileName.toLowerCase().includes(openingQuery)
+            )
+            const pinnedQuery = (genrePinnedSearch[genre.id] ?? '').trim().toLowerCase()
+            const filteredBodyTracks = tracksForGenre(scanResult, genre.id)
+              .filter((track) => track.folderType !== 'opening')
+              .filter((track) => track.fileName.toLowerCase().includes(pinnedQuery))
+            const endingQuery = (genreEndingSearch[genre.id] ?? '').trim().toLowerCase()
+            const filteredEndingTracks = tracksForGenre(scanResult, genre.id)
+              .filter((track) => track.folderType !== 'opening')
+              .filter((track) => track.fileName.toLowerCase().includes(endingQuery))
+
             return <section key={genre.id} style={{ padding: '14px', background: '#252526', border: `1px solid ${generated.length ? '#166534' : '#444'}`, borderRadius: '8px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', alignItems: 'center' }}>
                 <div><strong>{genre.name}</strong><div style={{ color: '#94a3b8', fontSize: '12px' }}>{genre.count} bài · {generated.length ? `${generated.length} playlist sẵn sàng` : 'Chưa tạo playlist'}</div></div>
@@ -686,28 +753,383 @@ function CreatePlaylistPage() {
                 <label><input type="checkbox" checked={cfg.loudnorm} onChange={(event) => updateGenreConfig(genre.id, { loudnorm: event.target.checked })} /> Loudnorm</label>
                 <label>Giây <input value={cfg.crossfadeSeconds} disabled={!cfg.crossfade} onChange={(event) => updateGenreConfig(genre.id, { crossfadeSeconds: event.target.value })} style={{ width: '45px', marginLeft: '4px' }} /></label>
               </div>
+
+              {/* 1. Ghim nhạc mở đầu (folder opening) */}
               <details style={{ marginTop: '10px' }}>
-                <summary style={{ cursor: 'pointer', color: '#94a3b8', fontSize: '12px' }}>Nhạc ghim đứng đầu playlist</summary>
+                <summary style={{ cursor: 'pointer', color: '#94a3b8', fontSize: '12px' }}>
+                  Ghim nhạc mở đầu (folder opening){' '}
+                  {cfg.pinnedOpeningTrackIds.length > 0
+                    ? `(Đã ghim: ${cfg.pinnedOpeningTrackIds.length}/${genreOpeningTracks.length} bài - chỉ chọn các bài này)`
+                    : genreOpeningTracks.length > 0
+                      ? `(Tự động đảo chọn ngẫu nhiên ${genreOpeningTracks.length} bài)`
+                      : '(0 bài)'}
+                </summary>
+                <div style={{ color: '#94a3b8', fontSize: '11px', marginTop: '5px' }}>
+                  {cfg.pinnedOpeningTrackIds.length > 0
+                    ? `Đang ghim ${cfg.pinnedOpeningTrackIds.length} bài: Playlist sẽ chỉ chọn các bài này.`
+                    : 'Chưa ghim bài nào: Hệ thống sẽ tự động đảo chọn ngẫu nhiên các bài trong folder opening như bình thường.'}
+                </div>
                 <div style={{ marginTop: '6px' }}>
                   <input
                     type="search"
-                    value={searchQuery}
-                    onChange={(event) => setSearchQuery(event.target.value)}
-                    placeholder="Tìm tên bài hát để ghim..."
-                    aria-label={`Tìm bài hát trong thể loại ${genre.name}`}
-                    style={{ width: '100%', boxSizing: 'border-box', padding: '6px 8px', background: '#111', color: '#fff', border: '1px solid #374151', borderRadius: '4px', fontSize: '12px' }}
+                    value={genreOpeningSearch[genre.id] ?? ''}
+                    onChange={(event) =>
+                      setGenreOpeningSearch((prev) => ({ ...prev, [genre.id]: event.target.value }))
+                    }
+                    placeholder="Tìm tên bài mở đầu để ghim..."
+                    aria-label={`Tìm bài mở đầu trong thể loại ${genre.name}`}
+                    style={{
+                      width: '100%',
+                      boxSizing: 'border-box',
+                      padding: '6px 8px',
+                      background: '#111',
+                      color: '#fff',
+                      border: '1px solid #374151',
+                      borderRadius: '4px',
+                      fontSize: '12px',
+                    }}
                   />
                 </div>
-                <div style={{ maxHeight: '130px', overflowY: 'auto', marginTop: '6px', border: '1px solid #374151', borderRadius: '4px', padding: '4px' }}>
-                  {tracksForGenre(scanResult, genre.id)
-                    .filter((track) => track.folderType !== 'opening')
-                    .filter((track) => track.fileName.toLowerCase().includes(searchQuery.trim().toLowerCase()))
-                    .map((track) => <label key={track.id} style={{ display: 'flex', gap: '5px', alignItems: 'center', fontSize: '11px', padding: '3px' }}><input type="checkbox" checked={cfg.pinnedTrackIds.includes(track.id)} onChange={(event) => updateGenreConfig(genre.id, { pinnedTrackIds: event.target.checked ? [...cfg.pinnedTrackIds, track.id] : cfg.pinnedTrackIds.filter((id) => id !== track.id) })} /> Ghim {track.fileName}</label>)}
+                <div
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    marginTop: '6px',
+                    flexWrap: 'wrap',
+                    gap: '6px',
+                  }}
+                >
+                  <div style={{ display: 'flex', gap: '6px' }}>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        updateGenreConfig(genre.id, {
+                          pinnedOpeningTrackIds: genreOpeningTracks.map((t) => t.id),
+                        })
+                      }
+                      disabled={genreOpeningTracks.length === 0}
+                      style={{
+                        padding: '3px 8px',
+                        background: '#374151',
+                        color: '#fff',
+                        border: '1px solid #4b5563',
+                        borderRadius: '4px',
+                        fontSize: '11px',
+                        cursor: genreOpeningTracks.length === 0 ? 'not-allowed' : 'pointer',
+                      }}
+                    >
+                      Ghim tất cả
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        updateGenreConfig(genre.id, {
+                          pinnedOpeningTrackIds: [],
+                        })
+                      }
+                      disabled={cfg.pinnedOpeningTrackIds.length === 0}
+                      style={{
+                        padding: '3px 8px',
+                        background: '#374151',
+                        color: '#fff',
+                        border: '1px solid #4b5563',
+                        borderRadius: '4px',
+                        fontSize: '11px',
+                        cursor: cfg.pinnedOpeningTrackIds.length === 0 ? 'not-allowed' : 'pointer',
+                      }}
+                    >
+                      Bỏ ghim tất cả
+                    </button>
+                  </div>
+                  <label
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                      fontSize: '11px',
+                      color: '#cbd5e1',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={Boolean(cfg.combineAllPinnedOpenings)}
+                      onChange={(event) =>
+                        updateGenreConfig(genre.id, {
+                          combineAllPinnedOpenings: event.target.checked,
+                        })
+                      }
+                    />
+                    Ghép tất cả bài mở đầu đã ghim vào đầu mỗi playlist
+                  </label>
+                </div>
+                <div
+                  style={{
+                    maxHeight: '130px',
+                    overflowY: 'auto',
+                    marginTop: '6px',
+                    border: '1px solid #374151',
+                    borderRadius: '4px',
+                    padding: '4px',
+                  }}
+                >
+                  {genreOpeningTracks.length === 0 ? (
+                    <div style={{ color: '#888', fontSize: '11px', padding: '6px' }}>
+                      Chưa có bài nào trong thư mục opening. Vui lòng quét thư mục mở đầu ở tab Quét nhạc.
+                    </div>
+                  ) : filteredOpeningTracks.length === 0 ? (
+                    <div style={{ color: '#888', fontSize: '11px', padding: '6px' }}>
+                      Không tìm thấy bài mở đầu phù hợp với từ khóa.
+                    </div>
+                  ) : (
+                    filteredOpeningTracks.map((track) => {
+                      const isPinned = cfg.pinnedOpeningTrackIds.includes(track.id)
+                      return (
+                        <label
+                          key={track.id}
+                          style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            fontSize: '11px',
+                            padding: '4px 6px',
+                            borderBottom: '1px solid #2d2d2d',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          <div
+                            style={{
+                              display: 'flex',
+                              gap: '6px',
+                              alignItems: 'center',
+                              flex: 1,
+                              overflow: 'hidden',
+                            }}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isPinned}
+                              onChange={(event) =>
+                                updateGenreConfig(genre.id, {
+                                  pinnedOpeningTrackIds: event.target.checked
+                                    ? [...cfg.pinnedOpeningTrackIds, track.id]
+                                    : cfg.pinnedOpeningTrackIds.filter((id) => id !== track.id),
+                                })
+                              }
+                            />
+                            <span
+                              style={{
+                                color: isPinned ? '#86efac' : '#fff',
+                                textOverflow: 'ellipsis',
+                                overflow: 'hidden',
+                                whiteSpace: 'nowrap',
+                              }}
+                            >
+                              Ghim {track.fileName}
+                            </span>
+                          </div>
+                          <span
+                            style={{
+                              color: '#94a3b8',
+                              fontSize: '11px',
+                              marginLeft: '8px',
+                              flexShrink: 0,
+                            }}
+                          >
+                            {formatDurationShort(track.duration)}
+                          </span>
+                        </label>
+                      )
+                    })
+                  )}
                 </div>
               </details>
+
+              {/* 2. Nhạc ghim đứng đầu playlist (ưu tiên & random) */}
               <details style={{ marginTop: '6px' }}>
-                <summary style={{ cursor: 'pointer', color: '#94a3b8', fontSize: '12px' }}>Nhạc cuối playlist</summary>
-                <div style={{ maxHeight: '100px', overflowY: 'auto', marginTop: '6px' }}>{tracksForGenre(scanResult, genre.id).filter((track) => track.folderType !== 'opening').map((track) => <label key={track.id} style={{ display: 'flex', gap: '5px', alignItems: 'center', fontSize: '11px', padding: '3px' }}><input type="checkbox" checked={cfg.endingTrackIds.includes(track.id)} onChange={(event) => updateGenreConfig(genre.id, { endingTrackIds: event.target.checked ? [...cfg.endingTrackIds, track.id] : cfg.endingTrackIds.filter((id) => id !== track.id) })} /> Cuối {track.fileName}</label>)}</div>
+                <summary style={{ cursor: 'pointer', color: '#94a3b8', fontSize: '12px' }}>
+                  Nhạc ghim đứng đầu playlist{' '}
+                  {cfg.pinnedTrackIds.length > 0
+                    ? `(Đã ghim: ${cfg.pinnedTrackIds.length} bài)`
+                    : ''}
+                </summary>
+                <div style={{ marginTop: '6px' }}>
+                  <input
+                    type="search"
+                    value={genrePinnedSearch[genre.id] ?? ''}
+                    onChange={(event) =>
+                      setGenrePinnedSearch((prev) => ({ ...prev, [genre.id]: event.target.value }))
+                    }
+                    placeholder="Tìm tên bài hát để ghim..."
+                    aria-label={`Tìm bài hát trong thể loại ${genre.name}`}
+                    style={{
+                      width: '100%',
+                      boxSizing: 'border-box',
+                      padding: '6px 8px',
+                      background: '#111',
+                      color: '#fff',
+                      border: '1px solid #374151',
+                      borderRadius: '4px',
+                      fontSize: '12px',
+                    }}
+                  />
+                </div>
+                {cfg.pinnedTrackIds.length > 0 && (
+                  <div style={{ marginTop: '6px' }}>
+                    <button
+                      type="button"
+                      onClick={() => updateGenreConfig(genre.id, { pinnedTrackIds: [] })}
+                      style={{
+                        padding: '3px 8px',
+                        background: '#374151',
+                        color: '#fff',
+                        border: '1px solid #4b5563',
+                        borderRadius: '4px',
+                        fontSize: '11px',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Bỏ ghim tất cả
+                    </button>
+                  </div>
+                )}
+                <div
+                  style={{
+                    maxHeight: '130px',
+                    overflowY: 'auto',
+                    marginTop: '6px',
+                    border: '1px solid #374151',
+                    borderRadius: '4px',
+                    padding: '4px',
+                  }}
+                >
+                  {filteredBodyTracks.length === 0 ? (
+                    <div style={{ color: '#888', fontSize: '11px', padding: '6px' }}>
+                      Không có bài hát nào phù hợp.
+                    </div>
+                  ) : (
+                    filteredBodyTracks.map((track) => (
+                      <label
+                        key={track.id}
+                        style={{
+                          display: 'flex',
+                          gap: '5px',
+                          alignItems: 'center',
+                          fontSize: '11px',
+                          padding: '3px',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={cfg.pinnedTrackIds.includes(track.id)}
+                          onChange={(event) =>
+                            updateGenreConfig(genre.id, {
+                              pinnedTrackIds: event.target.checked
+                                ? [...cfg.pinnedTrackIds, track.id]
+                                : cfg.pinnedTrackIds.filter((id) => id !== track.id),
+                            })
+                          }
+                        />{' '}
+                        Ghim {track.fileName}
+                      </label>
+                    ))
+                  )}
+                </div>
+              </details>
+
+              {/* 3. Nhạc cuối playlist */}
+              <details style={{ marginTop: '6px' }}>
+                <summary style={{ cursor: 'pointer', color: '#94a3b8', fontSize: '12px' }}>
+                  Nhạc cuối playlist{' '}
+                  {cfg.endingTrackIds.length > 0
+                    ? `(Đã chọn: ${cfg.endingTrackIds.length} bài)`
+                    : ''}
+                </summary>
+                <div style={{ marginTop: '6px' }}>
+                  <input
+                    type="search"
+                    value={genreEndingSearch[genre.id] ?? ''}
+                    onChange={(event) =>
+                      setGenreEndingSearch((prev) => ({ ...prev, [genre.id]: event.target.value }))
+                    }
+                    placeholder="Tìm tên bài cuối playlist..."
+                    aria-label={`Tìm bài cuối playlist trong thể loại ${genre.name}`}
+                    style={{
+                      width: '100%',
+                      boxSizing: 'border-box',
+                      padding: '6px 8px',
+                      background: '#111',
+                      color: '#fff',
+                      border: '1px solid #374151',
+                      borderRadius: '4px',
+                      fontSize: '12px',
+                    }}
+                  />
+                </div>
+                {cfg.endingTrackIds.length > 0 && (
+                  <div style={{ marginTop: '6px' }}>
+                    <button
+                      type="button"
+                      onClick={() => updateGenreConfig(genre.id, { endingTrackIds: [] })}
+                      style={{
+                        padding: '3px 8px',
+                        background: '#374151',
+                        color: '#fff',
+                        border: '1px solid #4b5563',
+                        borderRadius: '4px',
+                        fontSize: '11px',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Bỏ chọn tất cả
+                    </button>
+                  </div>
+                )}
+                <div
+                  style={{
+                    maxHeight: '100px',
+                    overflowY: 'auto',
+                    marginTop: '6px',
+                    border: '1px solid #374151',
+                    borderRadius: '4px',
+                    padding: '4px',
+                  }}
+                >
+                  {filteredEndingTracks.length === 0 ? (
+                    <div style={{ color: '#888', fontSize: '11px', padding: '6px' }}>
+                      Không có bài hát nào phù hợp.
+                    </div>
+                  ) : (
+                    filteredEndingTracks.map((track) => (
+                      <label
+                        key={track.id}
+                        style={{
+                          display: 'flex',
+                          gap: '5px',
+                          alignItems: 'center',
+                          fontSize: '11px',
+                          padding: '3px',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={cfg.endingTrackIds.includes(track.id)}
+                          onChange={(event) =>
+                            updateGenreConfig(genre.id, {
+                              endingTrackIds: event.target.checked
+                                ? [...cfg.endingTrackIds, track.id]
+                                : cfg.endingTrackIds.filter((id) => id !== track.id),
+                            })
+                          }
+                        />{' '}
+                        Cuối {track.fileName}
+                      </label>
+                    ))
+                  )}
+                </div>
               </details>
               {generated.length > 0 && (
                 <div style={{ marginTop: '10px' }}>
@@ -748,14 +1170,15 @@ function CreatePlaylistPage() {
                             <tbody>
                               {playlist.tracks.map((track) => {
                                 const isPinned = cfg.pinnedTrackIds.includes(track.id)
+                                const isOpeningPinned = cfg.pinnedOpeningTrackIds.includes(track.id)
                                 let typeLabel = track.role === 'opening'
-                                  ? 'Nhạc mở đầu'
+                                  ? (isOpeningPinned ? 'Nhạc mở đầu (Ghim)' : 'Nhạc mở đầu')
                                   : track.role === 'ending'
                                     ? 'Nhạc cuối'
                                     : track.folderType === 'priority'
                                       ? 'Ưu tiên'
                                       : 'Random'
-                                if (isPinned && track.role !== 'ending') {
+                                if (isPinned && track.role !== 'ending' && track.role !== 'opening') {
                                   typeLabel = `Pinned${track.folderType === 'priority' ? ' + Ưu tiên' : ''}`
                                 }
 

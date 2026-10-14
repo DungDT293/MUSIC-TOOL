@@ -53,6 +53,8 @@ export interface BuildPlaylistsOptions {
   priorityRatioMin?: number // default 0.65
   priorityRatioMax?: number // default 0.8
   openingTracks?: ScannedTrack[]
+  pinnedOpeningTrackIds?: string[]
+  combineAllPinnedOpenings?: boolean
   endingTracks?: ScannedTrack[]
   /** Thời lượng crossfade (giây). Nếu có, target sẽ được inflate để sau crossfade vẫn đạt đủ thời lượng */
   crossfadeDurationSec?: number
@@ -96,10 +98,10 @@ function pushTrack(
 // ── Core builder ──────────────────────────────────────────────────────────────
 
 /**
- * Build một playlist đơn theo thứ tự: Pinned → Priority → Random
+ * Build một playlist đơn theo thứ tự: Opening → Pinned → Priority → Random → Ending
  *
  * Thứ tự CỨNG, không bao giờ trộn lẫn nhóm.
- * Mỗi nhóm được xáo trộn nội bộ (LRU-sorted + index offset).
+ * Mỗi nhóm nhận thứ tự đã được xoay sẵn từ buildPlaylists.
  *
  * @param index  chỉ số playlist (0-based), dùng để tính offset xoay vòng
  * @param pinnedTracks  bài đã ghim — luôn đứng đầu, xoay vòng theo index
@@ -119,18 +121,27 @@ function buildSinglePlaylist(
   desiredPriorityMin: number,
   _desiredPriorityMax: number,
   allowReuse: boolean,
-  openingTrack: ScannedTrack | undefined,
-  endingTracks: ScannedTrack[] = []
+  openingTrack: ScannedTrack | ScannedTrack[] | undefined,
+  endingTracks: ScannedTrack[] = [],
+  meta: {
+    genreId?: string
+    genreName?: string
+    genreSettings?: PlaylistDefinition['genreSettings']
+  } = {}
 ): PlaylistDefinition {
   const playlistTracks: PlaylistTrack[] = []
   const usedTrackIds = new Set<string>()
   let lastTrackId: string | null = null
   let currentTotalSec = 0
   let currentBodySec = 0
-  if (openingTrack) {
-    const opening = pushTrack(playlistTracks, openingTrack, currentTotalSec, 'opening')
+  const openingList = Array.isArray(openingTrack)
+    ? openingTrack
+    : openingTrack ? [openingTrack] : []
+  for (const op of openingList) {
+    const opening = pushTrack(playlistTracks, op, currentTotalSec, 'opening')
     currentTotalSec = opening.cumulativeDuration
-    lastTrackId = openingTrack.id
+    lastTrackId = op.id
+    if (!allowReuse) usedTrackIds.add(op.id)
   }
   let currentPrioritySec = 0
   let currentRandomSec = 0
@@ -181,11 +192,11 @@ function buildSinglePlaylist(
       }
       if (!addedInCycle) {
         if (!allowReuse) break // không còn bài chưa dùng
-        // allowReuse: chọn random tránh lastTrackId
+        // allowReuse: chọn deterministic, tránh lastTrackId để candidate có thể exhaustively test
         const available = pool.filter(t => t.id !== lastTrackId)
         const picked = available.length > 0
-          ? available[Math.floor(Math.random() * available.length)]
-          : pool[Math.floor(Math.random() * pool.length)]
+          ? available[(cycles + startOffset) % available.length]
+          : undefined
         if (picked) {
           add(picked)
           if (stopWhen()) break
@@ -199,23 +210,18 @@ function buildSinglePlaylist(
 
   const maxCycles = allowReuse ? 200 : 5
 
-  // ── BƯỚC 1: Pinned tracks (luôn đứng đầu, xoay vòng theo index) ──────────
-  // Xoay vòng để mỗi playlist trong phiên có thứ tự pinned khác nhau
-  // Nhưng vị trí đầu tiên (bài "anchor") luôn là bài đã chọn đầu tiên
+  // ── BƯỚC 1: Pinned tracks (luôn đứng sau Opening, giữ nguyên toàn bộ bài ghim, candidate đã xoay sẵn) ────────
   if (pinnedTracks.length > 0) {
-    const rotated = rotate(pinnedTracks, index * 3)
-    for (const track of rotated) {
+    for (const track of pinnedTracks) {
       if (canUse(track)) add(track)
-      if (currentBodySec >= targetSec) break
     }
   }
 
   // ── BƯỚC 2: Priority tracks cho đến khi đạt ngưỡng MIN ───────────────────
   if (currentBodySec < targetSec) {
-    const priorityStart = priorityPool.length > 0 ? (index * 13) % priorityPool.length : 0
     drainPool(
       priorityPool,
-      priorityStart,
+      0,
       () => currentBodySec >= targetSec || currentPrioritySec >= desiredPriorityMin,
       maxCycles
     )
@@ -223,49 +229,26 @@ function buildSinglePlaylist(
 
   // ── BƯỚC 3: Random tracks cho đủ targetSec ───────────────────────────────
   if (currentBodySec < targetSec && randomPool.length > 0) {
-    const randomStart = randomPool.length > 0 ? (index * 17) % randomPool.length : 0
     drainPool(
       randomPool,
-      randomStart,
+      0,
       () => currentBodySec >= targetSec,
       maxCycles
     )
   }
 
-  // ── BƯỚC 4: Nếu vẫn thiếu, thêm priority (tránh vượt max nếu có thể) ────
-  if (currentBodySec < targetSec && priorityPool.length > 0) {
+  // ── BƯỚC 4: Nếu random pool rỗng, tiếp tục priority để đủ target ─────────
+  // Không append priority sau random: group order phải luôn giữ cứng.
+  if (currentBodySec < targetSec && randomPool.length === 0) {
     drainPool(
       priorityPool,
       0,
-      () => {
-        if (currentBodySec >= targetSec) return true
-        // Nếu chưa vượt max thì ok, nếu vượt rồi vẫn fill vì bước emergency
-        return false
-      },
+      () => currentBodySec >= targetSec,
       allowReuse ? 100 : 3
     )
   }
 
-  // ── BƯỚC 5 (Emergency fill): vẫn thiếu → dùng tất cả không giới hạn ──────
-  if (currentBodySec < targetSec) {
-    const allPool = [...priorityPool, ...randomPool]
-    if (allPool.length > 0) {
-      let fi = 0
-      let fc = 0
-      while (currentBodySec < targetSec && fc < 500) {
-        const track = allPool[fi % allPool.length]
-        if (track.id !== lastTrackId || allPool.length === 1) {
-          add(track)
-        } else {
-          fi++
-        }
-        fi++
-        fc++
-      }
-    }
-  }
-
-  // ── BƯỚC 6: Nhạc thêm cuối — append sau target chính, không tính vào ratio ──
+  // ── BƯỚC 5: Nhạc thêm cuối — append sau target chính, không tính vào ratio ──
   for (const track of endingTracks) {
     const pt = pushTrack(playlistTracks, track, currentTotalSec, 'ending')
     currentTotalSec = pt.cumulativeDuration
@@ -305,9 +288,13 @@ function buildSinglePlaylist(
     console.warn(`[PlaylistEngine] Playlist ${index + 1}: chỉ đạt ${mainDurationSec.toFixed(0)}s / ${targetSec}s trước nhạc thêm cuối. Thư viện không đủ bài.`)
   }
 
+  const name = meta.genreName
+    ? `${meta.genreName} - Playlist ${index + 1}`
+    : `Playlist ${index + 1}`
+
   return {
     id: randomUUID(),
-    name: `Playlist ${index + 1}`,
+    name,
     targetDurationSec: targetSec,
     totalDurationSec: cumulative,
     priorityDurationSec: finalPrioritySec,
@@ -320,6 +307,9 @@ function buildSinglePlaylist(
     endingCount,
     tracks: playlistTracks,
     createdAt: Date.now(),
+    genreId: meta.genreId,
+    genreName: meta.genreName,
+    genreSettings: meta.genreSettings,
   }
 }
 
@@ -334,15 +324,38 @@ export function buildPlaylists(options: BuildPlaylistsOptions): BuildPlaylistsRe
     priorityRatioMin = 0.65,
     priorityRatioMax = 0.8,
     openingTracks = [],
+    pinnedOpeningTrackIds,
+    combineAllPinnedOpenings,
     endingTracks = [],
     crossfadeDurationSec,
+    genreId,
+    genreName,
+    genreSettings,
   } = options
 
-  const uniqueOpeningTracks = openingTracks.filter((track, index, list) => {
+  // Lọc phòng vệ: nếu có genreId, bảo đảm chỉ dùng tracks thuộc genreId này
+  const targetGenreId = genreId
+  const scopedTracks = targetGenreId
+    ? tracks.filter((t) => !t.genreId || t.genreId === targetGenreId)
+    : tracks
+
+  const uniqueOpeningTracks = (targetGenreId
+    ? openingTracks.filter((t) => !t.genreId || t.genreId === targetGenreId)
+    : openingTracks
+  ).filter((track, index, list) => {
     if (!track?.path || !track.duration || track.duration <= 0) return false
     const key = track.path.toLowerCase()
     return list.findIndex(t => t.path?.toLowerCase() === key) === index
   })
+
+  // Nếu người dùng chọn ghim các bài mở đầu cụ thể:
+  const pinnedOpeningTracks = (pinnedOpeningTrackIds && pinnedOpeningTrackIds.length > 0)
+    ? uniqueOpeningTracks.filter(t => pinnedOpeningTrackIds.includes(t.id))
+    : []
+
+  const effectiveOpeningPool = pinnedOpeningTracks.length > 0
+    ? pinnedOpeningTracks
+    : uniqueOpeningTracks
 
   if (playlistCount < 1) throw new Error('playlistCount must be >= 1')
   if (targetDurationMinutes <= 0) throw new Error('targetDurationMinutes must be > 0')
@@ -363,14 +376,17 @@ export function buildPlaylists(options: BuildPlaylistsOptions): BuildPlaylistsRe
   const warnings: BuildPlaylistWarning[] = []
 
   // ── Phân loại tracks ──────────────────────────────────────────────────────
-  const uniqueEndingTracks = endingTracks.filter((track, index, list) => {
+  const uniqueEndingTracks = (targetGenreId
+    ? endingTracks.filter((t) => !t.genreId || t.genreId === targetGenreId)
+    : endingTracks
+  ).filter((track, index, list) => {
     if (!track?.path || !track.duration || track.duration <= 0) return false
     const key = track.path.toLowerCase()
     return list.findIndex(t => t.path?.toLowerCase() === key) === index
   })
   const openingPathSet = new Set(uniqueOpeningTracks.map(t => t.path.toLowerCase()))
   const endingPathSet = new Set(uniqueEndingTracks.map(t => t.path.toLowerCase()))
-  const mainTracks = tracks.filter(t => !openingPathSet.has(t.path.toLowerCase()) && !endingPathSet.has(t.path.toLowerCase()) && t.folderType !== 'opening')
+  const mainTracks = scopedTracks.filter(t => !openingPathSet.has(t.path.toLowerCase()) && !endingPathSet.has(t.path.toLowerCase()) && t.folderType !== 'opening')
   const pinnedTracks = mainTracks.filter(t => pinnedTrackIds.includes(t.id))
   const priorityTracks = mainTracks.filter(t => t.folderType === 'priority' && !pinnedTrackIds.includes(t.id))
   const randomTracks = mainTracks.filter(t => t.folderType === 'random' && !pinnedTrackIds.includes(t.id))
@@ -425,48 +441,62 @@ export function buildPlaylists(options: BuildPlaylistsOptions): BuildPlaylistsRe
   // ── Build từng playlist ───────────────────────────────────────────────────
   const playlists: PlaylistDefinition[] = []
   const playlistSignatures = new Set<string>()
+  const shouldCombineOpenings = Boolean(combineAllPinnedOpenings && pinnedOpeningTracks.length > 0)
+  const openingVariants = shouldCombineOpenings
+    ? 1
+    : Math.max(1, effectiveOpeningPool.length)
   const pinnedVariants = Math.max(1, pinnedTracks.length)
   const priorityVariants = Math.max(1, priorityTracks.length)
   const randomVariants = Math.max(1, randomTracks.length)
-  const rotationVariantCount = pinnedVariants * priorityVariants * randomVariants
-  const variantsPerPlaylist = Math.min(rotationVariantCount, playlistCount)
-
   for (let i = 0; i < playlistCount; i++) {
     let playlist: PlaylistDefinition | undefined
     let signature = ''
 
-    for (let variant = 0; variant < variantsPerPlaylist; variant++) {
-      // Enumerate independent group rotations so small pools use every available
-      // order variant before reporting that a unique signature is impossible.
-      const candidateVariant = i + variant
-      const pinnedForBuild = rotate(pinnedTracks, candidateVariant % pinnedVariants)
-      const priorityForBuild = rotate(
-        lruSortedPriority,
-        Math.floor(candidateVariant / pinnedVariants) % priorityVariants,
-      )
-      const randomForBuild = rotate(
-        lruSortedRandom,
-        Math.floor(candidateVariant / (pinnedVariants * priorityVariants)) % randomVariants,
-      )
+    // Cơ chế tạo candidate variant cho Opening / Pinned / Priority / Random.
+    // Lần lặp đầu tiên (dOpen=0, dPin=0, dPrio=0, dRand=0) tương ứng với quy tắc xoay vòng tự nhiên
+    // của playlist i. Nếu bị trùng signature, tiếp tục thử các biến thể kết hợp khác.
+    outerVariantLoop:
+    for (let dOpen = 0; dOpen < openingVariants; dOpen++) {
+      for (let dPin = 0; dPin < pinnedVariants; dPin++) {
+        for (let dPrio = 0; dPrio < priorityVariants; dPrio++) {
+          for (let dRand = 0; dRand < randomVariants; dRand++) {
+            const openIdx = (i + dOpen) % openingVariants
+            const pinOff = (i + dPin) % pinnedVariants
+            const prioOff = (i + dPrio) % priorityVariants
+            const randOff = (i + dRand) % randomVariants
 
-      const candidate = buildSinglePlaylist(
-        i,
-        pinnedForBuild,
-        priorityForBuild,
-        randomForBuild,
-        effectiveTargetSec,
-        desiredPriorityMin,
-        desiredPriorityMax,
-        allowReuse,
-        uniqueOpeningTracks.length > 0 ? uniqueOpeningTracks[i % uniqueOpeningTracks.length] : undefined,
-        uniqueEndingTracks
-      )
+            const openingForBuild = shouldCombineOpenings
+              ? pinnedOpeningTracks
+              : effectiveOpeningPool.length > 0
+                ? effectiveOpeningPool[openIdx]
+                : undefined
+            const pinnedForBuild = rotate(pinnedTracks, pinOff)
+            const priorityForBuild = rotate(lruSortedPriority, prioOff)
+            const randomForBuild = rotate(lruSortedRandom, randOff)
 
-      const candidateSignature = candidate.tracks.map(t => t.id).join('|')
-      if (!playlistSignatures.has(candidateSignature)) {
-        playlist = candidate
-        signature = candidateSignature
-        break
+            const candidate = buildSinglePlaylist(
+              i,
+              pinnedForBuild,
+              priorityForBuild,
+              randomForBuild,
+              effectiveTargetSec,
+              desiredPriorityMin,
+              desiredPriorityMax,
+              allowReuse,
+              openingForBuild,
+              uniqueEndingTracks,
+              { genreId, genreName, genreSettings }
+            )
+
+            // So sánh toàn bộ chuỗi ID theo thứ tự: openingId|pinnedId1|pinnedId2|priorityId1|randomId1...
+            const candidateSignature = candidate.tracks.map(t => t.id).join('|')
+            if (!playlistSignatures.has(candidateSignature)) {
+              playlist = candidate
+              signature = candidateSignature
+              break outerVariantLoop
+            }
+          }
+        }
       }
     }
 
@@ -474,7 +504,7 @@ export function buildPlaylists(options: BuildPlaylistsOptions): BuildPlaylistsRe
       throw new Error(
         `Không thể tạo đủ ${playlistCount} playlist có thứ tự bài hát khác nhau. ` +
         `Thư viện hiện tại không có đủ biến thể thứ tự cho playlist ${i + 1}. ` +
-        `Giảm số playlist hoặc thêm bài hát rồi thử lại.`,
+        `Giảm số playlist hoặc thêm bài hát rồi thử lại.`
       )
     }
 

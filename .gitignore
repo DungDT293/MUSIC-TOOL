@@ -45,6 +45,13 @@ server/.wrangler/
 test-results/
 playwright-report/
 coverage/
+test_output/
+test_real_scale/
+*.log
+_test_*.html
+dist-electron-output*
+.omc/
+.release-*/
 
 # Electron build output
 icudtl.dat

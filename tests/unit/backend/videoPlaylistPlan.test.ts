@@ -109,4 +109,65 @@ describe('planVideoBatch', () => {
       maxSequenceAttempts: 1,
     })).toThrow(VideoSequenceExhaustionError)
   })
+
+  it('generates non-linear diverse permutations across multiple jobs', () => {
+    const pool = clips(20, 10) // 20 clips, 10s each
+    const result = planVideoBatch({
+      clips: pool,
+      jobs: [
+        { jobIndex: 0, targetDurationSec: 100 }, // 10 clips
+        { jobIndex: 1, targetDurationSec: 100 }, // 10 clips
+        { jobIndex: 2, targetDurationSec: 100 }, // 10 clips
+      ],
+      uniqueRequired: false,
+      requireUniqueSequences: true,
+      seed: 42,
+    })
+
+    expect(result.jobs).toHaveLength(3)
+    const fingerprints = new Set(result.jobs.map((j) => j.fingerprint))
+    expect(fingerprints.size).toBe(3)
+
+    // Verify clips are NOT just shifted by 1 (i.e. not job0[i+1] === job1[i])
+    const seq0 = result.jobs[0].clips.map((c) => c.id)
+    const seq1 = result.jobs[1].clips.map((c) => c.id)
+    const seq2 = result.jobs[2].clips.map((c) => c.id)
+
+    // They must not be identical
+    expect(seq0).not.toEqual(seq1)
+    expect(seq1).not.toEqual(seq2)
+
+    // Verify that consecutive clip pairs differ significantly (not a linear slide)
+    let matchCount01 = 0
+    for (let i = 0; i < seq0.length - 1; i++) {
+      if (seq1[i] === seq0[i + 1]) matchCount01++
+    }
+    // In old linear sliding window, matchCount01 would be seq0.length - 1 (e.g. 9 out of 9)
+    // With true shuffling, matchCount01 will be nearly 0
+    expect(matchCount01).toBeLessThan(seq0.length / 2)
+  })
+
+  it('generates completely different sequences across consecutive renders with different seeds', () => {
+    const pool = clips(15, 10)
+    const render1 = planVideoBatch({
+      clips: pool,
+      jobs: [{ jobIndex: 0, targetDurationSec: 80 }],
+      uniqueRequired: false,
+      requireUniqueSequences: true,
+      seed: 12345,
+    })
+    const render2 = planVideoBatch({
+      clips: pool,
+      jobs: [{ jobIndex: 0, targetDurationSec: 80 }],
+      uniqueRequired: false,
+      requireUniqueSequences: true,
+      seed: 67890,
+    })
+
+    const seq1 = render1.jobs[0].clips.map((c) => c.id)
+    const seq2 = render2.jobs[0].clips.map((c) => c.id)
+    expect(seq1).not.toEqual(seq2)
+    expect(render1.jobs[0].fingerprint).not.toBe(render2.jobs[0].fingerprint)
+  })
 })
+

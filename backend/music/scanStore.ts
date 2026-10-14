@@ -7,7 +7,12 @@ import type { ScanMusicConfig, ScanMusicResult } from './scanMusic'
 function isCurrentTrackId(track: ScanMusicResult['tracks'][number]): boolean {
   try {
     const canonicalPath = fs.realpathSync(track.path)
-    return track.id === createHash('md5').update(canonicalPath).digest('hex')
+    const rawHash = createHash('md5').update(canonicalPath).digest('hex')
+    if (track.id === rawHash) return true
+    if (track.genreId && track.id === createHash('md5').update(`${track.genreId}:${canonicalPath}`).digest('hex')) {
+      return true
+    }
+    return false
   } catch {
     return false
   }

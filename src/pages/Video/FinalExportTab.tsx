@@ -146,6 +146,7 @@ function FinalExportTab() {
   const [outputFilename, setOutputFilename] = useState('final_video.mp4')
   const [outputNamesText, setOutputNamesText] = useState<string>('') // nhiều tên, mỗi dòng 1 tên (tùy chọn)
   const [tracklistEnabled, setTracklistEnabled] = useState<boolean>(false)
+  const [shuffleVideoClips, setShuffleVideoClips] = useState<boolean>(true)
   const [forceReencode, setForceReencode] = useState<boolean>(false)
   const [normalizeAudio, setNormalizeAudio] = useState<boolean>(false)
   const [useGpuEncoding, setUseGpuEncoding] = useState<'auto' | 'gpu' | 'cpu'>('auto') // Default: auto (backward compatible)
@@ -827,6 +828,7 @@ function FinalExportTab() {
       imageSource: imageSource || undefined,
       outputFolder,
       outputFilename,
+      shuffle: shuffleVideoClips,
       outputNames: parsedOutputNames.length > 0 ? parsedOutputNames : undefined,
       endingAudio: endingAudioPaths.length > 0 ? { paths: endingAudioPaths } : undefined,
       tracklists: undefined,
@@ -1777,6 +1779,20 @@ function FinalExportTab() {
           </label>
           <div style={{ marginTop: '6px', fontSize: '12px', color: '#9f9f9f' }}>
             Nếu audio nguồn khớp với file đã export ở Tab 4, tracklist sẽ được tự tạo (mm:ss + tên bài) và lưu cạnh video.
+          </div>
+        </div>
+        <div style={{ marginTop: '16px' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600 }}>
+            <input
+              type="checkbox"
+              checked={shuffleVideoClips}
+              onChange={(e) => setShuffleVideoClips(e.target.checked)}
+              disabled={isExporting}
+            />{' '}
+            Xáo trộn thứ tự video
+          </label>
+          <div style={{ marginTop: '6px', fontSize: '12px', color: '#9f9f9f' }}>
+            Tự động xáo trộn và đa dạng hóa thứ tự video giữa các bài và các lần xuất, tránh trùng lặp.
           </div>
         </div>
         <div style={{ marginTop: '16px' }}>

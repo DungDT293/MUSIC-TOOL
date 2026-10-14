@@ -329,7 +329,7 @@ export default function PoolMonitorTab() {
                     <span style={{ color: '#94a3b8' }} title={b.rootVideo}>{formatPath(b.rootVideo)}</span>
                   </div>
                   <div>
-                    <span style={{ color: '#64748b' }}>📂 Xuất: </span>
+                    <span style={{ color: '#64748b' }}>Xuất: </span>
                     <span style={{ color: '#94a3b8' }} title={b.rootFinal}>{formatPath(b.rootFinal)}</span>
                   </div>
                   {b.priorityVideoFolder && (

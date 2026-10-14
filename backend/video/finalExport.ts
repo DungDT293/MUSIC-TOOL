@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { createHash, randomUUID } from 'node:crypto'
+import { createHash, randomUUID, randomBytes } from 'node:crypto'
 import { app } from 'electron'
 import { getFfmpegPaths } from '../ffmpeg/config'
 import { probeFile } from '../ffmpeg/probe'
@@ -75,6 +75,7 @@ function describeAudioFailure(pathValue: string, stage: FinalExportAudioFailure[
 
 interface PreparedVideoClips {
   clips: ValidatedInputFile[]
+  invalidDetails?: InvalidInputFile[]
 }
 
 export interface FinalExportEmitter {
@@ -118,6 +119,7 @@ export interface ExportPlan {
   requestedAudioCount: number
   acceptedAudioCount: number
   audioFailures: FinalExportAudioFailure[]
+  invalidVideoFiles?: InvalidInputFile[]
   totalAudioDurationSec: number
   totalVideoDurationSec: number
   endingAudioItems?: AudioSourceItem[]
@@ -818,14 +820,26 @@ async function loadAudioFiles(source: FinalExportRequestPayload['audioSource']):
     await collectFromPaths(Array.from(new Set(list)))
   } else if (source.type === 'folder') {
     await ensurePathKind(source.path, 'dir')
-    const entries = await fsp.readdir(source.path, { withFileTypes: true })
     const paths: string[] = []
-    for (const entry of entries) {
-      if (!entry.isFile()) continue
-      const ext = path.extname(entry.name).toLowerCase()
-      if (!AUDIO_EXTS.has(ext)) continue
-      paths.push(path.join(source.path, entry.name))
+    const scanAudioRecursively = async (dir: string) => {
+      try {
+        const entries = await fsp.readdir(dir, { withFileTypes: true })
+        for (const entry of entries) {
+          const fullPath = path.join(dir, entry.name)
+          if (entry.isDirectory()) {
+            await scanAudioRecursively(fullPath)
+          } else if (entry.isFile()) {
+            const ext = path.extname(entry.name).toLowerCase()
+            if (AUDIO_EXTS.has(ext)) {
+              paths.push(fullPath)
+            }
+          }
+        }
+      } catch (err) {
+        console.warn(`[FinalExport] Bỏ qua thư mục con audio không đọc được: ${dir}`, err)
+      }
     }
+    await scanAudioRecursively(source.path)
     await collectFromPaths(Array.from(new Set(paths)))
   } else {
     throw new Error('Loại nguồn audio không được hỗ trợ.')
@@ -864,13 +878,25 @@ async function loadVideoClips(source: FinalExportRequestPayload['videoSource']):
     videoPaths = Array.from(new Set(list))
   } else if (source.type === 'folder') {
     await ensurePathKind(source.path, 'dir')
-    const entries = await fsp.readdir(source.path, { withFileTypes: true })
-    for (const entry of entries) {
-      if (!entry.isFile()) continue
-      const ext = path.extname(entry.name).toLowerCase()
-      if (!VIDEO_EXTS.has(ext)) continue
-      videoPaths.push(path.join(source.path, entry.name))
+    const scanFolderRecursively = async (dir: string) => {
+      try {
+        const entries = await fsp.readdir(dir, { withFileTypes: true })
+        for (const entry of entries) {
+          const fullPath = path.join(dir, entry.name)
+          if (entry.isDirectory()) {
+            await scanFolderRecursively(fullPath)
+          } else if (entry.isFile()) {
+            const ext = path.extname(entry.name).toLowerCase()
+            if (VIDEO_EXTS.has(ext)) {
+              videoPaths.push(fullPath)
+            }
+          }
+        }
+      } catch (err) {
+        console.warn(`[FinalExport] Bỏ qua thư mục con không đọc được: ${dir}`, err)
+      }
     }
+    await scanFolderRecursively(source.path)
     videoPaths = Array.from(new Set(videoPaths))
   } else {
     throw new Error('Loại nguồn video không được hỗ trợ.')
@@ -882,8 +908,11 @@ async function loadVideoClips(source: FinalExportRequestPayload['videoSource']):
 
   const { valid, invalidDetails } = await validateInputFiles(videoPaths, 8)
   if (invalidDetails.length > 0) {
-    // Do not silently drop bad clips: user must see exact paths before export continues.
-    throw new Error(formatInvalidVideoDetails(invalidDetails))
+    console.warn(
+      `[FinalExport] Phát hiện ${invalidDetails.length} video lỗi/hỏng; tự động bỏ qua và bù đắp bằng các video hợp lệ:\n` +
+      invalidDetails.slice(0, 10).map((item, idx) => `  ${idx + 1}. ${item.path} — ${item.reason}`).join('\n') +
+      (invalidDetails.length > 10 ? `\n  ... và ${invalidDetails.length - 10} video khác.` : '')
+    )
   }
   if (valid.length === 0) {
     throw new Error(
@@ -896,10 +925,13 @@ async function loadVideoClips(source: FinalExportRequestPayload['videoSource']):
   if (source.type === 'files') {
     // Probes finish concurrently; restore caller order so Autopilot pool order reaches concat.
     const byPath = new Map(valid.map((clip) => [clip.path, clip]))
-    return { clips: videoPaths.map((filePath) => byPath.get(filePath)).filter((clip): clip is ValidatedInputFile => !!clip) }
+    return {
+      clips: videoPaths.map((filePath) => byPath.get(filePath)).filter((clip): clip is ValidatedInputFile => !!clip),
+      invalidDetails,
+    }
   }
   valid.sort((a, b) => a.path.localeCompare(b.path, undefined, { numeric: true, sensitivity: 'base' }))
-  return { clips: valid }
+  return { clips: valid, invalidDetails }
 }
 
 async function loadImageFiles(source: FinalExportRequestPayload['imageSource']): Promise<{ path: string; width: number | null; height: number | null }[]> {
@@ -989,20 +1021,23 @@ async function scanImageSourceForPlan(
 }
 
 /**
- * Scan video source và trả về VideoClipItem[]
+ * Scan video source và trả về VideoClipItem[] cùng danh sách file lỗi
  * Support: file, folder, hoặc array paths
  */
 async function scanVideoSourceForPlan(
   videoSource: FinalExportRequestPayload['videoSource']
-): Promise<VideoClipItem[]> {
+): Promise<{ clips: VideoClipItem[]; invalidDetails: InvalidInputFile[] }> {
   const videoClips = await loadVideoClips(videoSource)
-  return videoClips.clips.map(c => ({
-    path: c.path,
-    durationSec: c.durationSec,
-    sizeBytes: typeof c.sizeBytes === 'number' ? c.sizeBytes : null,
-    width: typeof c.width === 'number' ? c.width : null,
-    height: typeof c.height === 'number' ? c.height : null,
-  }))
+  return {
+    clips: videoClips.clips.map(c => ({
+      path: c.path,
+      durationSec: c.durationSec,
+      sizeBytes: typeof c.sizeBytes === 'number' ? c.sizeBytes : null,
+      width: typeof c.width === 'number' ? c.width : null,
+      height: typeof c.height === 'number' ? c.height : null,
+    })),
+    invalidDetails: videoClips.invalidDetails ?? [],
+  }
 }
 
 /**
@@ -1079,16 +1114,22 @@ export async function planFinalExport(
   }
   
   // 2. Scan video (probe 1 lần). Slideshow mode may omit videoSource.
-  const videoClips: VideoClipItem[] = videoSource
+  const scannedVideo = videoSource
     ? await scanVideoSourceForPlan(videoSource)
-    : []
+    : { clips: [], invalidDetails: [] }
+  const videoClips: VideoClipItem[] = scannedVideo.clips
+  const invalidVideoFiles: InvalidInputFile[] = [...scannedVideo.invalidDetails]
   if (requestId && videoJobManager.isCancelled(requestId)) {
     throw new Error('Đã dừng bởi người dùng')
   }
   let priorityVideoClips: VideoClipItem[] | undefined
   if (priorityVideoSource) {
     try {
-      priorityVideoClips = await scanVideoSourceForPlan(priorityVideoSource)
+      const scannedPriority = await scanVideoSourceForPlan(priorityVideoSource)
+      priorityVideoClips = scannedPriority.clips
+      if (scannedPriority.invalidDetails.length > 0) {
+        invalidVideoFiles.push(...scannedPriority.invalidDetails)
+      }
       console.log(`[FinalExport] Đã quét ${priorityVideoClips.length} priority video clips từ:`, priorityVideoSource)
       if (priorityVideoClips.length > 0) {
         console.log(`[FinalExport] Priority clips đầu tiên:`, priorityVideoClips.slice(0, 3).map(c => path.basename(c.path)))
@@ -1210,6 +1251,7 @@ export async function planFinalExport(
       uniqueRequired,
       requireUniqueSequences: !uniqueRequired && !!existingSequenceFingerprints,
       existingFingerprints: existingSequenceFingerprints,
+      seed: Date.now() ^ randomBytes(4).readUInt32BE(0),
     })
     const jobsByIndex = new Map(jobs.map((job) => [job.jobIndex, job]))
     for (const plannedJob of planned.jobs) {
@@ -1236,6 +1278,7 @@ export async function planFinalExport(
     requestedAudioCount: audioScan.requestedCount,
     acceptedAudioCount: audioItems.length,
     audioFailures: audioScan.failures,
+    invalidVideoFiles,
     totalAudioDurationSec,
     totalVideoDurationSec,
     endingAudioItems,
@@ -1633,7 +1676,8 @@ export async function executeFinalExport(
         const rotatedPriorityClips = priorityOffset === 0
           ? jobPriorityClips
           : [...jobPriorityClips.slice(priorityOffset), ...jobPriorityClips.slice(0, priorityOffset)]
-        const prioritySeed = Date.now() + job.jobIndex * 1000000 + Math.random() * 1000
+        const priorityEntropy = randomBytes(4).readUInt32BE(0)
+        const prioritySeed = Date.now() + job.jobIndex * 1000000 + priorityEntropy
         const priorityPlaylist = buildPlaylistToFillDuration(rotatedPriorityClips, targetDurationSec, shuffle, prioritySeed)
         const priorityDuration = priorityPlaylist.reduce((sum, c) => sum + c.durationSec, 0)
         const remainingTarget = Math.max(0, targetDurationSec - priorityDuration)
@@ -1653,19 +1697,19 @@ export async function executeFinalExport(
               if (stillRemaining > 0 && jobNonPriorityClips.length > 1) {
                 // Dùng các clip non-priority còn lại (trừ mappedClip đã dùng)
                 const remainingNonPriority = jobNonPriorityClips.filter(c => c.path !== mappedClip.path)
-                const loopSeed = Date.now() + job.jobIndex * 2000000 + Math.random() * 1000
+                const loopSeed = Date.now() + job.jobIndex * 2000000 + randomBytes(4).readUInt32BE(0)
                 const additional = buildPlaylistToFillDuration(remainingNonPriority, stillRemaining, shuffle, loopSeed)
                 loopPlaylist.push(...additional)
               }
             } else {
               // Video tương ứng quá dài hoặc không phù hợp → loop từ nonPriorityClips
-              const loopSeed = Date.now() + job.jobIndex * 2000000 + Math.random() * 1000
+              const loopSeed = Date.now() + job.jobIndex * 2000000 + randomBytes(4).readUInt32BE(0)
               loopPlaylist = buildPlaylistToFillDuration(jobNonPriorityClips, remainingTarget, shuffle, loopSeed)
             }
           } else {
             // Không map 1-1 hoặc không có nonPriorityClips → loop từ nonPriorityClips (hoặc baseClips nếu không có priority)
             const loopSource = jobNonPriorityClips.length > 0 ? jobNonPriorityClips : jobBaseClips
-            const loopSeed = Date.now() + job.jobIndex * 2000000 + Math.random() * 1000
+            const loopSeed = Date.now() + job.jobIndex * 2000000 + randomBytes(4).readUInt32BE(0)
             loopPlaylist = buildPlaylistToFillDuration(loopSource, remainingTarget, shuffle, loopSeed)
           }
         }
@@ -1681,6 +1725,7 @@ export async function executeFinalExport(
         }
       } else {
         // Không có priority clips → giữ logic cũ
+        const defaultJobSeed = Date.now() + job.jobIndex * 2000000 + randomBytes(4).readUInt32BE(0)
         if (canMapOneToOneForJob) {
           // Map 1-1: clip tương ứng đi TRƯỚC, sau đó fill phần còn lại bằng các clip khác
           const mappedClip = jobBaseClips[Math.min(job.jobIndex, jobBaseClips.length - 1)]
@@ -1695,15 +1740,14 @@ export async function executeFinalExport(
               // Dùng tất cả các clip còn lại (trừ mappedClip) để fill phần còn lại
               const restClips = jobBaseClips.filter(c => c.path !== mappedClip.path)
               const loopSource = restClips.length > 0 ? restClips : jobBaseClips
-              const loopSeed = Date.now() + job.jobIndex * 2000000 + Math.random() * 1000
-              const fillClips = buildPlaylistToFillDuration(loopSource, remainingTarget, true, loopSeed)
+              const fillClips = buildPlaylistToFillDuration(loopSource, remainingTarget, true, defaultJobSeed)
               videoPlaylist.push(...fillClips)
             }
           } else {
-            videoPlaylist = buildPlaylistToFillDuration(jobBaseClips, targetDurationSec, shuffle)
+            videoPlaylist = buildPlaylistToFillDuration(jobBaseClips, targetDurationSec, shuffle, defaultJobSeed)
           }
         } else {
-          videoPlaylist = buildPlaylistToFillDuration(jobBaseClips, targetDurationSec, shuffle)
+          videoPlaylist = buildPlaylistToFillDuration(jobBaseClips, targetDurationSec, shuffle, defaultJobSeed)
         }
       }
       
@@ -2198,6 +2242,38 @@ export async function executeFinalExport(
         console.warn(`[FinalExport] Không thể xóa ${failedFiles.length} file:`, failedFiles)
       }
     }
+
+    // Tự động xóa tất cả các file hỏng/lỗi (cả audio và video) đã phát hiện trong quá trình scan hoặc render
+    // Giúp người dùng hoàn thành công việc sạch sẽ, không bị vướng lỗi cho các lần chạy sau
+    const corruptFilesToDelete = new Set<string>()
+    if (plan.audioFailures && plan.audioFailures.length > 0) {
+      for (const f of plan.audioFailures) {
+        if (f?.path) corruptFilesToDelete.add(f.path)
+      }
+    }
+    if (plan.invalidVideoFiles && plan.invalidVideoFiles.length > 0) {
+      for (const f of plan.invalidVideoFiles) {
+        if (f?.path) corruptFilesToDelete.add(f.path)
+      }
+    }
+    for (const p of quarantinedClipPaths) {
+      if (p) corruptFilesToDelete.add(p)
+    }
+
+    if (corruptFilesToDelete.size > 0) {
+      console.log(`[FinalExport][AutoClean] Phát hiện ${corruptFilesToDelete.size} file hỏng. Tự động xóa khỏi ổ đĩa...`)
+      for (const corruptedPath of corruptFilesToDelete) {
+        try {
+          await fsp.unlink(corruptedPath)
+          console.log(`[FinalExport][AutoClean] Đã tự động xóa file lỗi: ${corruptedPath}`)
+        } catch (cleanErr: any) {
+          if (cleanErr?.code !== 'ENOENT') {
+            console.warn(`[FinalExport][AutoClean] Không thể xóa file lỗi ${corruptedPath}:`, cleanErr?.message || cleanErr)
+          }
+        }
+      }
+    }
+
     return donePayload
   } catch (error: any) {
     // NOTE: Không gọi emitter.error() ở đây — hàm gọi (exportFinalVideo) sẽ catch

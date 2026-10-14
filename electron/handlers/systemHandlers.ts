@@ -315,21 +315,29 @@ export function registerSystemHandlers(getMainWindow: () => Electron.BrowserWind
   // Video file listing helpers
   const VIDEO_EXTS = new Set(['.mp4', '.mkv', '.mov', '.m4v', '.avi', '.wmv', '.webm'])
 
-  // listVideosInFolder: redirect tới cùng handler với listVideosInFolderSimple (logic giống hệt)
+  // listVideosInFolder: redirect tới cùng handler với listVideosInFolderSimple (logic giống hệt, quét cả thư mục con)
   const listVideoHandler = async (_event: Electron.IpcMainInvokeEvent, folderPath: string) => {
     try {
       if (!isValidAbsolutePath(folderPath)) return []
-      const entries = fs.readdirSync(folderPath, { withFileTypes: true })
       const files: Array<{ path: string; fileName: string; sizeBytes: number }> = []
-      for (const entry of entries) {
-        if (!entry.isFile()) continue
-        const ext = path.extname(entry.name).toLowerCase()
-        if (!VIDEO_EXTS.has(ext)) continue
-        const full = path.join(folderPath, entry.name)
-        let sizeBytes = 0
-        try { sizeBytes = fs.statSync(full).size } catch {}
-        files.push({ path: full, fileName: entry.name, sizeBytes })
+      const scanDir = (dir: string) => {
+        try {
+          const entries = fs.readdirSync(dir, { withFileTypes: true })
+          for (const entry of entries) {
+            const full = path.join(dir, entry.name)
+            if (entry.isDirectory()) {
+              scanDir(full)
+            } else if (entry.isFile()) {
+              const ext = path.extname(entry.name).toLowerCase()
+              if (!VIDEO_EXTS.has(ext)) continue
+              let sizeBytes = 0
+              try { sizeBytes = fs.statSync(full).size } catch {}
+              files.push({ path: full, fileName: entry.name, sizeBytes })
+            }
+          }
+        } catch {}
       }
+      scanDir(folderPath)
       return files
     } catch (err) {
       console.error('[IPC] video:listVideosInFolder error', err)
@@ -401,38 +409,151 @@ export function registerSystemHandlers(getMainWindow: () => Electron.BrowserWind
     }
   })
 
-  // ─── Video Audit & Delete ─────────────────────────────────────────────────
+  // ─── Video & Audio Audit & Delete ──────────────────────────────────────────
+  const AUDIO_EXTS = new Set(['.mp3', '.wav', '.m4a', '.aac', '.flac', '.ogg', '.wma', '.aiff', '.alac'])
+
+  ipcMain.handle('media:listMediaFilesInFolder', async (_event, folderPath: string, mode?: 'all' | 'video' | 'audio') => {
+    try {
+      if (!isValidAbsolutePath(folderPath)) return []
+      const files: Array<{ path: string; fileName: string; sizeBytes: number; kind: 'video' | 'audio' }> = []
+      const scanMode = mode || 'all'
+
+      const scanDir = (dir: string) => {
+        try {
+          const entries = fs.readdirSync(dir, { withFileTypes: true })
+          for (const entry of entries) {
+            const full = path.join(dir, entry.name)
+            if (entry.isDirectory()) {
+              scanDir(full)
+            } else if (entry.isFile()) {
+              const ext = path.extname(entry.name).toLowerCase()
+              const isVideo = VIDEO_EXTS.has(ext)
+              const isAudio = AUDIO_EXTS.has(ext)
+
+              if (scanMode === 'video' && !isVideo) continue
+              if (scanMode === 'audio' && !isAudio) continue
+              if (scanMode === 'all' && !isVideo && !isAudio) continue
+
+              let sizeBytes = 0
+              try { sizeBytes = fs.statSync(full).size } catch {}
+              files.push({
+                path: full,
+                fileName: entry.name,
+                sizeBytes,
+                kind: isVideo ? 'video' : 'audio',
+              })
+            }
+          }
+        } catch (dirErr) {
+          console.warn(`[IPC] media:listMediaFilesInFolder skip unreadable dir: ${dir}`, dirErr)
+        }
+      }
+
+      scanDir(folderPath)
+      return files
+    } catch (err) {
+      console.error('[IPC] media:listMediaFilesInFolder error', err)
+      return []
+    }
+  })
+
   ipcMain.handle('video:auditFolder', async (_event, filePaths: string[]) => {
     try {
       const paths = Array.isArray(filePaths) ? filePaths.filter(isValidAbsolutePath) : []
-      const valid: Array<VideoFileInfo & { path: string }> = []
+      const valid: Array<any> = []
       const invalid: string[] = []
-      const invalidDetails: Array<{ path: string; reason: string }> = []
+      const invalidDetails: Array<{ path: string; reason: string; kind?: 'video' | 'audio' }> = []
 
-      // Concurrent probe với limit = 8
-      const queue = [...paths]
-      const workers = Array.from({ length: Math.min(8, queue.length || 1) }, async () => {
-        while (queue.length > 0) {
-          const p = queue.shift()
-          if (!p) break
+      // Concurrent probe với sliding window / worker limit = 16
+      let nextIndex = 0
+      const workerCount = Math.min(16, paths.length || 1)
+      const workers = Array.from({ length: workerCount }, async () => {
+        while (nextIndex < paths.length) {
+          const currentIndex = nextIndex++
+          if (currentIndex >= paths.length) break
+          const p = paths[currentIndex]
+          if (!p) continue
+          const ext = path.extname(p).toLowerCase()
+          const isAudio = AUDIO_EXTS.has(ext)
+          const isVideo = VIDEO_EXTS.has(ext)
+
           try {
-            const info = await getVideoFileInfo(p)
-            const hasUsableDuration = !!(info.durationSec && info.durationSec > 0)
-            const hasUsableVideoStream = !!(info.width && info.height && info.codecName)
-            if (hasUsableDuration && hasUsableVideoStream) {
-              valid.push({ ...info, path: p })
-            } else {
-              const reason = !hasUsableDuration
-                ? 'Video không có duration hợp lệ.'
-                : 'Video không có stream hình ảnh hợp lệ (thiếu width/height/codec).'
+            let statSize = 0
+            try {
+              statSize = fs.statSync(p).size
+            } catch {
               invalid.push(p)
-              invalidDetails.push({ path: p, reason })
+              invalidDetails.push({ path: p, reason: 'File không tồn tại hoặc không thể đọc', kind: isAudio ? 'audio' : 'video' })
+              continue
+            }
+
+            if (statSize === 0) {
+              invalid.push(p)
+              invalidDetails.push({ path: p, reason: 'File rỗng (0 byte - không có dữ liệu)', kind: isAudio ? 'audio' : 'video' })
+              continue
+            }
+
+            if (isAudio) {
+              // Rà soát file audio
+              try {
+                const probeRes = await probeFile(p)
+                const hasUsableDuration = !!(probeRes.format?.duration && probeRes.format.duration > 0)
+                const hasAudioStream = !!(probeRes.audio && probeRes.audio.codec)
+
+                if (hasUsableDuration && hasAudioStream) {
+                  valid.push({
+                    path: p,
+                    durationSec: probeRes.format.duration,
+                    codecName: probeRes.audio?.codec,
+                    formatName: probeRes.format?.format_name,
+                    sizeBytes: statSize,
+                    kind: 'audio',
+                  })
+                } else {
+                  const reason = !hasUsableDuration
+                    ? 'Audio không có duration hợp lệ.'
+                    : 'Audio không có stream âm thanh hợp lệ (thiếu codec).'
+                  invalid.push(p)
+                  invalidDetails.push({ path: p, reason, kind: 'audio' })
+                }
+              } catch (audioErr: any) {
+                invalid.push(p)
+                invalidDetails.push({
+                  path: p,
+                  reason: `Không probe được audio (lỗi cấu trúc hoặc hỏng file): ${audioErr?.message || audioErr}`,
+                  kind: 'audio',
+                })
+              }
+            } else {
+              // Rà soát file video (mặc định)
+              try {
+                const info = await getVideoFileInfo(p)
+                const hasUsableDuration = !!(info.durationSec && info.durationSec > 0)
+                const hasUsableVideoStream = !!(info.width && info.height && info.codecName)
+                if (hasUsableDuration && hasUsableVideoStream) {
+                  valid.push({ ...info, path: p, kind: 'video' })
+                } else {
+                  const reason = !hasUsableDuration
+                    ? 'Video không có duration hợp lệ.'
+                    : 'Video không có stream hình ảnh hợp lệ (thiếu width/height/codec).'
+                  invalid.push(p)
+                  invalidDetails.push({ path: p, reason, kind: 'video' })
+                }
+              } catch (videoErr: any) {
+                invalid.push(p)
+                invalidDetails.push({
+                  path: p,
+                  reason: `Không probe được video (lỗi cấu trúc hoặc hỏng container): ${videoErr?.message || videoErr}`,
+                  kind: 'video',
+                })
+              }
             }
           } catch (error) {
             invalid.push(p)
             invalidDetails.push({
               path: p,
-              reason: `Không probe được video: ${error instanceof Error ? error.message : String(error)}`,
+              reason: `Không thể kiểm tra file: ${error instanceof Error ? error.message : String(error)}`,
+              kind: isAudio ? 'audio' : 'video',
             })
           }
         }
@@ -450,23 +571,23 @@ export function registerSystemHandlers(getMainWindow: () => Electron.BrowserWind
     let deleted = 0
     const errors: Array<{ path: string; message: string }> = []
 
-    // Dùng path.normalize thay vì path.resolve cho UNC paths
-    // path.resolve('\\server\share') → 'E:\server\share' (sai!)
-    // path.normalize('\\server\share') → '\\server\share' (đúng)
     const safeRoot = rootDir && isValidAbsolutePath(rootDir) ? path.normalize(rootDir) : null
     const pathsToDelete = Array.isArray(filePaths) ? filePaths : []
 
     for (const fp of pathsToDelete) {
-      // Validate mỗi path riêng biệt (không dùng optional chaining để bỏ qua)
       if (!isValidAbsolutePath(fp)) {
         errors.push({ path: fp, message: 'Đường dẫn không hợp lệ' })
         continue
       }
 
-      // Nếu rootDir được cung cấp, đảm bảo file nằm trong rootDir
+      // Nếu rootDir được cung cấp, đảm bảo file nằm trong rootDir (hỗ trợ case-insensitive trên Windows)
       if (safeRoot) {
         const normalized = path.normalize(fp)
-        if (!normalized.startsWith(safeRoot + path.sep) && normalized !== safeRoot) {
+        const isInside = process.platform === 'win32'
+          ? (normalized.toLowerCase().startsWith((safeRoot + path.sep).toLowerCase()) || normalized.toLowerCase() === safeRoot.toLowerCase())
+          : (normalized.startsWith(safeRoot + path.sep) || normalized === safeRoot)
+
+        if (!isInside) {
           errors.push({ path: fp, message: 'File nằm ngoài thư mục cho phép' })
           continue
         }

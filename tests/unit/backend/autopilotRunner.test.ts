@@ -212,3 +212,92 @@ describe('autopilotRunner.validateAutopilotStartConfig', () => {
     await expect(validateAutopilotStartConfig(config as any)).rejects.toThrow('Thư mục gốc Video đã cắt')
   })
 })
+
+describe('Autopilot - exportAudio scanResult in-memory synchronization', () => {
+  it('exportPlaylistToFile uses req.scanResult instead of disk scanStore when provided', async () => {
+    const { exportPlaylistToFile } = await import('../../../backend/music/exportAudio')
+    const playlistEngine = await import('../../../backend/music/playlistEngine')
+    const scanStore = await import('../../../backend/music/scanStore')
+    const probe = await import('../../../backend/ffmpeg/probe')
+    const ffmpegWrapper = await import('../../../backend/ffmpeg/wrapper')
+
+    const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'autopilot-sync-'))
+    tempDirs.push(tempRoot)
+    const outDir = path.join(tempRoot, 'out')
+    await fsp.mkdir(outDir, { recursive: true })
+
+    const autoTrack1 = path.join(tempRoot, 'auto1.m4a')
+    const autoTrack2 = path.join(tempRoot, 'auto2.m4a')
+    const autoFiller = path.join(tempRoot, 'auto_filler.m4a')
+    await Promise.all([
+      fsp.writeFile(autoTrack1, 'a1'),
+      fsp.writeFile(autoTrack2, 'a2'),
+      fsp.writeFile(autoFiller, 'af'),
+    ])
+
+    const autopilotScanResult: any = {
+      tracks: [
+        { id: 'a1', path: autoTrack1, fileName: 'auto1.m4a', folderType: 'priority', genreId: 'autopilot', genreName: 'Autopilot', duration: 60, size: 10, codec: 'aac' },
+        { id: 'a2', path: autoTrack2, fileName: 'auto2.m4a', folderType: 'priority', genreId: 'autopilot', genreName: 'Autopilot', duration: 60, size: 10, codec: 'aac' },
+        { id: 'af', path: autoFiller, fileName: 'auto_filler.m4a', folderType: 'random', genreId: 'autopilot', genreName: 'Autopilot', duration: 60, size: 10, codec: 'aac' },
+      ],
+      summary: { priorityCount: 2, randomCount: 1, totalCount: 3, priorityDuration: 120, randomDuration: 60, totalDuration: 180 },
+    }
+
+    // Disk store has completely unrelated tracks (e.g. from an old manual scan)
+    const diskScanResult: any = {
+      tracks: [
+        { id: 'intruder', path: path.join(tempRoot, 'intruder.m4a'), fileName: 'intruder.m4a', folderType: 'priority', genreId: 'other', genreName: 'Other', duration: 100, size: 10, codec: 'aac' },
+      ],
+      summary: { priorityCount: 1, randomCount: 0, totalCount: 1, priorityDuration: 100, randomDuration: 0, totalDuration: 100 },
+    }
+    const { vi } = await import('vitest')
+    vi.spyOn(scanStore, 'loadScanResult').mockReturnValue(diskScanResult)
+    vi.spyOn(probe, 'probeFile').mockResolvedValue({ format: { duration: 180, size: 1000 }, audio: { codec: 'aac' } } as any)
+    vi.spyOn(ffmpegWrapper, 'runFfmpeg').mockImplementation(async ({ args }: any) => {
+      const out = args?.[args.length - 1]
+      if (out && typeof out === 'string' && !out.startsWith('-')) {
+        await fsp.writeFile(out, 'fake out')
+      }
+      return { code: 0, stdout: '', stderr: '' } as any
+    })
+
+    const mockPlaylist: any = {
+      id: 'pl-auto-1',
+      name: 'Autopilot - Playlist 1',
+      targetDurationSec: 180,
+      totalDurationSec: 120,
+      priorityDurationSec: 120,
+      randomDurationSec: 0,
+      priorityCount: 2,
+      randomCount: 0,
+      genreId: 'autopilot',
+      genreName: 'Autopilot',
+      genreSettings: { smoothTransitions: true, crossfadeDurationSec: 4, normalizeLoudness: false },
+      createdAt: Date.now(),
+      tracks: [
+        { ...autopilotScanResult.tracks[0], order: 1, cumulativeDuration: 60 },
+        { ...autopilotScanResult.tracks[1], order: 2, cumulativeDuration: 120 },
+      ],
+    }
+    vi.spyOn(playlistEngine, 'getPlaylistById').mockReturnValue(mockPlaylist)
+
+    const result = await exportPlaylistToFile({
+      playlistId: 'pl-auto-1',
+      outputDir: outDir,
+      fileName: '0212_P01',
+      format: 'aac',
+      bitrateKbps: 384,
+      smoothTransitions: true,
+      crossfadeDurationSec: 4,
+      scanResult: autopilotScanResult,
+    })
+
+    expect(result.success).toBe(true)
+    const runFfmpegMock = vi.mocked(ffmpegWrapper.runFfmpeg)
+    const lastCall = runFfmpegMock.mock.calls[runFfmpegMock.mock.calls.length - 1]?.[0]
+    // Verify that the filler track picked is autoFiller, NOT the intruder from disk!
+    expect(lastCall.args).toContain(autoFiller)
+    expect(lastCall.args.join(' ')).not.toContain('intruder.m4a')
+  })
+})

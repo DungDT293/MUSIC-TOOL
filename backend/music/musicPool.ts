@@ -77,27 +77,15 @@ function savePoolStore(store: MusicPoolStore): void {
 
 /**
  * Sort tracks theo thứ tự LRU-tiered:
- *   Tier 0: chưa bao giờ dùng → đầu tiên (shuffled within tier)
- *   Tier 1: dùng > 7 ngày trước → tiếp theo (shuffled within tier)
- *   Tier 2: dùng gần đây → cuối cùng (shuffled within tier)
- *
- * Shuffle trong mỗi tier để có sự đa dạng trong phiên.
+ *   Tier 0: chưa bao giờ dùng → đầu tiên (giữ thứ tự ổn định)
+ *   Tier 1: dùng > 7 ngày trước → tiếp theo (sắp xếp theo thời gian dùng cũ nhất trước)
+ *   Tier 2: dùng gần đây → cuối cùng (sắp xếp theo thời gian dùng cũ nhất trước)
  */
 export function sortByLRU(tracks: ScannedTrack[]): ScannedTrack[] {
   if (tracks.length === 0) return tracks
 
   const store = loadPoolStore()
   const now = Date.now()
-
-  // Fisher-Yates shuffle
-  function shuffleArr<T>(arr: T[]): T[] {
-    const a = [...arr]
-    for (let i = a.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1))
-      ;[a[i], a[j]] = [a[j], a[i]]
-    }
-    return a
-  }
 
   const tier0: ScannedTrack[] = []  // chưa bao giờ dùng
   const tier1: ScannedTrack[] = []  // dùng > 7 ngày trước
@@ -116,8 +104,11 @@ export function sortByLRU(tracks: ScannedTrack[]): ScannedTrack[] {
     }
   }
 
-  // Shuffle within each tier for intra-session variety
-  return [...shuffleArr(tier0), ...shuffleArr(tier1), ...shuffleArr(tier2)]
+  // Sắp xếp các tier đã dùng theo thời gian dùng cũ nhất lên trước (LRU)
+  tier1.sort((a, b) => (store.entries[a.id]?.lastUsedAt ?? 0) - (store.entries[b.id]?.lastUsedAt ?? 0))
+  tier2.sort((a, b) => (store.entries[a.id]?.lastUsedAt ?? 0) - (store.entries[b.id]?.lastUsedAt ?? 0))
+
+  return [...tier0, ...tier1, ...tier2]
 }
 
 /**

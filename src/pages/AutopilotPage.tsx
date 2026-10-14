@@ -2580,7 +2580,7 @@ function AutopilotComingSoon() {
           textAlign: 'center',
         }}
       >
-        <div style={{ fontSize: '28px', marginBottom: '12px' }}>🚧</div>
+        
         <h2 style={{ margin: '0 0 8px 0', fontSize: '20px', fontWeight: 700 }}>
           Tính Năng Đang Được Phát Triển
         </h2>

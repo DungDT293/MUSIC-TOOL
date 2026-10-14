@@ -39,18 +39,11 @@ function formatDurationLong(seconds: number | undefined | null): string {
   return formatDuration(seconds)
 }
 
-/**
- * Sanitize tên file: bỏ dấu, ký tự đặc biệt, chuyển thành lowercase với underscore
- */
-function sanitizeFileName(name: string): string {
-  return name
-    .normalize('NFKD')
-    .replace(/[\u0300-\u036f]/g, '') // bỏ dấu
-    .replace(/[^a-zA-Z0-9\-_. ]/g, '') // bỏ ký tự lạ
-    .trim()
-    .replace(/\s+/g, '_')
-    .toLowerCase()
-}
+import {
+  sanitizeFileName,
+  buildPlaylistExportFileName,
+  resolveBatchFileNames,
+} from './exportNamingUtils'
 
 type AudioQuality = 'mp3_320' | 'aac_384'
 
@@ -58,6 +51,16 @@ function ExportAudioPage() {
   const [playlists, setPlaylists] = useState<PlaylistDefinition[]>([])
   const [selectedPlaylistIds, setSelectedPlaylistIds] = useState<string[]>([])
   const [genreOutputDirs, setGenreOutputDirs] = useState<Record<string, string>>({})
+  const [genreCustomNames, setGenreCustomNames] = useState<Record<string, string>>(() => {
+    try {
+      const saved = localStorage.getItem('export_genre_custom_names')
+      return saved ? JSON.parse(saved) : {}
+    } catch {
+      return {}
+    }
+  })
+  const [editingPlaylistId, setEditingPlaylistId] = useState<string | null>(null)
+  const [editingPlaylistName, setEditingPlaylistName] = useState<string>('')
   const [fileNamePrefix, setFileNamePrefix] = useState<string>('')
   const [quality, setQuality] = useState<AudioQuality>('aac_384')
   const [loading, setLoading] = useState<boolean>(false)
@@ -149,6 +152,58 @@ function ExportAudioPage() {
       setErrorMessage('Không chọn được thư mục.')
     }
   }
+
+  const handleSelectFolderForAllGenres = async () => {
+    try {
+      const dir = await window.api.selectFolder()
+      if (dir) {
+        setGenreOutputDirs((prev) => {
+          const next = { ...prev }
+          for (const g of genreGroups) {
+            next[g.id] = dir
+          }
+          return next
+        })
+        setErrorMessage(null)
+      }
+    } catch (err) {
+      console.error('[ExportAudio] selectFolderForAllGenres error', err)
+      setErrorMessage('Không chọn được thư mục.')
+    }
+  }
+
+  const handleUpdateGenreCustomName = (genreId: string, name: string) => {
+    setGenreCustomNames((prev) => {
+      const next = { ...prev, [genreId]: name }
+      try {
+        localStorage.setItem('export_genre_custom_names', JSON.stringify(next))
+      } catch {}
+      return next
+    })
+  }
+
+  const handleStartRename = (playlist: PlaylistDefinition) => {
+    setEditingPlaylistId(playlist.id)
+    setEditingPlaylistName(playlist.name)
+  }
+
+  const handleSaveRename = (playlistId: string) => {
+    const trimmed = editingPlaylistName.trim()
+    if (!trimmed) {
+      setEditingPlaylistId(null)
+      return
+    }
+    setPlaylists((prev) =>
+      prev.map((pl) => (pl.id === playlistId ? { ...pl, name: trimmed } : pl))
+    )
+    setEditingPlaylistId(null)
+  }
+
+  const handleCancelRename = () => {
+    setEditingPlaylistId(null)
+    setEditingPlaylistName('')
+  }
+
 
   const handleSelectHistoryOutputDir = async () => {
     try {
@@ -604,75 +659,205 @@ const selectedHistoryGenre = selectedHistoryPlaylist?.genreName || 'Playlist cũ
 
   const runExportQueue = async (playlistIds: string[]) => {
     if (playlistIds.length === 0) return
-    const queuedPlaylists = playlistIds.map((id) => playlists.find((item) => item.id === id)).filter((item): item is PlaylistDefinition => !!item)
+    const queuedPlaylists = playlistIds
+      .map((id) => playlists.find((item) => item.id === id))
+      .filter((item): item is PlaylistDefinition => !!item)
+
     if (queuedPlaylists.some((playlist) => !getPlaylistOutputDir(playlist))) {
       setErrorMessage('Vui lòng chọn thư mục xuất cho từng thể loại trước khi chạy.')
       return
     }
+
     cancelRequestedRef.current = false
     activeQueueRef.current = playlistIds
     lastExportConfigRef.current = { playlistIds }
     setLoading(true)
     setErrorMessage(null)
+    setDiskSpaceError(null)
     setSuccessMessage(null)
     setProgressText(null)
     setBatchStartTime(Date.now())
     setCurrentSpeedX(null)
     setRemainingSeconds(null)
     setTotalExportCount(playlistIds.length)
+
+    // Tự động phân giải tên file duy nhất theo từng thể loại, chống ghi đè 100%
+    const resolvedNames = resolveBatchFileNames(queuedPlaylists, getPlaylistOutputDir, {
+      commonPrefix: fileNamePrefix,
+      genreCustomNames,
+      quality,
+    })
+
     const results: string[] = []
     const errors: string[] = []
-    for (let i = 0; i < playlistIds.length; i++) {
-      if (cancelRequestedRef.current) break
-      const pl = playlists.find((item) => item.id === playlistIds[i])
-      if (!pl) continue
-      setCurrentExportIndex(i)
-      setActiveGenreId(pl.genreId || null)
-      setCurrentPlaylistStartTime(Date.now())
+
+    try {
+      for (let i = 0; i < playlistIds.length; i++) {
+        if (cancelRequestedRef.current) break
+        const pl = playlists.find((item) => item.id === playlistIds[i])
+        if (!pl) continue
+
+        setCurrentExportIndex(i)
+        setActiveGenreId(pl.genreId || null)
+        setCurrentPlaylistStartTime(Date.now())
+        setCurrentSpeedX(null)
+        setRemainingSeconds(null)
+        setCurrentProgress({
+          playlistId: pl.id,
+          name: pl.name,
+          currentSec: 0,
+          totalSec: pl.totalDurationSec ?? 0,
+          percent: 0,
+        })
+
+        const uniqueFileName = resolvedNames.get(pl.id) || sanitizeFileName(pl.name)
+        const useCrossfade = pl.genreSettings?.smoothTransitions ?? false
+        const useLoudnorm = pl.genreSettings?.normalizeLoudness ?? false
+        const exportMode = useLoudnorm
+          ? 'Loudnorm + re-encode'
+          : useCrossfade
+          ? 'Crossfade + re-encode'
+          : 'Stream-copy/AAC encode'
+
+        setProgressText(
+          `Đang xuất playlist ${i + 1}/${playlistIds.length}: ${pl.name} (${uniqueFileName}) · ${exportMode}`
+        )
+        setPlaylistStatuses((prev) => ({ ...prev, [pl.id]: 'running' }))
+
+        const req: ExportPlaylistRequest = {
+          playlistId: pl.id,
+          outputDir: getPlaylistOutputDir(pl),
+          fileName: uniqueFileName,
+          format: quality === 'mp3_320' ? 'mp3' : 'aac',
+          bitrateKbps: quality === 'mp3_320' ? 320 : 384,
+          smoothTransitions: useCrossfade,
+          crossfadeDurationSec: useCrossfade
+            ? Math.max(1, Math.min(10, pl.genreSettings?.crossfadeDurationSec ?? 4))
+            : undefined,
+          normalizeLoudness: useLoudnorm,
+          loudnessTargetLufs: useLoudnorm ? -14 : undefined,
+        }
+
+        try {
+          const reqWithMetadata = {
+            ...req,
+            playlistName: pl.name,
+            currentIndex: i,
+            totalCount: playlistIds.length,
+          } as any
+
+          const res = await window.api.exportPlaylist(reqWithMetadata)
+          if (!res || typeof res !== 'object') {
+            const errText = `${pl.name}: Response không hợp lệ từ backend`
+            errors.push(errText)
+            setPlaylistStatuses((prev) => ({ ...prev, [pl.id]: 'error' }))
+            setPlaylistErrors((prev) => ({ ...prev, [pl.id]: 'Response không hợp lệ từ backend' }))
+            continue
+          }
+
+          if (res.requestId) {
+            setCurrentJobId(res.requestId)
+          }
+
+          if (res.success && res.outputPath) {
+            results.push(res.outputPath)
+            setCurrentProgress((previous) =>
+              previous && previous.playlistId === pl.id
+                ? { ...previous, currentSec: previous.totalSec, percent: 100 }
+                : previous
+            )
+            setPlaylistStatuses((prev) => ({ ...prev, [pl.id]: 'completed' }))
+          } else {
+            const msg = res.error || 'Export playlist thất bại.'
+            if (msg.startsWith('CẢNH BÁO: Dung lượng ổ đĩa không đủ')) {
+              setDiskSpaceError(msg)
+            }
+            errors.push(`${pl.name}: ${msg}`)
+            setPlaylistStatuses((prev) => ({ ...prev, [pl.id]: 'error' }))
+            setPlaylistErrors((prev) => ({ ...prev, [pl.id]: msg }))
+          }
+        } catch (err: any) {
+          if (cancelRequestedRef.current) break
+          const message = err?.message || String(err)
+          if (message.startsWith('CẢNH BÁO: Dung lượng ổ đĩa không đủ')) {
+            setDiskSpaceError(message)
+          }
+          errors.push(`${pl.name}: ${message}`)
+          setPlaylistStatuses((prev) => ({ ...prev, [pl.id]: 'error' }))
+          setPlaylistErrors((prev) => ({ ...prev, [pl.id]: message }))
+        }
+      }
+
+      // Summary
+      let summaryText = ''
+      if (results.length > 0) {
+        setLastOutputDir(getPlaylistOutputDir(queuedPlaylists[queuedPlaylists.length - 1]) || null)
+        if (batchStartTime !== null) {
+          const totalElapsedSec = (Date.now() - batchStartTime) / 1000
+          const totalAudioSec = queuedPlaylists.reduce(
+            (sum, pl) => sum + (pl.totalDurationSec ?? 0),
+            0
+          )
+          if (totalElapsedSec > 0 && totalAudioSec > 0) {
+            const batchSpeedX = totalAudioSec / totalElapsedSec
+            const elapsedFormatted = formatSecondsHMS(totalElapsedSec)
+            summaryText = `\n\nHoàn thành ${results.length} playlist trong ${elapsedFormatted} (≈ ${batchSpeedX.toFixed(1)}× tổng thời lượng nhạc).`
+          }
+        }
+      }
+
+      if (!cancelRequestedRef.current && results.length > 0) {
+        setSuccessMessage(
+          `Đã xuất ${results.length}/${playlistIds.length} playlist:\n${results.join('\n')}${summaryText}`
+        )
+        if (historyVisible) {
+          const api = window.api
+          if (api?.music?.getExportHistory) {
+            api.music
+              .getExportHistory()
+              .then((list: any) => {
+                const sorted = (list || []).sort(
+                  (a: any, b: any) => b.exportedAt - a.exportedAt
+                )
+                setHistory(sorted)
+                if (sorted.length > 0) {
+                  const firstDate = new Date(sorted[0].exportedAt).toLocaleDateString()
+                  setSelectedDate(firstDate)
+                }
+              })
+              .catch((err: any) => {
+                console.error('[ExportAudio] Failed to refresh history:', err)
+              })
+          }
+        }
+      }
+      if (!cancelRequestedRef.current && errors.length > 0) {
+        setErrorMessage(`Playlist lỗi:\n${errors.join('\n')}`)
+      }
+    } finally {
+      setLoading(false)
+      setCurrentProgress(null)
+      setProgressText(null)
+      setCurrentPlaylistStartTime(null)
       setCurrentSpeedX(null)
       setRemainingSeconds(null)
-      setCurrentProgress({
-        playlistId: pl.id,
-        name: pl.name,
-        currentSec: 0,
-        totalSec: pl.totalDurationSec ?? 0,
-        percent: 0,
-      })
-      setProgressText(`Đang xuất playlist ${i + 1}/${playlistIds.length}: ${pl.name}`)
-      setPlaylistStatuses((prev) => ({ ...prev, [pl.id]: 'running' }))
-      const useCrossfade = pl.genreSettings?.smoothTransitions ?? false
-      const useLoudnorm = pl.genreSettings?.normalizeLoudness ?? false
-      const exportMode = useLoudnorm ? 'Loudnorm + re-encode' : useCrossfade ? 'Crossfade + re-encode' : 'Stream-copy/AAC encode'
-      setProgressText(`Đang xuất playlist ${i + 1}/${playlistIds.length}: ${pl.name} · ${exportMode}`)
-      const req: ExportPlaylistRequest = { playlistId: pl.id, outputDir: getPlaylistOutputDir(pl), fileName: `${fileNamePrefix.trim()}${sanitizeFileName(pl.name)}`, format: quality === 'mp3_320' ? 'mp3' : 'aac', bitrateKbps: quality === 'mp3_320' ? 320 : 384, smoothTransitions: useCrossfade, crossfadeDurationSec: useCrossfade ? Math.max(1, Math.min(10, pl.genreSettings?.crossfadeDurationSec ?? 4)) : undefined, normalizeLoudness: useLoudnorm, loudnessTargetLufs: useLoudnorm ? -14 : undefined }
-      try {
-        const res = await window.api.exportPlaylist({ ...req, currentIndex: i, totalCount: playlistIds.length } as any)
-        if (!res?.success || !res.outputPath) throw new Error(res?.error || 'Export playlist thất bại.')
-        results.push(res.outputPath)
-        setCurrentProgress((previous) => previous && previous.playlistId === pl.id ? { ...previous, currentSec: previous.totalSec, percent: 100 } : previous)
-        setPlaylistStatuses((prev) => ({ ...prev, [pl.id]: 'completed' }))
-      } catch (err: any) {
-        const message = err?.message || String(err)
-        errors.push(`${pl.name}: ${message}`)
-        setPlaylistStatuses((prev) => ({ ...prev, [pl.id]: 'error' }))
-        setPlaylistErrors((prev) => ({ ...prev, [pl.id]: message }))
+      setBatchStartTime(null)
+      setActiveGenreId(null)
+      setCurrentJobId(null)
+      if (window.api?.refreshDiskInfo) {
+        try {
+          await window.api.refreshDiskInfo()
+        } catch (err) {
+          console.error('[ExportAudio] refreshDiskInfo error:', err)
+        }
       }
     }
-    setLoading(false)
-    setCurrentProgress(null)
-    setProgressText(null)
-    setCurrentPlaylistStartTime(null)
-    setCurrentSpeedX(null)
-    setRemainingSeconds(null)
-    setBatchStartTime(null)
-    setActiveGenreId(null)
-    if (results.length && queuedPlaylists.length > 0) setLastOutputDir(getPlaylistOutputDir(queuedPlaylists[queuedPlaylists.length - 1]) || null)
-    if (results.length) setSuccessMessage(`Đã xuất ${results.length}/${playlistIds.length} playlist.`)
-    if (errors.length) setErrorMessage(`Playlist lỗi:\n${errors.join('\n')}`)
   }
 
   const handleRetryFailed = () => {
-    const failed = Object.entries(playlistStatuses).filter(([, status]) => status === 'error').map(([id]) => id)
+    const failed = Object.entries(playlistStatuses)
+      .filter(([, status]) => status === 'error')
+      .map(([id]) => id)
     void runExportQueue(failed)
   }
 
@@ -688,204 +873,15 @@ const selectedHistoryGenre = selectedHistoryPlaylist?.genreName || 'Playlist cũ
       setErrorMessage('Vui lòng chọn ít nhất 1 playlist.')
       return
     }
-    const selectedPlaylistsForExport = playlists.filter((pl) => selectedPlaylistIds.includes(pl.id))
+    const selectedPlaylistsForExport = playlists.filter((pl) =>
+      selectedPlaylistIds.includes(pl.id)
+    )
     if (selectedPlaylistsForExport.some((playlist) => !getPlaylistOutputDir(playlist))) {
       setErrorMessage('Vui lòng chọn thư mục xuất cho từng thể loại đã chọn.')
       return
     }
 
-    setLoading(true)
-    // Reset speed/ETA state
-    setCurrentSpeedX(null)
-    setRemainingSeconds(null)
-    // Set batch start time
-    setBatchStartTime(Date.now())
-
-    try {
-      // Defensive check: đảm bảo playlists là array hợp lệ
-      if (!playlists || !Array.isArray(playlists)) {
-        console.error('[ExportAudio] playlists is invalid:', {
-          playlists,
-          isArray: Array.isArray(playlists),
-          type: typeof playlists,
-        })
-        setErrorMessage('Danh sách playlist không hợp lệ.')
-        return
-      }
-      
-      const selected = playlists.filter((pl) => selectedPlaylistIds.includes(pl.id))
-      if (selected.length === 0) {
-        setErrorMessage('Không tìm thấy playlist đã chọn.')
-        return
-      }
-
-      setTotalExportCount(selected.length)
-      const results: string[] = []
-      const errors: string[] = []
-
-      for (let i = 0; i < selected.length; i++) {
-        if (cancelRequestedRef.current) {
-          break
-        }
-        const pl = selected[i]
-        setCurrentExportIndex(i)
-        setProgressText(`Đang xuất playlist ${i + 1}/${selected.length}: ${pl.name}`)
-
-        // Set playlist start time và reset speed/ETA cho playlist mới
-        setCurrentPlaylistStartTime(Date.now())
-        setCurrentSpeedX(null)
-        setRemainingSeconds(null)
-
-        // Set progress state trước khi export
-        setCurrentProgress({
-          playlistId: pl.id,
-          name: pl.name,
-          currentSec: 0,
-          totalSec: pl.totalDurationSec ?? 0,
-          percent: 0,
-        })
-
-        // Chuẩn hóa tên file
-        const baseName =
-          (fileNamePrefix?.trim() || '') + sanitizeFileName(pl.name)
-
-        const format =
-          quality === 'mp3_320' ? 'mp3' : 'aac'
-        const bitrateKbps =
-          quality === 'mp3_320' ? 320 : 384
-
-        const useCrossfade = pl.genreSettings?.smoothTransitions ?? false
-        const useLoudnorm = pl.genreSettings?.normalizeLoudness ?? false
-        const exportMode = useLoudnorm ? 'Loudnorm + re-encode' : useCrossfade ? 'Crossfade + re-encode' : 'Stream-copy/AAC encode'
-        setProgressText(`Đang xuất playlist ${i + 1}/${selected.length}: ${pl.name} · ${exportMode}`)
-
-        const req: ExportPlaylistRequest = {
-          playlistId: pl.id,
-          outputDir: getPlaylistOutputDir(pl),
-          fileName: baseName,
-          format,
-          bitrateKbps,
-          smoothTransitions: pl.genreSettings?.smoothTransitions ?? false,
-          crossfadeDurationSec: pl.genreSettings?.smoothTransitions
-            ? Math.max(1, Math.min(10, pl.genreSettings.crossfadeDurationSec ?? 4))
-            : undefined,
-          normalizeLoudness: pl.genreSettings?.normalizeLoudness ?? false,
-          loudnessTargetLufs: pl.genreSettings?.normalizeLoudness ? -14 : undefined,
-        }
-
-        try {
-          // Thêm metadata vào request để restore UI khi component mount lại
-          const reqWithMetadata = {
-            ...req,
-            playlistName: pl.name,
-            currentIndex: i,
-            totalCount: selected.length,
-          } as any
-          
-          const res = await window.api.exportPlaylist(reqWithMetadata)
-          
-          // Defensive check: đảm bảo response hợp lệ
-          if (!res || typeof res !== 'object') {
-            console.error('[ExportAudio] Invalid response from exportPlaylist:', res)
-            errors.push(`${pl.name}: Response không hợp lệ từ backend`)
-            continue
-          }
-          
-          // Lưu jobId để có thể cancel
-          if (res.requestId) {
-            setCurrentJobId(res.requestId)
-          }
-          if (res.success && res.outputPath) {
-            results.push(res.outputPath)
-            // Set progress to 100% khi hoàn thành
-            setCurrentProgress((prev) =>
-              prev && prev.playlistId === pl.id
-                ? { ...prev, percent: 100, currentSec: prev.totalSec }
-                : prev
-            )
-          } else {
-            const msg = res.error || 'Không rõ lỗi'
-            // Nếu là lỗi dung lượng ổ đĩa → hiển thị modal chi tiết
-            if (msg.startsWith('CẢNH BÁO: Dung lượng ổ đĩa không đủ')) {
-              setDiskSpaceError(msg)
-            } else {
-              errors.push(`${pl.name}: ${msg}`)
-            }
-          }
-        } catch (err: any) {
-          // Nếu người dùng đã bấm Dừng thì coi là huỷ chủ động, không log thêm lỗi cho các playlist còn lại
-          if (cancelRequestedRef.current) {
-            break
-          }
-          console.error('[ExportAudio] exportPlaylist error', err)
-          const msg = err?.message || 'Lỗi IPC/exportPlaylist'
-          if (msg.startsWith('CẢNH BÁO: Dung lượng ổ đĩa không đủ')) {
-            setDiskSpaceError(msg)
-          } else {
-            errors.push(`${pl.name}: ${msg}`)
-          }
-        }
-      }
-
-      // Clear progress sau khi xong tất cả
-      setCurrentProgress(null)
-      setProgressText(null)
-      setCurrentPlaylistStartTime(null)
-      setCurrentSpeedX(null)
-      setRemainingSeconds(null)
-      setCurrentJobId(null) // Reset jobId khi hoàn thành
-
-      // Tính tổng thời gian batch và summary
-      let summaryText = ''
-      if (batchStartTime !== null && results.length > 0) {
-        const totalElapsedSec = (Date.now() - batchStartTime) / 1000
-        const totalAudioSec = selected.reduce((sum, pl) => sum + (pl.totalDurationSec ?? 0), 0)
-
-        if (totalElapsedSec > 0 && totalAudioSec > 0) {
-          const batchSpeedX = totalAudioSec / totalElapsedSec
-          const elapsedFormatted = formatSecondsHMS(totalElapsedSec)
-          summaryText = `\n\nHoàn thành ${results.length} playlist trong ${elapsedFormatted} (≈ ${batchSpeedX.toFixed(1)}× tổng thời lượng nhạc).`
-        }
-      }
-
-      if (!cancelRequestedRef.current && results.length > 0) {
-        setSuccessMessage(`Đã xuất ${results.length} playlist:\n${results.join('\n')}${summaryText}`)
-        setLastOutputDir(getPlaylistOutputDir(selected[0]) || null)
-        
-        // Refresh lịch sử nếu modal đang mở
-        if (historyVisible) {
-          const api = window.api
-          if (api?.music?.getExportHistory) {
-            api.music.getExportHistory().then((list: any) => {
-              const sorted = (list || []).sort((a: any, b: any) => b.exportedAt - a.exportedAt)
-              setHistory(sorted)
-              if (sorted.length > 0) {
-                const firstDate = new Date(sorted[0].exportedAt).toLocaleDateString()
-                setSelectedDate(firstDate)
-              }
-            }).catch((err: any) => {
-              console.error('[ExportAudio] Failed to refresh history:', err)
-            })
-          }
-        }
-      }
-      if (!cancelRequestedRef.current && errors.length > 0) {
-        setErrorMessage(`Một số playlist bị lỗi:\n${errors.join('\n')}`)
-      }
-
-      // Reset batch start time
-      setBatchStartTime(null)
-    } finally {
-      setLoading(false)
-      setCurrentJobId(null) // Reset jobId khi hoàn thành hoặc lỗi
-      if (window.api?.refreshDiskInfo) {
-        try {
-          await window.api.refreshDiskInfo()
-        } catch (err) {
-          console.error('[ExportAudio] refreshDiskInfo error:', err)
-        }
-      }
-    }
+    await runExportQueue(selectedPlaylistIds)
   }
 
   const selectedPlaylistsForExport = playlists.filter((pl) => selectedPlaylistIds.includes(pl.id))
@@ -952,44 +948,144 @@ const selectedHistoryGenre = selectedHistoryPlaylist?.genreName || 'Playlist cũ
               const randomPercent = pl.totalDurationSec > 0
                 ? ((pl.randomDurationSec / pl.totalDurationSec) * 100).toFixed(1)
                 : '0.0'
+              const isEditing = editingPlaylistId === pl.id
+              const previewFileName = buildPlaylistExportFileName(pl, {
+                commonPrefix: fileNamePrefix,
+                genreCustomName: genreCustomNames[pl.genreId || 'legacy'],
+                isMultiGenreExport: genreGroups.length > 1,
+              }) + (quality === 'mp3_320' ? '.mp3' : '.m4a')
 
               return (
-                <>
-                  {showGenreHeader && <div style={{ fontWeight: 700, color: '#2563eb', marginTop: '10px' }}>{pl.genreName}</div>}
-                <div
-                  key={pl.id}
-                  onClick={() => handleTogglePlaylist(pl.id)}
-                  style={{
-                    cursor: 'pointer',
-                    padding: '12px',
-                    borderRadius: '6px',
-                    border: isSelected ? '1px solid #007acc' : '1px solid #ddd',
-                    backgroundColor: isSelected ? '#007acc11' : '#fff',
-                    display: 'flex',
-                    gap: '8px',
-                    alignItems: 'flex-start',
-                    transition: 'all 0.2s',
-                  }}
-                >
-                  <input
-                    type="checkbox"
-                    checked={isSelected}
-                    onChange={() => handleTogglePlaylist(pl.id)}
-                    onClick={(e) => e.stopPropagation()}
-                    style={{ marginTop: '2px', cursor: 'pointer' }}
-                  />
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: '600', marginBottom: '4px' }}>{pl.name}</div>
-                    <div style={{ fontSize: '12px', color: '#666', marginBottom: '2px' }}>
-                      Thời lượng: {formatDurationLong(pl.totalDurationSec)} • Số bài:{' '}
-                      {pl.tracks.length}
+                <div key={pl.id} style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  {showGenreHeader && (
+                    <div style={{ fontWeight: 700, color: '#2563eb', marginTop: '10px', fontSize: '13px' }}>
+                      {pl.genreName}
                     </div>
-                    <div style={{ fontSize: '12px', color: '#999' }}>
-                      Ưu tiên: {priorityPercent}% • Random: {randomPercent}%
+                  )}
+                  <div
+                    onClick={() => !isEditing && handleTogglePlaylist(pl.id)}
+                    style={{
+                      cursor: isEditing ? 'default' : 'pointer',
+                      padding: '10px 12px',
+                      borderRadius: '6px',
+                      border: isSelected ? '1px solid #007acc' : '1px solid #ddd',
+                      backgroundColor: isSelected ? '#007acc11' : '#fff',
+                      display: 'flex',
+                      gap: '8px',
+                      alignItems: 'flex-start',
+                      transition: 'all 0.2s',
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={() => handleTogglePlaylist(pl.id)}
+                      onClick={(e) => e.stopPropagation()}
+                      style={{ marginTop: '3px', cursor: 'pointer' }}
+                    />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      {isEditing ? (
+                        <div style={{ display: 'flex', gap: '4px', marginBottom: '6px' }} onClick={(e) => e.stopPropagation()}>
+                          <input
+                            type="text"
+                            value={editingPlaylistName}
+                            onChange={(e) => setEditingPlaylistName(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') handleSaveRename(pl.id)
+                              if (e.key === 'Escape') handleCancelRename()
+                            }}
+                            autoFocus
+                            style={{
+                              flex: 1,
+                              minWidth: 0,
+                              padding: '3px 6px',
+                              fontSize: '13px',
+                              border: '1px solid #007acc',
+                              borderRadius: '4px',
+                            }}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => handleSaveRename(pl.id)}
+                            title="Lưu tên"
+                            style={{
+                              padding: '2px 8px',
+                              background: '#16a34a',
+                              color: '#fff',
+                              border: 0,
+                              borderRadius: '4px',
+                              cursor: 'pointer',
+                              fontSize: '12px',
+                            }}
+                          >Lưu</button>
+                          <button
+                            type="button"
+                            onClick={handleCancelRename}
+                            title="Hủy"
+                            style={{
+                              padding: '2px 8px',
+                              background: '#999',
+                              color: '#fff',
+                              border: 0,
+                              borderRadius: '4px',
+                              cursor: 'pointer',
+                              fontSize: '12px',
+                            }}
+                          >Hủy</button>
+                        </div>
+                      ) : (
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '4px', marginBottom: '4px' }}>
+                          <span
+                            style={{ fontWeight: '600', fontSize: '13px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                            title={pl.name}
+                          >
+                            {pl.name}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              handleStartRename(pl)
+                            }}
+                            title="Đổi tên playlist"
+                            style={{
+                              background: '#f1f5f9',
+                              border: '1px solid #cbd5e1',
+                              borderRadius: '3px',
+                              cursor: 'pointer',
+                              color: '#334155',
+                              fontSize: '11px',
+                              padding: '1px 6px',
+                              lineHeight: '1.4',
+                            }}
+                          >
+                            Đổi tên
+                          </button>
+                        </div>
+                      )}
+                      <div style={{ fontSize: '11px', color: '#666', marginBottom: '2px' }}>
+                        Thời lượng: {formatDurationLong(pl.totalDurationSec)} • Số bài: {pl.tracks.length}
+                      </div>
+                      <div style={{ fontSize: '11px', color: '#888', marginBottom: '4px' }}>
+                        Ưu tiên: {priorityPercent}% • Random: {randomPercent}%
+                      </div>
+                      <div
+                        style={{
+                          fontSize: '11px',
+                          color: '#2563eb',
+                          backgroundColor: '#eff6ff',
+                          padding: '2px 6px',
+                          borderRadius: '4px',
+                          wordBreak: 'break-all',
+                          fontFamily: 'monospace',
+                        }}
+                        title={`File xuất dự kiến: ${previewFileName}`}
+                      >
+                        File: {previewFileName}
+                      </div>
                     </div>
                   </div>
                 </div>
-                </>
               )
             })
           )}
@@ -1002,18 +1098,121 @@ const selectedHistoryGenre = selectedHistoryPlaylist?.genreName || 'Playlist cũ
           Xuất nhạc
         </h3>
 
-        <div style={{ marginTop: '16px', padding: '12px', border: '1px solid #dbeafe', borderRadius: '6px' }}>
-          <div style={{ fontWeight: 600 }}>Thư mục xuất theo thể loại</div>
-          <div style={{ marginTop: '4px', fontSize: '12px', color: '#666' }}>Crossfade và Loudnorm lấy từ Step 2 theo từng thể loại. Step 4 chỉ chọn nơi lưu.</div>
-          <div style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            {genreGroups.map((group) => (
-              <div key={group.id} style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                <strong style={{ minWidth: '120px', fontSize: '13px' }}>{group.name}</strong>
-                <input type="text" readOnly value={getGroupOutputDir(group.id) || 'Chưa chọn thư mục'} style={{ flex: 1, minWidth: 0, padding: '7px 10px', border: '1px solid #ddd', borderRadius: '4px', background: '#f5f5f5', fontSize: '12px' }} />
-                <button type="button" onClick={() => void handleSelectGenreOutputFolder(group.id)} disabled={loading} style={{ padding: '7px 10px', background: '#007acc', color: '#fff', border: 0, borderRadius: '4px', cursor: loading ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap' }}>Chọn thư mục</button>
+        <div style={{ marginTop: '16px', padding: '14px', border: '1px solid #bfdbfe', borderRadius: '8px', backgroundColor: '#f8fafc' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+            <div>
+              <div style={{ fontWeight: 600, fontSize: '14px', color: '#1e293b' }}>Thư mục & Tên xuất theo thể loại</div>
+              <div style={{ marginTop: '2px', fontSize: '12px', color: '#64748b' }}>
+                Tuỳ chỉnh tên xuất cho từng thể loại và thư mục lưu. Tự động chống ghi đè khi xuất chung thư mục.
               </div>
-            ))}
+            </div>
+            {genreGroups.length > 0 && (
+              <button
+                type="button"
+                onClick={() => void handleSelectFolderForAllGenres()}
+                disabled={loading}
+                style={{
+                  padding: '6px 12px',
+                  background: '#2563eb',
+                  color: '#fff',
+                  border: 0,
+                  borderRadius: '6px',
+                  cursor: loading ? 'not-allowed' : 'pointer',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                }}
+              >
+                Chọn 1 thư mục chung cho tất cả thể loại
+              </button>
+            )}
           </div>
+
+          <div style={{ marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            {genreGroups.map((group) => {
+              const currentCustomName = genreCustomNames[group.id] ?? ''
+              const outputDir = getGroupOutputDir(group.id)
+              return (
+                <div
+                  key={group.id}
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '6px',
+                    padding: '10px 12px',
+                    backgroundColor: '#ffffff',
+                    border: '1px solid #e2e8f0',
+                    borderRadius: '6px',
+                  }}
+                >
+                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                    <span style={{ fontWeight: 600, minWidth: '110px', fontSize: '13px', color: '#0f172a' }}>
+                      {group.name}
+                    </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flex: '0 0 auto' }}>
+                      <span style={{ fontSize: '12px', color: '#475569' }}>Tên xuất:</span>
+                      <input
+                        type="text"
+                        value={currentCustomName}
+                        onChange={(e) => handleUpdateGenreCustomName(group.id, e.target.value)}
+                        placeholder={group.name}
+                        disabled={loading}
+                        style={{
+                          width: '140px',
+                          padding: '5px 8px',
+                          border: '1px solid #cbd5e1',
+                          borderRadius: '4px',
+                          fontSize: '12px',
+                        }}
+                      />
+                    </div>
+                    <input
+                      type="text"
+                      readOnly
+                      value={outputDir || 'Chưa chọn thư mục'}
+                      title={outputDir || ''}
+                      style={{
+                        flex: 1,
+                        minWidth: '150px',
+                        padding: '5px 8px',
+                        border: '1px solid #cbd5e1',
+                        borderRadius: '4px',
+                        background: '#f8fafc',
+                        fontSize: '12px',
+                        color: outputDir ? '#0f172a' : '#94a3b8',
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => void handleSelectGenreOutputFolder(group.id)}
+                      disabled={loading}
+                      style={{
+                        padding: '5px 12px',
+                        background: '#007acc',
+                        color: '#fff',
+                        border: 0,
+                        borderRadius: '4px',
+                        cursor: loading ? 'not-allowed' : 'pointer',
+                        whiteSpace: 'nowrap',
+                        fontSize: '12px',
+                      }}
+                    >
+                      Chọn thư mục
+                    </button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+
+          {/* Cảnh báo / thông báo về việc xuất chung thư mục */}
+          {genreGroups.length > 1 && (
+            <div style={{ marginTop: '10px', fontSize: '11px', color: '#0369a1', backgroundColor: '#e0f2fe', padding: '6px 10px', borderRadius: '4px' }}>
+              <strong>Chống ghi đè tự động:</strong> Khi xuất nhiều thể loại vào cùng 1 thư mục, hệ thống sẽ tự động thêm tiền tố thể loại (hoặc tên tùy chỉnh ở trên) và hậu tố đánh số nếu trùng lặp, đảm bảo không có file nào bị ghi đè!
+            </div>
+          )}
         </div>
 
         {/* Tiền tố tên file */}
@@ -1110,7 +1309,7 @@ const selectedHistoryGenre = selectedHistoryPlaylist?.genreName || 'Playlist cũ
                 fontWeight: 'bold',
               }}
             >
-              {isValidating ? 'Đang kiểm tra...' : `🔍 Kiểm tra ${selectedPlaylistIds.length} playlist`}
+              {isValidating ? 'Đang kiểm tra...' : `Kiểm tra ${selectedPlaylistIds.length} playlist`}
             </button>
             <div style={{ marginTop: '6px', fontSize: '12px', color: '#666' }}>
               Kiểm tra các track trong playlist có phù hợp để chạy crossfade không (decode thử 2s đầu mỗi file).
@@ -1717,9 +1916,7 @@ const selectedHistoryGenre = selectedHistoryPlaylist?.genreName || 'Playlist cũ
               setSelectedHistoryId(null)
             }}
                 style={{ position: 'absolute', top: 10, right: 10, background: 'transparent', border: 'none' }}
-              >
-                ✕
-              </button>
+              >Hủy</button>
             </div>
           </div>
         )}

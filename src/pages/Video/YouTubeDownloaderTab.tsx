@@ -1132,7 +1132,7 @@ export function YouTubeDownloaderTab() {
             className="btn-secondary"
             style={{ fontSize: '12px', padding: '6px 12px' }}
           >
-            🧪 Test URL
+            Test URL
           </button>
           
           {isValidUrl && (
@@ -1171,7 +1171,7 @@ export function YouTubeDownloaderTab() {
 
       {/* ── Download Queue (Sprint 2.2) ── */}
       <div className="section" style={{ marginTop: '24px' }}>
-        <h3>🗂️ Download Queue (nhiều URL)</h3>
+        <h3>Download Queue (nhiều URL)</h3>
         <p style={{ fontSize: '12px', color: '#9ca3af', marginBottom: '8px' }}>
           Nhập nhiều URL (mỗi dòng một URL), sau đó nhấn "Thêm vào Queue" rồi "Chạy Queue".
         </p>
@@ -1408,7 +1408,7 @@ export function YouTubeDownloaderTab() {
           className="btn-secondary"
           style={{ marginTop: '12px' }}
         >
-          {isEstimating ? 'Đang ước tính...' : '📊 Ước tính dung lượng'}
+          {isEstimating ? 'Đang ước tính...' : 'Ước tính dung lượng'}
         </button>
         
         {estimate && (

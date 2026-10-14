@@ -3,7 +3,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { runFfmpeg } from '../ffmpeg/wrapper'
 import { getPlaylistById, type PlaylistDefinition, type PlaylistTrack } from './playlistEngine'
-import type { ScannedTrack } from './scanMusic'
+import type { ScannedTrack, ScanMusicResult } from './scanMusic'
 import { loadScanResult } from './scanStore'
 import {
   checkMinimumSpace,
@@ -30,6 +30,8 @@ export interface ExportPlaylistRequest {
   requestId?: string
   /** Internal: AbortSignal from job queue for cancellation */
   signal?: AbortSignal
+  /** Tùy chọn: Truyền trực tiếp scanResult (dùng cho Autopilot hoặc bộ quét động) thay vì loadScanResult từ đĩa */
+  scanResult?: ScanMusicResult
 }
 
 export interface ExportPlaylistResult {
@@ -690,61 +692,80 @@ export async function exportPlaylistToFile(
           `Đang tự động thêm bài nhạc vào playlist...`
         )
         
-        // Lấy scan result để có danh sách tracks có thể thêm
-        const scanResult = loadScanResult()
+        // Lấy scan result để có danh sách tracks có thể thêm (ưu tiên scanResult truyền từ req, fallback về loadScanResult)
+        const scanResult = req.scanResult || loadScanResult()
         if (scanResult && scanResult.tracks.length > 0) {
-          // Tính average track duration
-          const averageTrackDuration = scanResult.tracks.reduce((sum, t) => sum + t.duration, 0) / scanResult.tracks.length
-          
-          // Ước tính số bài cần thêm
-          // Mỗi bài thêm sẽ tăng duration = averageTrackDuration - crossfadeDurationSec (do overlap)
-          const durationPerNewTrack = averageTrackDuration - crossfadeDurationSec
-          // Bug #13 fix: durationPerNewTrack can be negative when crossfade > avg track duration.
-          // Negative value makes Math.ceil return a negative count → zero tracks added silently.
-          // Fall back to raw averageTrackDuration so the count is always positive.
-          const effectiveDurationPerTrack = durationPerNewTrack > 0 ? durationPerNewTrack : averageTrackDuration
-          const estimatedTracksNeeded = Math.ceil(durationDiff / Math.max(effectiveDurationPerTrack, 1))
+          // BẢO VỆ CÁCH LY THỂ LOẠI: CHỈ lấy các track thuộc thể loại của playlist này!
+          const targetGenreId = playlist.genreId
+          const genreTracks = targetGenreId
+            ? scanResult.tracks.filter((t) => t.genreId === targetGenreId)
+            : scanResult.tracks
 
-          console.log(
-            `[exportAudio] Ước tính cần thêm ${estimatedTracksNeeded} bài (average: ${averageTrackDuration.toFixed(1)}s, ` +
-            `duration per new track: ${durationPerNewTrack.toFixed(1)}s)`
-          )
-          
-          // Lấy danh sách tracks chưa được dùng trong playlist
-          const usedTrackIds = new Set(playlist.tracks.map(t => t.id))
-          const availableTracks = scanResult.tracks.filter(
-            (t) => !usedTrackIds.has(t.id) && t.duration > crossfadeDurationSec,
-          )
-
-          if (availableTracks.length === 0) {
-            console.warn(`[exportAudio] Không còn bài nhạc nào để thêm vào playlist.`)
+          if (genreTracks.length === 0) {
+            console.warn(
+              `[exportAudio] Không có bài nhạc nào thuộc thể loại "${playlist.genreName || targetGenreId}" để thêm vào playlist. ` +
+              `Bỏ qua để tránh trộn lẫn nhạc giữa các thể loại.`
+            )
           } else {
-            // Thêm bài nhạc vào playlist. Nếu có role=ending, chèn filler TRƯỚC ending để ending vẫn là cuối.
-            const tracksToAdd: PlaylistTrack[] = []
-            let addedDuration = 0
-            const endingStartIndex = playlist.tracks.findIndex(t => t.role === 'ending')
-            const mainTracks = endingStartIndex >= 0 ? playlist.tracks.slice(0, endingStartIndex) : playlist.tracks
-            const endingTracks = endingStartIndex >= 0 ? playlist.tracks.slice(endingStartIndex) : []
-            let lastTrackId = mainTracks[mainTracks.length - 1]?.id || ''
+            // Tính average track duration của riêng thể loại này
+            const averageTrackDuration = genreTracks.reduce((sum, t) => sum + t.duration, 0) / genreTracks.length
+            
+            // Ước tính số bài cần thêm
+            // Mỗi bài thêm sẽ tăng duration = averageTrackDuration - crossfadeDurationSec (do overlap)
+            const durationPerNewTrack = averageTrackDuration - crossfadeDurationSec
+            // Bug #13 fix: durationPerNewTrack can be negative when crossfade > avg track duration.
+            // Negative value makes Math.ceil return a negative count → zero tracks added silently.
+            // Fall back to raw averageTrackDuration so the count is always positive.
+            const effectiveDurationPerTrack = durationPerNewTrack > 0 ? durationPerNewTrack : averageTrackDuration
+            const estimatedTracksNeeded = Math.ceil(durationDiff / Math.max(effectiveDurationPerTrack, 1))
 
-            // Shuffle available tracks để thêm ngẫu nhiên (Fisher-Yates)
-            const shuffled = [...availableTracks]
-            for (let si = shuffled.length - 1; si > 0; si--) {
-              const sj = Math.floor(Math.random() * (si + 1));
-              [shuffled[si], shuffled[sj]] = [shuffled[sj], shuffled[si]]
+            console.log(
+              `[exportAudio] Ước tính cần thêm ${estimatedTracksNeeded} bài cho thể loại "${playlist.genreName || targetGenreId || 'Mặc định'}" ` +
+              `(average: ${averageTrackDuration.toFixed(1)}s, duration per new track: ${durationPerNewTrack.toFixed(1)}s)`
+            )
+            
+            // Lấy danh sách tracks chưa được dùng trong playlist (CHỈ trong thể loại này!)
+            const usedTrackIds = new Set(playlist.tracks.map(t => t.id))
+            let candidateTracks = genreTracks.filter(
+              (t) => !usedTrackIds.has(t.id) && t.duration > crossfadeDurationSec,
+            )
+
+            // Nếu hết bài chưa dùng trong thể loại này, tái sử dụng bài trong CHÍNH thể loại này (KHÔNG BAO GIỜ lấy từ thể loại khác!)
+            if (candidateTracks.length === 0) {
+              candidateTracks = genreTracks.filter((t) => t.duration > crossfadeDurationSec)
             }
 
-            for (const track of shuffled) {
-              if (tracksToAdd.length >= estimatedTracksNeeded + 10) break // Thêm thêm 10 bài để đảm bảo đủ
+            if (candidateTracks.length === 0) {
+              console.warn(`[exportAudio] Thể loại "${playlist.genreName || targetGenreId}" không còn bài nào hợp lệ để bù thời lượng crossfade. Bỏ qua.`)
+            } else {
+              // Thêm bài nhạc vào playlist. Nếu có role=ending, chèn filler TRƯỚC ending để ending vẫn là cuối.
+              const tracksToAdd: PlaylistTrack[] = []
+              let addedDuration = 0
+              const endingStartIndex = playlist.tracks.findIndex(t => t.role === 'ending')
+              const mainTracks = endingStartIndex >= 0 ? playlist.tracks.slice(0, endingStartIndex) : playlist.tracks
+              const endingTracks = endingStartIndex >= 0 ? playlist.tracks.slice(endingStartIndex) : []
+              let lastTrackId = mainTracks[mainTracks.length - 1]?.id || ''
 
-              // Tránh trùng liên tiếp
-              if (track.id === lastTrackId && shuffled.length > 1) continue
+              // Shuffle candidate tracks để thêm ngẫu nhiên (Fisher-Yates)
+              const shuffled = [...candidateTracks]
+              for (let si = shuffled.length - 1; si > 0; si--) {
+                const sj = Math.floor(Math.random() * (si + 1));
+                [shuffled[si], shuffled[sj]] = [shuffled[sj], shuffled[si]]
+              }
 
-              tracksToAdd.push({
-                ...track,
-                order: mainTracks.length + tracksToAdd.length + 1,
-                cumulativeDuration: mainTracks.reduce((s, t) => s + t.duration, 0) + addedDuration + track.duration,
-              })
+              for (const track of shuffled) {
+                if (tracksToAdd.length >= estimatedTracksNeeded + 10) break // Thêm thêm 10 bài để đảm bảo đủ
+
+                // Tránh trùng liên tiếp
+                if (track.id === lastTrackId && shuffled.length > 1) continue
+
+                tracksToAdd.push({
+                  ...track,
+                  genreId: playlist.genreId || track.genreId,
+                  genreName: playlist.genreName || track.genreName,
+                  order: mainTracks.length + tracksToAdd.length + 1,
+                  cumulativeDuration: mainTracks.reduce((s, t) => s + t.duration, 0) + addedDuration + track.duration,
+                })
 
               addedDuration += track.duration
               lastTrackId = track.id
@@ -793,9 +814,10 @@ export async function exportPlaylistToFile(
               crossfadePoints = newCrossfadePoints
             }
           }
-        } else {
-          console.warn(`[exportAudio] Không có scan result để thêm bài nhạc vào playlist.`)
         }
+      } else {
+        console.warn(`[exportAudio] Không có scan result để thêm bài nhạc vào playlist.`)
+      }
       }
 
       const invalidCrossfadeTrack = playlist.tracks.find(

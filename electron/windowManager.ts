@@ -225,23 +225,38 @@ export function createWindow() {
     },
   })
 
-  // Hiển thị window khi đã sẵn sàng
-  mainWindow.once('ready-to-show', () => {
+  const showAndFocus = () => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.show()
+      // Surface window to the front without keeping it permanently pinned
+      mainWindow.setAlwaysOnTop(true)
       mainWindow.focus()
+      mainWindow.setAlwaysOnTop(false)
       console.log('[Window] Window shown and focused')
     }
+  }
+
+  // Hiển thị window khi đã sẵn sàng
+  mainWindow.once('ready-to-show', () => {
+    showAndFocus()
   })
 
-  // Fallback: force show sau 5 giây
+  // Fallback: force show sau 2.5s thay vì đợi 5s
   setTimeout(() => {
     if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) {
-      console.warn('[Window] Window not visible after 5s, forcing show...')
-      mainWindow.show()
-      mainWindow.focus()
+      console.warn('[Window] Window not visible after 2.5s, forcing show...')
+      showAndFocus()
     }
-  }, 5000)
+  }, 2500)
+
+  // Forward renderer console errors to terminal
+  mainWindow.webContents.on('console-message', (_event, level, message, line, sourceId) => {
+    if (level >= 2) {
+      console.error(`[Renderer ERROR] (${sourceId}:${line}) ${message}`)
+    } else if (level === 1) {
+      console.warn(`[Renderer WARN] ${message}`)
+    }
+  })
 
   // Error handling cho webContents
   mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {

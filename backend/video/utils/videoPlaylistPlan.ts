@@ -63,20 +63,66 @@ function uniqueClips(clips: PlannerClip[]): PlannerClip[] {
   })
 }
 
-function buildSequence(clips: PlannerClip[], target: number, start: number): PlannerClip[] {
+function createSeededPrng(seed: number): () => number {
+  let s = (seed >>> 0) || 0x12345678
+  return () => {
+    s = (s + 0x6d2b79f5) >>> 0
+    let t = Math.imul(s ^ (s >>> 15), 1 | s)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
+
+function deriveSeed(baseSeed: number, jobIndex: number, attempt: number): number {
+  const h1 = Math.imul((baseSeed ^ 0x9e3779b9) >>> 0, 0x85ebca6b)
+  const h2 = Math.imul((jobIndex ^ (h1 >>> 13)) >>> 0, 0xc2b2ae35)
+  const h3 = Math.imul((attempt ^ (h2 >>> 16)) >>> 0, 0x27d4eb2d)
+  return ((h1 ^ h2 ^ h3) >>> 0) || 0x5a5a5a5a
+}
+
+function buildSequence(clips: PlannerClip[], target: number, seed: number): PlannerClip[] {
   if (clips.length === 0) return []
+  if (clips.length === 1) {
+    const selected: PlannerClip[] = []
+    let duration = 0
+    while (duration < target) {
+      selected.push(clips[0])
+      duration += clips[0].durationSec
+    }
+    return selected
+  }
+
+  const prng = createSeededPrng(seed)
   const selected: PlannerClip[] = []
   let duration = 0
-  let cursor = ((start % clips.length) + clips.length) % clips.length
+  let loopCount = 0
+
   while (duration < target) {
-    let clip = clips[cursor]
-    if (selected.length > 0 && clips.length > 1 && clip.id === selected[selected.length - 1].id) {
-      clip = clips[(cursor + 1) % clips.length]
+    const pool = [...clips]
+    // Fisher-Yates shuffle
+    for (let i = pool.length - 1; i > 0; i--) {
+      const j = Math.floor(prng() * (i + 1))
+      ;[pool[i], pool[j]] = [pool[j], pool[i]]
     }
-    selected.push(clip)
-    duration += clip.durationSec
-    cursor = (cursor + 1) % clips.length
+
+    // Tránh clip đầu pool trùng với clip cuối vừa được chọn ở vòng trước
+    if (selected.length > 0 && pool.length > 1 && pool[0].id === selected[selected.length - 1].id) {
+      const swapIdx = pool.findIndex((c) => c.id !== selected[selected.length - 1].id)
+      if (swapIdx > 0) {
+        ;[pool[0], pool[swapIdx]] = [pool[swapIdx], pool[0]]
+      }
+    }
+
+    for (const clip of pool) {
+      selected.push(clip)
+      duration += clip.durationSec
+      if (duration >= target) break
+    }
+
+    loopCount++
+    if (loopCount > 10000) break
   }
+
   return selected
 }
 
@@ -87,6 +133,7 @@ export function planVideoBatch(input: {
   requireUniqueSequences?: boolean
   existingFingerprints?: ReadonlySet<string>
   maxSequenceAttempts?: number
+  seed?: number
 }): VideoBatchPlan {
   const clips = uniqueClips(input.clips)
   const requiredDurationSec = input.jobs.reduce((sum, job) => sum + Math.max(0, job.targetDurationSec), 0)
@@ -99,6 +146,7 @@ export function planVideoBatch(input: {
   const sequenceMode = !!input.requireUniqueSequences && !input.uniqueRequired
   const sequenceAttempts = Math.max(1, input.maxSequenceAttempts ?? 64)
   const reservedFingerprints = new Set(input.existingFingerprints ?? [])
+  const baseSeed = input.seed ?? 0
   let cursor = 0
   const used = new Set<string>()
   const repeatedClipIds: string[] = []
@@ -112,13 +160,14 @@ export function planVideoBatch(input: {
     if (sequenceMode) {
       let accepted = false
       for (let attempt = 0; attempt < sequenceAttempts; attempt++) {
-        const candidate = buildSequence(clips, target, cursor + attempt)
+        const attemptSeed = deriveSeed(baseSeed, job.jobIndex, cursor + attempt)
+        const candidate = buildSequence(clips, target, attemptSeed)
         const candidateFingerprint = fingerprint(candidate)
         if (!reservedFingerprints.has(candidateFingerprint)) {
           selected = candidate
           reservedFingerprints.add(candidateFingerprint)
           accepted = true
-          cursor += 1
+          cursor += attempt + 1
           break
         }
       }

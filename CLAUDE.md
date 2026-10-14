@@ -30,6 +30,10 @@ Simple questions or single-file edits unrelated to the above can be answered dir
 - No AI/LLM runtime in the product. Agents and skills are dev-only harness.
 - Secrets stay in Worker env or Electron main process; never in the renderer bundle.
 - Windows path safety, packaged-build compatibility, and active-export teardown guards are mandatory review lenses.
+- **UI/UX Rule (BẮT BUỘC): TUYỆT ĐỐI KHÔNG TỰ Ý THÊM ICON / EMOJI VÀO GIAO DIỆN (UI).**
+  - Nghiêm cấm tự tiện chèn emoji (như 🎵, 📁, ✏️, 🛡️, 🔍, 📊, 🎲, 🧪,...) hoặc biểu tượng trang trí vào text, tiêu đề, nhãn, nút bấm, bảng danh sách hay thẻ giao diện.
+  - Chỉ sử dụng icon khi người dùng yêu cầu cụ thể.
+  - Giao diện phải luôn sạch sẽ, chuyên nghiệp, tối giản, sử dụng nhãn text rõ nghĩa thay vì icon màu mè.
 
 **HANDOFF rule (project-wide):**
 After every feature update, fix, refactor, or notable change, append an entry to [HANDOFF.md](HANDOFF.md). One entry per change with: date, what changed, files touched, why, and any follow-up needed. This is the source of truth for cross-session continuity — new sessions read HANDOFF.md first to know what was done and what's pending.

@@ -2475,6 +2475,12 @@ async function runAutopilotForDay(
     priorityRatioMin: 0.65,
     priorityRatioMax: 0.8,
     crossfadeDurationSec: crossfadeSec, // inflate target để bù overlap crossfade
+    genreId: 'autopilot',
+    genreName: 'Autopilot',
+    genreSettings: {
+      smoothTransitions,
+      crossfadeDurationSec: crossfadeSec,
+    },
   }
 
   clearPlaylists()
@@ -2522,6 +2528,7 @@ async function runAutopilotForDay(
       smoothTransitions,
       // Chỉ truyền crossfadeDurationSec khi smoothTransitions = true, giống với xuất nhạc thông thường
       crossfadeDurationSec: smoothTransitions ? crossfadeSec : undefined,
+      scanResult: scan, // Đồng bộ scanResult trực tiếp từ bộ quét Autopilot để bù bài chuẩn xác
     }
     
     // Pass requestId để có thể cancel
@@ -2844,8 +2851,8 @@ async function runAutopilotForDay(
     outputFolder: finalDir,
     outputFilename: `${baseOutputName}.mp4`,
     outputNames,
-    // Pool đã chọn sequence LRU-unique → KHÔNG shuffle lại để giữ đúng thứ tự
-    shuffle: false,
+    // Bật shuffle để mỗi video job có thứ tự ngẫu nhiên đa dạng, không trùng lặp
+    shuffle: true,
     // Mặc định copy-stream video; nếu user chọn "Chuẩn hoá video đầu vào" thì re-encode + deep verify
     forceReencode: !!overrides.normalizeVideoInput,
     // Chuẩn hóa tỉ lệ khung hình + FPS (letterbox/pillarbox)
