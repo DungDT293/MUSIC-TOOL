@@ -9,7 +9,30 @@ import { FrameEncoder } from '../../features/song-nhac/export/frameEncoder'
 import { LayersPanel } from '../../features/song-nhac/studio/LayersPanel'
 import { InspectorPanel } from '../../features/song-nhac/studio/InspectorPanel'
 import { useSongNhacLayerStore } from '../../features/song-nhac/studio/songNhacLayerStore'
+import { WAVE_PRESETS } from '../../features/song-nhac/studio/builtInPresets'
 import type { SongNhacExportProgress } from '../../../shared/songNhacChannels'
+
+
+const TRACK_COLORS: Record<string, string> = {
+  visualizer: '#f472b6',
+  image: '#38bdf8',
+  video: '#22d3ee',
+  text: '#a78bfa',
+  group: '#475569',
+}
+
+function formatClock(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return '0:00'
+  const total = Math.floor(seconds)
+  const mins = Math.floor(total / 60)
+  const secs = total % 60
+  return `${mins}:${String(secs).padStart(2, '0')}`
+}
+const RAIL_ITEMS: Array<{ id: 'composition' | 'presets' | 'export'; short: string; hint: string }> = [
+  { id: 'composition', short: 'Lớp', hint: 'Cây lớp của composition' },
+  { id: 'presets', short: 'Preset', hint: 'Thư viện preset sóng' },
+  { id: 'export', short: 'Xuất', hint: 'Cài đặt xuất video' },
+]
 
 function localFileUrl(filePath: string): string {
   return `app://local-file/?path=${encodeURIComponent(filePath)}`
@@ -205,6 +228,10 @@ export default function SongNhacPage() {
     useSongNhacLayerStore.getState().endHistoryGesture()
     setSelectionBounds((current) => current)
   }
+  const [leftTab, setLeftTab] = useState<'composition' | 'presets' | 'export'>('composition')
+  const [audioDuration, setAudioDuration] = useState(0)
+  const [playhead, setPlayhead] = useState(0)
+  const tracks = layers.filter((layer) => layer.type !== 'group')
   const [isExporting, setIsExporting] = useState(false)
   const [exportWidth, setExportWidth] = useState(1920)
   const [exportHeight, setExportHeight] = useState(1080)
@@ -415,6 +442,16 @@ export default function SongNhacPage() {
     return unsubscribe
   }, [])
 
+  const applyWavePreset = (presetId: string) => {
+    const preset = WAVE_PRESETS.find((item) => item.id === presetId)
+    if (!preset) return
+    const state = useSongNhacLayerStore.getState()
+    const viz = state.layers.find((layer) => layer.type === 'visualizer')
+    if (!viz) return
+    state.updateLayerWithHistory(viz.id, preset.visualizer as never)
+    state.setSelection(viz.id)
+  }
+
   const chooseAudio = async () => {
     const selected = await window.api.selectAudioFile()
     if (!selected || !audioRef.current) return
@@ -594,13 +631,82 @@ export default function SongNhacPage() {
   }
 
   return (
-    <section style={{ minHeight: '100%', color: '#e5e7eb', fontFamily: 'Inter, system-ui, sans-serif' }}>
+    <section style={{ height: 'calc(100vh - 96px)', minHeight: 0, display: 'flex', flexDirection: 'column', color: '#e5e7eb', fontFamily: 'Inter, system-ui, sans-serif' }}>
       <h1 style={{ marginTop: 0, marginBottom: 4, fontSize: 24, fontWeight: 700 }}>Sóng nhạc</h1>
       <p style={{ color: '#94a3b8', marginTop: 0, marginBottom: 18, fontSize: 13 }}>
         Visualizer 3D phong cách Avee Player · WebGL Three.js · Beat Audio Reactive
       </p>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 320px', gap: 18 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '48px 250px minmax(0, 1fr) 340px', gap: 12, flex: 1, minHeight: 0, alignItems: 'stretch' }}>
+        <aside style={{ display: 'flex', flexDirection: 'column', gap: 6, background: '#0b1220', border: '1px solid #1e293b', borderRadius: 10, padding: 6, overflow: 'auto' }}>
+          {RAIL_ITEMS.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              title={item.hint}
+              onClick={() => setLeftTab(item.id)}
+              style={{
+                width: '100%',
+                height: 34,
+                borderRadius: 8,
+                border: leftTab === item.id ? '1px solid #0ea5e9' : '1px solid #1e293b',
+                background: leftTab === item.id ? '#0c4a6e' : '#0f172a',
+                color: leftTab === item.id ? '#e0f2fe' : '#94a3b8',
+                fontSize: 11,
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              {item.short}
+            </button>
+          ))}
+        </aside>
+
+        <aside style={{ background: '#0b1220', border: '1px solid #1e293b', borderRadius: 10, padding: 10, overflow: 'auto', minHeight: 0 }}>
+          <div style={{ fontSize: 11, letterSpacing: 0.6, color: '#64748b', fontWeight: 700, marginBottom: 8 }}>
+            {leftTab === 'composition' ? 'COMPOSITION' : leftTab === 'presets' ? 'PRESET SÓNG' : 'XUẤT VIDEO'}
+          </div>
+          {leftTab === 'composition' && <LayersPanel />}
+          {leftTab === 'presets' && (
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+              {WAVE_PRESETS.map((preset) => (
+                <button
+                  key={preset.id}
+                  type="button"
+                  onClick={() => applyWavePreset(preset.id)}
+                  title={preset.description}
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 4,
+                    padding: 8,
+                    borderRadius: 8,
+                    border: '1px solid #1e293b',
+                    background: '#0f172a',
+                    color: '#cbd5e1',
+                    fontSize: 11,
+                    textAlign: 'left',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <span
+                    style={{
+                      height: 34,
+                      borderRadius: 6,
+                      background: `linear-gradient(135deg, ${preset.visualizer.color1 ?? '#22d3ee'}, ${preset.visualizer.color2 ?? '#f472b6'})`,
+                    }}
+                  />
+                  {preset.name}
+                </button>
+              ))}
+            </div>
+          )}
+          {leftTab === 'export' && (
+            <div style={{ fontSize: 12, color: '#94a3b8', lineHeight: 1.5 }}>
+              Cài đặt xuất nằm ở cột bên phải: độ phân giải, FPS, codec, chất lượng và khoảng thời gian.
+            </div>
+          )}
+        </aside>
         {/* Canvas Display Viewport */}
         <div
           style={{
@@ -685,6 +791,11 @@ export default function SongNhacPage() {
               draw()
             }}
             onPause={() => setIsPlaying(false)}
+            onTimeUpdate={(event) => setPlayhead(event.currentTarget.currentTime)}
+            onLoadedMetadata={(event) => {
+              const value = event.currentTarget.duration
+              setAudioDuration(Number.isFinite(value) ? value : 0)
+            }}
             style={{ display: 'none' }}
           />
 
@@ -765,8 +876,10 @@ export default function SongNhacPage() {
             background: '#090e1a',
             border: '1px solid #1e293b',
             borderRadius: 12,
-            padding: 18,
+            padding: 14,
             fontSize: 13,
+            overflowY: 'auto',
+            minHeight: 0,
           }}
         >
           {/* 1. Audio File */}
@@ -965,7 +1078,6 @@ export default function SongNhacPage() {
           )}
 
           {/* Layers + inspector */}
-          <LayersPanel />
           <InspectorPanel />
 
           {/* 4. Output MP4 */}
@@ -1144,6 +1256,91 @@ export default function SongNhacPage() {
           >
             {message}
           </div>
+        </div>
+      </div>
+
+      {/* Timeline */}
+      <div style={{ marginTop: 12, background: '#0b1220', border: '1px solid #1e293b', borderRadius: 10, padding: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8, fontSize: 11, color: '#94a3b8' }}>
+          <button
+            type="button"
+            onClick={togglePlay}
+            disabled={!audioPath}
+            style={{
+              padding: '4px 12px',
+              borderRadius: 6,
+              border: '1px solid #334155',
+              background: isPlaying ? '#7f1d1d' : '#0c4a6e',
+              color: '#e2e8f0',
+              fontSize: 11,
+              cursor: audioPath ? 'pointer' : 'not-allowed',
+            }}
+          >
+            {isPlaying ? 'Tạm dừng' : 'Phát'}
+          </button>
+          <span style={{ fontFamily: 'monospace' }}>{formatClock(playhead)} / {formatClock(audioDuration)}</span>
+          <span style={{ marginLeft: 'auto', maxWidth: 420, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {tracks.length} lớp · {audioPath ? audioPath.split(/[\\/]/).pop() : 'chưa chọn audio'}
+          </span>
+        </div>
+
+        <div style={{ position: 'relative', paddingLeft: 132 }}>
+          <div style={{ position: 'absolute', left: 132, right: 0, top: 0, bottom: 0, pointerEvents: 'none' }}>
+            <div
+              style={{
+                position: 'absolute',
+                left: `${audioDuration > 0 ? Math.min(100, (playhead / audioDuration) * 100) : 0}%`,
+                top: 0,
+                bottom: 0,
+                width: 2,
+                background: '#0ea5e9',
+                boxShadow: '0 0 8px #0ea5e9',
+              }}
+            />
+          </div>
+
+          {tracks.length === 0 && <div style={{ fontSize: 11, color: '#475569' }}>Chưa có lớp nào để hiển thị trên timeline.</div>}
+
+          {tracks.map((layer) => {
+            const total = audioDuration > 0 ? audioDuration : 1
+            const start = layer.timeRange ? Math.max(0, layer.timeRange.startSec) : 0
+            const end = layer.timeRange
+              ? Math.min(total, Number.isFinite(layer.timeRange.endSec) ? layer.timeRange.endSec : total)
+              : total
+            const left = Math.max(0, Math.min(100, (start / total) * 100))
+            const width = Math.max(0.5, Math.min(100 - left, ((end - start) / total) * 100))
+            return (
+              <div key={layer.id} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                <div
+                  style={{
+                    width: 124,
+                    fontSize: 11,
+                    color: layer.visible ? '#cbd5e1' : '#475569',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                  title={layer.name}
+                >
+                  {layer.name}
+                </div>
+                <div style={{ position: 'relative', flex: 1, height: 18, background: '#0f172a', borderRadius: 4, border: '1px solid #1e293b' }}>
+                  <div
+                    style={{
+                      position: 'absolute',
+                      left: `${left}%`,
+                      width: `${width}%`,
+                      top: 0,
+                      bottom: 0,
+                      borderRadius: 4,
+                      background: TRACK_COLORS[layer.type] ?? '#64748b',
+                      opacity: layer.visible ? 0.85 : 0.3,
+                    }}
+                  />
+                </div>
+              </div>
+            )
+          })}
         </div>
       </div>
     </section>
