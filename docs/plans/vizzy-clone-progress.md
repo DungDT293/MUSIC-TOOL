@@ -38,6 +38,13 @@ Mục tiêu: clone toàn bộ chức năng editor Vizzy vào Sóng nhạc. Mỗi
 | keyframe trên track | ❌ |
 | ruler thời gian | ✅ mốc tự chọn theo độ dài |
 
+## Ngoài phạm vi Vizzy (làm cho quy trình số lượng lớn)
+
+| Chức năng | Trạng thái |
+|---|---|
+| Hàng đợi export (nhiều video, xuất lần lượt, tiến độ từng cái, huỷ) | ✅ |
+| Xuất theo khoảng thời gian trong hàng đợi | ✅ |
+
 ## Ghi chú kỹ thuật
 
 - Ảnh/video: bo góc, viền, bóng đổ được **bake vào texture** (canvas 2D) nên không tốn shader.

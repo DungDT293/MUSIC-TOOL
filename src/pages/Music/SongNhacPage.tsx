@@ -13,6 +13,7 @@ import { WAVE_PRESETS } from '../../features/song-nhac/studio/builtInPresets'
 import { useCompositionEffects } from '../../features/song-nhac/studio/effectsStore'
 import { parseLyrics } from '../../features/song-nhac/studio/lyrics'
 import { useMediaLibrary, type MediaKind } from '../../features/song-nhac/studio/mediaLibraryStore'
+import { useExportQueue, type ExportJob } from '../../features/song-nhac/studio/exportQueueStore'
 import type { StudioLayer } from '../../features/song-nhac/studio/layerTypes'
 import type { SongNhacExportProgress } from '../../../shared/songNhacChannels'
 
@@ -289,6 +290,7 @@ export default function SongNhacPage() {
   const [mediaTab, setMediaTab] = useState<MediaKind>('image')
   const mediaLibrary = useMediaLibrary()
   const selectedIds = useSongNhacLayerStore((state) => state.selectedIds)
+  const queueJobs = useExportQueue((state) => state.jobs)
   const [snapGuide, setSnapGuide] = useState<number | null>(null)
   const [lyricsText, setLyricsText] = useState('')
   const effects = useCompositionEffects()
@@ -385,6 +387,7 @@ export default function SongNhacPage() {
         ;(window as unknown as Record<string, unknown>).__songNhacEngine = aveeEngineRef.current
         ;(window as unknown as Record<string, unknown>).__songNhacStore = useSongNhacLayerStore
         ;(window as unknown as Record<string, unknown>).__songNhacMedia = useMediaLibrary
+        ;(window as unknown as Record<string, unknown>).__songNhacQueue = useExportQueue
       }
       aveeEngineRef.current.setLayers(useSongNhacLayerStore.getState().layers)
       aveeEngineRef.current.setSelectedLayer(useSongNhacLayerStore.getState().selectedLayerId)
@@ -636,7 +639,7 @@ export default function SongNhacPage() {
     // Dragging the body of a selected clip moves the whole selection.
     const selection = store.selectedIds
     const groupIds =
-      mode === 'move' && selection.length > 1 && selection.includes(layer.id) ? selection.slice() : [layer.id]
+      mode === 'move' && selection.length > 1 && selection.includes(layer.id) ? selection.slice() : [layer.id]
     // Snap marks: composition edges, the playhead and every other clip edge.
     const targets = [0, total, playhead]
     for (const item of store.layers) {
@@ -1062,6 +1065,123 @@ export default function SongNhacPage() {
     }
   }
 
+  const enqueueCurrentJob = async () => {
+    if (!audioPath) {
+      setMessage('Chưa chọn file nhạc để xếp hàng đợi.')
+      return
+    }
+    let target = outputPath
+    if (!target) {
+      const picked = await window.api.dialog.saveVideoFile(`song-nhac-${Date.now()}.mp4`)
+      if (picked.canceled || !picked.filePath) return
+      target = picked.filePath
+      setOutputPath(target)
+    }
+    const name = target.split(/[\\/]/).pop() || 'Video'
+    useExportQueue.getState().enqueue({
+      name,
+      audioPath,
+      outputPath: target,
+      snapshot: {
+        width: exportWidth,
+        height: exportHeight,
+        fps: exportFps,
+        codec: exportCodec,
+        bitrateTier,
+        theme,
+        intensity,
+        layers: layers.map((layer) => JSON.parse(JSON.stringify(layer)) as typeof layer),
+        effects: {
+          blur: effects.blur,
+          alpha: effects.alpha,
+          tint: effects.tint,
+          tintStrength: effects.tintStrength,
+          shake: effects.shake,
+          mirror: effects.mirror,
+          zoom: effects.zoom,
+          fxaa: effects.fxaa,
+          blurMode: effects.blurMode,
+        },
+      },
+    })
+    setMessage(`Đã thêm vào hàng đợi: ${name}`)
+  }
+
+  const runQueuedJob = async (job: ExportJob) => {
+    const queue = useExportQueue.getState()
+    queue.update(job.id, { status: 'running', progress: 0, message: 'Đang xuất…' })
+    const requestId = crypto.randomUUID()
+    exportRequestIdRef.current = requestId
+    setIsExporting(true)
+    const controller = new AbortController()
+    exportAbortRef.current = controller
+    exportModeRef.current = 'frames'
+    try {
+      const result = await exportSongNhacFrames({
+        requestId,
+        audioPath: job.audioPath,
+        outputPath: job.outputPath,
+        width: job.snapshot.width,
+        height: job.snapshot.height,
+        fps: job.snapshot.fps,
+        codec: job.snapshot.codec,
+        bitrateTier: job.snapshot.bitrateTier,
+        theme: job.snapshot.theme as AveeColorTheme,
+        intensity: job.snapshot.intensity,
+        quality: 'balanced',
+        seed: 93,
+        layers: job.snapshot.layers,
+        effects: job.snapshot.effects,
+        rangeStartSec: job.snapshot.rangeStartSec,
+        rangeEndSec: job.snapshot.rangeEndSec,
+        signal: controller.signal,
+        onProgress: (percent) => {
+          useExportQueue.getState().update(job.id, { progress: percent })
+          setProgress({ requestId, percent, timeSec: 0, totalSec: 0 })
+        },
+      })
+      if (controller.signal.aborted) {
+        useExportQueue.getState().update(job.id, { status: 'canceled', message: 'Đã huỷ.' })
+      } else {
+        useExportQueue.getState().update(job.id, {
+          status: result.success ? 'done' : 'error',
+          progress: result.success ? 100 : 0,
+          message: result.success ? result.outputPath : result.error || 'Xuất thất bại.',
+        })
+        setMessage(result.success ? `Xuất xong: ${result.outputPath}` : result.error || 'Xuất thất bại.')
+      }
+    } catch (error) {
+      useExportQueue.getState().update(job.id, {
+        status: 'error',
+        message: error instanceof Error ? error.message : String(error),
+      })
+    } finally {
+      exportModeRef.current = null
+      exportAbortRef.current = null
+      setIsExporting(false)
+      setProgress(null)
+    }
+  }
+
+  const cancelQueuedJob = async (job: ExportJob) => {
+    if (job.status === 'running') {
+      exportAbortRef.current?.abort()
+      await window.api.songNhac.framesCancel(exportRequestIdRef.current ?? '')
+    }
+    useExportQueue.getState().update(job.id, { status: 'canceled', message: 'Đã huỷ.' })
+  }
+
+  useEffect(() => {
+    if (isExporting) return
+    const next = useExportQueue.getState().nextPending()
+    if (!next) return
+    // The main process finishes the mux a moment after the last frame; starting the next
+    // job immediately would be rejected with "export already running".
+    const timer = setTimeout(() => {
+      void runQueuedJob(next)
+    }, 1500)
+    return () => clearTimeout(timer)
+  }, [queueJobs, isExporting])
   const cancelExport = async () => {
     const requestId = exportRequestIdRef.current
     if (!requestId) return
@@ -1398,8 +1518,112 @@ export default function SongNhacPage() {
             </div>
           )}
           {leftTab === 'export' && (
-            <div style={{ fontSize: 12, color: '#94a3b8', lineHeight: 1.5 }}>
-              Cài đặt xuất nằm ở cột bên phải: độ phân giải, FPS, codec, chất lượng và khoảng thời gian.
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12, color: '#94a3b8', lineHeight: 1.5 }}>
+              <div>
+                Cài đặt xuất nằm ở cột bên phải: độ phân giải, FPS, codec, chất lượng và khoảng thời gian.
+              </div>
+              <button type="button" onClick={enqueueCurrentJob} style={projectButtonStyle}>
+                Thêm vào hàng đợi
+              </button>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {queueJobs.map((job) => (
+                  <div
+                    key={job.id}
+                    style={{
+                      padding: 7,
+                      borderRadius: 8,
+                      border: '1px solid #1e293b',
+                      background: '#0f172a',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 4,
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span
+                        style={{
+                          flex: 1,
+                          color: '#e2e8f0',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                        title={job.outputPath}
+                      >
+                        {job.name}
+                      </span>
+                      <span
+                        style={{
+                          fontSize: 10,
+                          padding: '1px 6px',
+                          borderRadius: 999,
+                          background:
+                            job.status === 'done'
+                              ? '#14532d'
+                              : job.status === 'error'
+                                ? '#7f1d1d'
+                                : job.status === 'running'
+                                  ? '#0c4a6e'
+                                  : job.status === 'canceled'
+                                    ? '#3f3f46'
+                                    : '#1e293b',
+                          color: '#e2e8f0',
+                        }}
+                      >
+                        {job.status === 'pending'
+                          ? 'chờ'
+                          : job.status === 'running'
+                            ? `${Math.round(job.progress)}%`
+                            : job.status === 'done'
+                              ? 'xong'
+                              : job.status === 'canceled'
+                                ? 'huỷ'
+                                : 'lỗi'}
+                      </span>
+                      {job.status === 'running' && (
+                        <button type="button" onClick={() => cancelQueuedJob(job)} style={miniIconStyle}>
+                          dừng
+                        </button>
+                      )}
+                      {(job.status === 'pending' || job.status === 'running' || job.status === 'canceled') && (
+                        <button
+                          type="button"
+                          onClick={() => useExportQueue.getState().remove(job.id)}
+                          style={miniIconStyle}
+                        >
+                          x
+                        </button>
+                      )}
+                    </div>
+                    {job.status === 'running' && (
+                      <div style={{ height: 4, background: '#020617', borderRadius: 2, overflow: 'hidden' }}>
+                        <div
+                          style={{
+                            width: `${Math.max(2, Math.min(100, job.progress))}%`,
+                            height: '100%',
+                            background: 'linear-gradient(90deg, #22d3ee, #f472b6)',
+                          }}
+                        />
+                      </div>
+                    )}
+                    {job.message && (
+                      <div style={{ fontSize: 10, color: '#64748b', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {job.message}
+                      </div>
+                    )}
+                  </div>
+                ))}
+                {queueJobs.length === 0 && <div style={{ fontSize: 11, color: '#475569' }}>Hàng đợi trống.</div>}
+              </div>
+              {queueJobs.some((job) => job.status === 'done' || job.status === 'error') && (
+                <button
+                  type="button"
+                  onClick={() => useExportQueue.getState().clearFinished()}
+                  style={projectButtonStyle}
+                >
+                  Xoá việc đã xong
+                </button>
+              )}
             </div>
           )}
         </aside>
