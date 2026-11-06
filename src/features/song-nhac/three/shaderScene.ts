@@ -39,7 +39,12 @@ uniform vec3 uAccent;
 varying vec2 vUv;
 
 float spectrumAt(float x) {
-  return texture2D(uSpectrum, vec2(clamp(x, 0.0, 1.0), 0.5)).r;
+  // Average three taps: a single empty bin would otherwise carve a hard stripe
+  // through the grid.
+  float a = texture2D(uSpectrum, vec2(clamp(x - 0.004, 0.0, 1.0), 0.5)).r;
+  float b = texture2D(uSpectrum, vec2(clamp(x, 0.0, 1.0), 0.5)).r;
+  float c = texture2D(uSpectrum, vec2(clamp(x + 0.004, 0.0, 1.0), 0.5)).r;
+  return max(0.02, (a + b + c) / 3.0);
 }
 
 void main() {
