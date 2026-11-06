@@ -1,4 +1,9 @@
 import { AveeVisualizerEngine } from '../../src/features/song-nhac/three/AveeVisualizerEngine'
+import {
+  createImageLayer,
+  createTextLayer,
+  createVisualizerLayer,
+} from '../../src/features/song-nhac/studio/layerTypes'
 
 interface HarnessOptions {
   width?: number
@@ -11,6 +16,7 @@ interface HarnessOptions {
   bins?: number
   seed?: number
   simulateLogo?: boolean
+  withLayers?: boolean
   showParticles?: boolean
   showBars?: boolean
   showLogo?: boolean
@@ -46,7 +52,7 @@ function syntheticSpectrum(bins: number, time: number): Uint8Array {
   return data
 }
 
-;(window as unknown as Record<string, unknown>).renderViz = (options: HarnessOptions = {}) => {
+;(window as unknown as Record<string, unknown>).renderViz = async (options: HarnessOptions = {}) => {
   const width = options.width ?? 1280
   const height = options.height ?? 720
   const canvas = document.getElementById('stage') as HTMLCanvasElement
@@ -65,6 +71,13 @@ function syntheticSpectrum(bins: number, time: number): Uint8Array {
   })
 
   const bins = options.bins ?? 128
+  if (options.withLayers) {
+    engine.setLayers([
+      createImageLayer(makeBrightLogoDataUrl(), 'Ảnh nền'),
+      createVisualizerLayer(),
+      createTextLayer('Tên bài hát'),
+    ])
+  }
   const spectrum = syntheticSpectrum(bins, options.time ?? 3.2)
   const frame = {
     timeSec: options.time ?? 3.2,
@@ -79,6 +92,13 @@ function syntheticSpectrum(bins: number, time: number): Uint8Array {
   // Two frames: the first settles the smoothing, the second is captured.
   engine.render({ ...frame, timeSec: (options.time ?? 3.2) - 0.05 })
   engine.render(frame)
+  if (options.withLayers) {
+    // Image layers resolve asynchronously; give them a beat and draw again so the
+    // screenshot shows the composited result.
+    await new Promise((resolve) => setTimeout(resolve, 350))
+    engine.render(frame)
+  }
+  ;(window as unknown as Record<string, unknown>).__layerDebug = engine.debugLayers()
   if (options.themeAfter) {
     engine.setOptions({ theme: options.themeAfter as never })
     engine.render({ ...frame, timeSec: (options.time ?? 3.2) + 0.05 })

@@ -1,10 +1,21 @@
-import * as THREE from 'three'
+﻿import * as THREE from 'three'
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js'
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js'
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
 import type { SongNhacAudioFrame } from '../core/types'
+import { fitSize, type StudioLayer } from '../studio/layerTypes'
+
+interface LayerNode {
+  object: THREE.Object3D
+  key: string
+  baseWidth: number
+  baseHeight: number
+  lastTransform?: StudioLayer['transform']
+  depthFactor: number
+  dispose: () => void
+}
 
 export type AveeColorTheme = 'cyberpunk' | 'emerald' | 'gold' | 'ocean' | 'sunset' | 'mono'
 export type AveeQuality = 'low' | 'balanced' | 'full'
@@ -311,6 +322,11 @@ export class AveeVisualizerEngine {
   private isDisposed = false
   private logoLoadToken = 0
 
+  private visualizerGroup = new THREE.Group()
+  private layerNodes = new Map<string, LayerNode>()
+  private stageWidth = 10
+  private stageHeight = 6
+
   constructor(canvas: HTMLCanvasElement, options: AveeVisualizerOptions = {}) {
     this.canvas = canvas
     this.options = {
@@ -331,6 +347,8 @@ export class AveeVisualizerEngine {
     this.scene = new THREE.Scene()
     this.camera = new THREE.PerspectiveCamera(46, width / height, 0.1, 100)
     this.camera.position.set(0, 0, this.currentCameraZ)
+    this.scene.add(this.visualizerGroup)
+    this.updateStageSize()
 
     this.renderer = new THREE.WebGLRenderer({
       canvas,
@@ -347,7 +365,7 @@ export class AveeVisualizerEngine {
     this.glowTexture = createGlowTexture('rgba(255,255,255,0.95)', 'rgba(120,180,255,0.18)')
     this.dotTexture = createSoftDotTexture()
 
-    // ── Background ────────────────────────────────────────────────────────────
+    // â”€â”€ Background â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     this.backgroundMaterial = new THREE.ShaderMaterial({
       vertexShader: BACKGROUND_VERT,
       fragmentShader: BACKGROUND_FRAG,
@@ -368,7 +386,7 @@ export class AveeVisualizerEngine {
     this.updateBackgroundScale()
     this.scene.add(this.backgroundMesh)
 
-    // ── Logo disc ─────────────────────────────────────────────────────────────
+    // â”€â”€ Logo disc â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // Opaque backing plate: the logo texture may still be loading (or may fail for a
     // file the app:// protocol refuses). Without it the additive halo behind shows
     // through and the whole disc reads as a washed-out glow blob.
@@ -377,7 +395,7 @@ export class AveeVisualizerEngine {
       new THREE.MeshBasicMaterial({ color: 0x04060c, depthWrite: true }),
     )
     this.logoBackdrop.position.z = -0.02
-    this.scene.add(this.logoBackdrop)
+    this.visualizerGroup.add(this.logoBackdrop)
 
     this.logoMaterial = new THREE.MeshBasicMaterial({
       map: this.defaultTexture,
@@ -385,7 +403,7 @@ export class AveeVisualizerEngine {
       depthWrite: false,
     })
     this.logoMesh = new THREE.Mesh(new THREE.CircleGeometry(DEFAULT_RADIUS, 96), this.logoMaterial)
-    this.scene.add(this.logoMesh)
+    this.visualizerGroup.add(this.logoMesh)
 
     this.logoGlow = new THREE.Sprite(
       new THREE.SpriteMaterial({
@@ -399,9 +417,9 @@ export class AveeVisualizerEngine {
     )
     this.logoGlow.position.z = -0.25
     this.logoGlow.scale.setScalar(DEFAULT_RADIUS * 2.3)
-    this.scene.add(this.logoGlow)
+    this.visualizerGroup.add(this.logoGlow)
 
-    // ── Rings ─────────────────────────────────────────────────────────────────
+    // â”€â”€ Rings â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const ringGeometry = new THREE.RingGeometry(DEFAULT_RADIUS + 0.015, DEFAULT_RADIUS + 0.055, 128)
     this.innerRing = new THREE.Mesh(
       ringGeometry,
@@ -413,7 +431,7 @@ export class AveeVisualizerEngine {
         depthWrite: false,
       }),
     )
-    this.scene.add(this.innerRing)
+    this.visualizerGroup.add(this.innerRing)
 
     const outerPoints: THREE.Vector3[] = []
     const outerRadius = DEFAULT_RADIUS + 0.16
@@ -425,9 +443,9 @@ export class AveeVisualizerEngine {
       new THREE.BufferGeometry().setFromPoints(outerPoints),
       new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.4 }),
     )
-    this.scene.add(this.outerRing)
+    this.visualizerGroup.add(this.outerRing)
 
-    // ── Spectrum bars ─────────────────────────────────────────────────────────
+    // â”€â”€ Spectrum bars â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const preset = QUALITY_PRESETS[this.options.quality]
     this.barCount = preset.bars
     // Rounded caps read as "designed" instead of "debug lines"; boxes with a 0.18 radius
@@ -445,7 +463,7 @@ export class AveeVisualizerEngine {
     this.barsMesh.instanceColor = new THREE.InstancedBufferAttribute(this.barColors, 3)
     this.barsMesh.instanceColor.setUsage(THREE.DynamicDrawUsage)
     this.barsMesh.instanceMatrix.needsUpdate = true
-    this.scene.add(this.barsMesh)
+    this.visualizerGroup.add(this.barsMesh)
 
     // Inner "echo" layer: shorter, additive bars offset by half a step. It reads as a
     // soft secondary ring without doubling the draw cost.
@@ -465,9 +483,9 @@ export class AveeVisualizerEngine {
     this.barsInner.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
     this.barsInner.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(this.barCount * 3), 3)
     this.barsInner.instanceColor.setUsage(THREE.DynamicDrawUsage)
-    this.scene.add(this.barsInner)
+    this.visualizerGroup.add(this.barsInner)
 
-    // ── Particles ─────────────────────────────────────────────────────────────
+    // â”€â”€ Particles â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const particleCount = preset.particles
     this.particlePositions = new Float32Array(particleCount * 3)
     this.particleSeeds = new Float32Array(particleCount * 4)
@@ -500,9 +518,9 @@ export class AveeVisualizerEngine {
       },
     })
     this.particlePoints = new THREE.Points(particleGeometry, particleMaterial)
-    this.scene.add(this.particlePoints)
+    this.visualizerGroup.add(this.particlePoints)
 
-    // ── Post processing ───────────────────────────────────────────────────────
+    // â”€â”€ Post processing â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     this.composer = new EffectComposer(this.renderer)
     this.composer.setPixelRatio(this.resolvePixelRatio())
     this.composer.setSize(width, height)
@@ -640,6 +658,7 @@ export class AveeVisualizerEngine {
   public resize(width: number, height: number): void {
     this.camera.aspect = width / height
     this.camera.updateProjectionMatrix()
+    this.updateStageSize()
     this.renderer.setPixelRatio(this.resolvePixelRatio())
     this.renderer.setSize(width, height, false)
     this.composer.setPixelRatio(this.resolvePixelRatio())
@@ -715,6 +734,235 @@ export class AveeVisualizerEngine {
    * Render a single frame. Deterministic for a given frame payload, which is what
    * the export pipeline relies on to produce exactly what the preview shows.
    */
+  private updateStageSize(): void {
+    // Stage is measured at the rest distance so breathing never changes layer sizes.
+    const distance = 7
+    const height = 2 * Math.tan((this.camera.fov * Math.PI) / 360) * distance
+    this.stageHeight = height
+    this.stageWidth = height * this.camera.aspect
+  }
+
+  // â”€â”€ Studio layers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // Every layer is a scene object, so the frame-accurate export path keeps working
+  // without knowing that images, video or text exist.
+
+  public setLayers(layers: StudioLayer[]): void {
+    const seen = new Set<string>()
+    for (const layer of layers) {
+      if (layer.type === 'visualizer') {
+        this.applyVisualizerLayer(layer)
+        continue
+      }
+      seen.add(layer.id)
+      const key = this.layerKey(layer)
+      let node = this.layerNodes.get(layer.id)
+      if (node && node.key !== key) {
+        this.disposeLayer(layer.id)
+        node = undefined
+      }
+      if (!node) {
+        node = this.createLayerNode(layer)
+        if (!node) continue
+        this.layerNodes.set(layer.id, node)
+      }
+      this.applyLayerTransform(node, layer)
+    }
+    for (const id of Array.from(this.layerNodes.keys())) {
+      if (!seen.has(id)) this.disposeLayer(id)
+    }
+  }
+
+  private layerKey(layer: Exclude<StudioLayer, { type: 'visualizer' }>): string {
+    if (layer.type === 'text') {
+      return `text:${layer.text}|${layer.fontSize}|${layer.color}|${layer.strokeColor}|${layer.strokeWidth}|${layer.weight}|${layer.letterSpacing}|${layer.fontFamily}`
+    }
+    return `${layer.type}:${layer.url}:${layer.fit}`
+  }
+
+  private applyVisualizerLayer(layer: StudioLayer): void {
+    const t = layer.transform
+    this.visualizerGroup.position.set(t.x * this.stageWidth, -t.y * this.stageHeight, 0)
+    this.visualizerGroup.scale.set(t.scale * (t.flipX ? -1 : 1), t.scale * (t.flipY ? -1 : 1), 1)
+    this.visualizerGroup.rotation.z = (t.rotation * Math.PI) / 180
+    this.visualizerGroup.visible = layer.visible
+  }
+
+  private applyLayerTransform(node: LayerNode, layer: Exclude<StudioLayer, { type: 'visualizer' }>): void {
+    const t = layer.transform
+    node.lastTransform = t
+    node.object.position.set(t.x * this.stageWidth, -t.y * this.stageHeight, layer.type === 'text' ? 1.5 : -2)
+    // Scale composes with the fitted base size, otherwise "scale 1" would squish a
+    // full-frame image down to a 1x1 unit plane.
+    node.object.scale.set(
+      node.baseWidth * node.depthFactor * t.scale * (t.flipX ? -1 : 1),
+      node.baseHeight * node.depthFactor * t.scale * (t.flipY ? -1 : 1),
+      1,
+    )
+    node.object.rotation.z = (t.rotation * Math.PI) / 180
+    node.object.visible = layer.visible
+    const material = (node.object as THREE.Mesh).material as THREE.MeshBasicMaterial | undefined
+    if (material) material.opacity = t.opacity
+  }
+
+  private createLayerNode(layer: Exclude<StudioLayer, { type: 'visualizer' }>): LayerNode | null {
+    if (layer.type === 'text') return this.createTextNode(layer)
+
+    const material = new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false })
+    // Bloom is global: a full-frame photo at full brightness would glow the whole
+    // screen white. Dim the media plate so only the visualizer crosses the threshold.
+    material.color.setScalar(0.55)
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), material)
+    const node: LayerNode = {
+      object: mesh,
+      key: this.layerKey(layer),
+      baseWidth: this.stageWidth,
+      baseHeight: this.stageHeight,
+      // Layers sit off the z=0 plane, so the same world size covers a different share of
+      // the frame; scale by the frustum ratio at that depth.
+      depthFactor: (7 + 2) / 7,
+      dispose: () => {
+        const map = material.map
+        material.dispose()
+        mesh.geometry.dispose()
+        if (map) map.dispose()
+      },
+    }
+
+    if (layer.type === 'image') {
+      // fetch + createImageBitmap works for data:, http(s): and the app:// protocol alike;
+      // a plain <img> silently fails for some of those in the packaged renderer.
+      fetch(layer.url)
+        .then((response) => {
+          return response.blob()
+        })
+        .then((blob) => {
+          return createImageBitmap(blob)
+        })
+        .then((bitmap) => {
+          if (this.isDisposed) {
+            bitmap.close()
+            return
+          }
+          const texture = new THREE.Texture(bitmap)
+          texture.colorSpace = THREE.SRGBColorSpace
+          texture.needsUpdate = true
+          material.map = texture
+          material.needsUpdate = true
+          const fitted = fitSize(bitmap.width, bitmap.height, this.stageWidth, this.stageHeight, layer.fit)
+          node.baseWidth = fitted.width
+          node.baseHeight = fitted.height
+          const lt = node.lastTransform
+          mesh.scale.set(
+            fitted.width * node.depthFactor * (lt?.scale ?? 1) * (lt?.flipX ? -1 : 1),
+            fitted.height * node.depthFactor * (lt?.scale ?? 1) * (lt?.flipY ? -1 : 1),
+            1,
+          )
+        })
+        .catch(() => {
+          material.color.set('#111827')
+        })
+    } else {
+      const video = document.createElement('video')
+      video.src = layer.url
+      video.muted = layer.muted
+      video.loop = layer.loop
+      video.playsInline = true
+      video.crossOrigin = 'anonymous'
+      void video.play().catch(() => undefined)
+      const texture = new THREE.VideoTexture(video)
+      texture.colorSpace = THREE.SRGBColorSpace
+      material.map = texture
+      const previousDispose = node.dispose
+      node.dispose = () => {
+        video.pause()
+        video.src = ''
+        previousDispose()
+      }
+    }
+
+    this.scene.add(mesh)
+    return node
+  }
+
+  private createTextNode(layer: Extract<StudioLayer, { type: 'text' }>): LayerNode {
+    const canvas = document.createElement('canvas')
+    const ctx = canvas.getContext('2d')
+    const font = `${layer.weight} ${layer.fontSize}px ${layer.fontFamily}`
+    const padding = Math.ceil(layer.fontSize * 0.4)
+    let width = 512
+    let height = Math.ceil(layer.fontSize * 1.5)
+
+    if (ctx) {
+      ctx.font = font
+      width = Math.ceil(ctx.measureText(layer.text || ' ').width + padding * 2)
+      canvas.width = width
+      canvas.height = height
+      ctx.clearRect(0, 0, width, height)
+      ctx.font = font
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+      if (layer.strokeWidth > 0) {
+        ctx.lineWidth = layer.strokeWidth
+        ctx.strokeStyle = layer.strokeColor
+        ctx.strokeText(layer.text, width / 2, height / 2)
+      }
+      ctx.fillStyle = layer.color
+      ctx.fillText(layer.text, width / 2, height / 2)
+    }
+
+    const texture = new THREE.CanvasTexture(canvas)
+    texture.colorSpace = THREE.SRGBColorSpace
+    const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true, depthWrite: false })
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), material)
+
+    // 1080 px of canvas height maps to the stage height, so fontSize behaves like px.
+    const unit = this.stageHeight / 1080
+    const baseWidth = width * unit
+    const baseHeight = height * unit
+    mesh.scale.set(baseWidth, baseHeight, 1)
+
+    const node: LayerNode = {
+      object: mesh,
+      key: this.layerKey(layer),
+      baseWidth,
+      baseHeight,
+      depthFactor: (7 - 1.5) / 7,
+      dispose: () => {
+        texture.dispose()
+        material.dispose()
+        mesh.geometry.dispose()
+      },
+    }
+    this.scene.add(mesh)
+    return node
+  }
+
+  private disposeLayer(id: string): void {
+    const node = this.layerNodes.get(id)
+    if (!node) return
+    this.scene.remove(node.object)
+    node.dispose()
+    this.layerNodes.delete(id)
+  }
+
+  /** Diagnostic snapshot of the layer graph (used by the preview harness). */
+  public debugLayers(): Array<{ id: string; type: string; visible: boolean; z: number; sx: number; sy: number; hasMap: boolean }> {
+    return Array.from(this.layerNodes.entries()).map(([id, node]) => {
+      const mesh = node.object as THREE.Mesh
+      const material = mesh.material as THREE.MeshBasicMaterial
+      const map = material?.map as THREE.Texture | null
+      return {
+        id,
+        type: material ? 'mesh' : 'unknown',
+        visible: node.object.visible,
+        z: Number(node.object.position.z.toFixed(2)),
+        sx: Number(node.object.scale.x.toFixed(2)),
+        sy: Number(node.object.scale.y.toFixed(2)),
+        hasMap: Boolean(map && (map.image as { width?: number } | undefined)?.width),
+      }
+    })
+  }
+
   public render(frame: SongNhacAudioFrame): void {
     if (this.isDisposed) return
     const timeSec = Number.isFinite(frame.timeSec) ? frame.timeSec : 0
@@ -751,6 +999,7 @@ export class AveeVisualizerEngine {
 
   public dispose(): void {
     this.isDisposed = true
+    for (const id of Array.from(this.layerNodes.keys())) this.disposeLayer(id)
     this.scene.clear()
     this.composer.dispose()
     this.renderer.dispose()

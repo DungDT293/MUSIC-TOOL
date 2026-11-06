@@ -22,9 +22,9 @@ async function main() {
   await page.goto('file://' + path.resolve(__dirname, 'index.html').replace(/\\/g, '/'))
   await page.waitForFunction(() => typeof window.renderViz === 'function', { timeout: 15000 })
   await page.evaluate(
-    ({ theme, time, width, height, themeAfter, simulateLogo }) =>
-      window.renderViz({ theme, time, width, height, quality: 'balanced', themeAfter, simulateLogo }),
-    { theme, time: Number(timeArg), width, height, themeAfter, simulateLogo: logoArg === 'logo' },
+    ({ theme, time, width, height, themeAfter, simulateLogo, withLayers }) =>
+      window.renderViz({ theme, time, width, height, quality: 'balanced', themeAfter, simulateLogo, withLayers }),
+    { theme, time: Number(timeArg), width, height, themeAfter, simulateLogo: logoArg === 'logo', withLayers: logoArg === 'layers' },
   )
   await page.waitForTimeout(400)
   const out = path.resolve(outFile)

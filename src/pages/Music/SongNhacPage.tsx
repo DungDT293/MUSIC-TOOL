@@ -4,6 +4,16 @@ import { renderSongNhacFrame } from '../../features/song-nhac/core/renderSongNha
 import { SONG_NHAC_STYLES, clampRenderConfig, type SongNhacStyle } from '../../features/song-nhac/core/types'
 import { AveeVisualizerEngine, AVEE_THEMES, type AveeColorTheme } from '../../features/song-nhac/three/AveeVisualizerEngine'
 import { exportSongNhacFrames } from '../../features/song-nhac/export/exportSongNhacFrames'
+import { LayersPanel } from '../../features/song-nhac/studio/LayersPanel'
+import { InspectorPanel } from '../../features/song-nhac/studio/InspectorPanel'
+import {
+  createImageLayer,
+  createTextLayer,
+  createVideoLayer,
+  createVisualizerLayer,
+  type StudioLayer,
+  type StudioLayerType,
+} from '../../features/song-nhac/studio/layerTypes'
 import type { SongNhacExportProgress } from '../../../shared/songNhacChannels'
 
 function localFileUrl(filePath: string): string {
@@ -57,6 +67,9 @@ export default function SongNhacPage() {
 
   const [isPlaying, setIsPlaying] = useState(false)
   const [webglFallback, setWebglFallback] = useState(false)
+  const [layers, setLayers] = useState<StudioLayer[]>(() => [createVisualizerLayer()])
+  const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null)
+  const layersRef = useRef<StudioLayer[]>(layers)
   const [isExporting, setIsExporting] = useState(false)
   const [progress, setProgress] = useState<SongNhacExportProgress | null>(null)
   const [message, setMessage] = useState('Chọn audio để bắt đầu.')
@@ -79,6 +92,7 @@ export default function SongNhacPage() {
         showParticles,
         showLogo,
       })
+      aveeEngineRef.current.setLayers(layersRef.current)
     } catch (error) {
       // No usable WebGL context (VM, old driver, blocked GPU). Remember the failure so the
       // animation loop does not retry every frame, and let the caller draw the 2D fallback.
@@ -287,6 +301,60 @@ export default function SongNhacPage() {
       if (rafRef.current !== null) cancelAnimationFrame(rafRef.current)
     }
   }
+
+  const selectedLayer = layers.find((layer) => layer.id === selectedLayerId) ?? null
+
+  const updateLayer = useCallback((patch: Partial<StudioLayer>) => {
+    if (!selectedLayerId) return
+    setLayers((prev) => prev.map((layer) => (layer.id === selectedLayerId ? ({ ...layer, ...patch } as StudioLayer) : layer)))
+  }, [selectedLayerId])
+
+  const addLayer = useCallback(async (type: Exclude<StudioLayerType, 'visualizer'>) => {
+    if (type === 'text') {
+      const layer = createTextLayer('Tên bài hát')
+      setLayers((prev) => [...prev, layer])
+      setSelectedLayerId(layer.id)
+      return
+    }
+    const filters = type === 'image'
+      ? [{ name: 'Ảnh', extensions: ['jpg', 'jpeg', 'png', 'webp'] }]
+      : [{ name: 'Video', extensions: ['mp4', 'mov', 'mkv', 'webm'] }]
+    const picked = await window.api.dialog.openFile({ properties: ['openFile'], filters })
+    const filePath = picked?.filePaths?.[0]
+    if (!filePath) return
+    const name = filePath.split(/[\\/]/).pop() || undefined
+    const layer = type === 'image'
+      ? createImageLayer(localFileUrl(filePath), name)
+      : createVideoLayer(localFileUrl(filePath), name)
+    setLayers((prev) => [...prev, layer])
+    setSelectedLayerId(layer.id)
+  }, [])
+
+  const moveLayer = useCallback((id: string, direction: -1 | 1) => {
+    setLayers((prev) => {
+      const index = prev.findIndex((layer) => layer.id === id)
+      const target = index + direction
+      if (index < 0 || target < 0 || target >= prev.length) return prev
+      const next = [...prev]
+      const [moved] = next.splice(index, 1)
+      next.splice(target, 0, moved)
+      return next
+    })
+  }, [])
+
+  const removeLayer = useCallback((id: string) => {
+    setLayers((prev) => prev.filter((layer) => layer.id !== id))
+    setSelectedLayerId((current) => (current === id ? null : current))
+  }, [])
+
+  const toggleLayerVisible = useCallback((id: string) => {
+    setLayers((prev) => prev.map((layer) => (layer.id === id ? { ...layer, visible: !layer.visible } : layer)))
+  }, [])
+
+  useEffect(() => {
+    layersRef.current = layers
+    aveeEngineRef.current?.setLayers(layers)
+  }, [layers, webglFallback])
 
   const startExport = async () => {
     if (!audioPath || !outputPath || isExporting) return
@@ -637,6 +705,22 @@ export default function SongNhacPage() {
               </div>
             </div>
           )}
+
+          {/* Layers + inspector */}
+          <LayersPanel
+            layers={layers}
+            selectedId={selectedLayerId}
+            onSelect={setSelectedLayerId}
+            onAdd={addLayer}
+            onToggleVisible={toggleLayerVisible}
+            onMove={moveLayer}
+            onRemove={removeLayer}
+          />
+          <InspectorPanel
+            layer={selectedLayer}
+            onUpdate={updateLayer}
+            onPickMedia={() => { if (selectedLayer) void addLayer(selectedLayer.type === 'video' ? 'video' : 'image') }}
+          />
 
           {/* 4. Output MP4 */}
           <div>
