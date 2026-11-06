@@ -16,6 +16,7 @@ import { TimelineClipMenu, type ClipMenuState } from '../../features/song-nhac/s
 import { useMediaLibrary, type MediaKind } from '../../features/song-nhac/studio/mediaLibraryStore'
 import { useExportQueue, type ExportJob } from '../../features/song-nhac/studio/exportQueueStore'
 import { useUserPresets } from '../../features/song-nhac/studio/userPresetsStore'
+import { STOCK_ITEMS } from '../../features/song-nhac/studio/stockMedia'
 import { useProjectHistory } from '../../features/song-nhac/studio/projectHistoryStore'
 import {
   renderPresetThumbnails,
@@ -926,7 +927,9 @@ export default function SongNhacPage() {
   }
 
   const applyMediaItem = (kind: MediaKind, filePath: string) => {
-    const name = filePath.split(/[\\/]/).pop() || 'Media'
+    const isStock = filePath.startsWith('data:')
+    const stockName = isStock ? STOCK_ITEMS.find((item) => item.dataUrl === filePath)?.name : undefined
+    const name = stockName || filePath.split(/[\\/]/).pop() || 'Media'
     const store = useSongNhacLayerStore.getState()
     if (kind === 'audio') {
       setAudioPath(filePath)
@@ -937,8 +940,9 @@ export default function SongNhacPage() {
       }
       return
     }
-    if (kind === 'video') store.addVideoLayer(name, localFileUrl(filePath))
-    else store.addImageLayer(name, localFileUrl(filePath))
+    const src = isStock ? filePath : localFileUrl(filePath)
+    if (kind === 'video') store.addVideoLayer(name, src)
+    else store.addImageLayer(name, src)
   }
 
   const addMediaFromDialog = async () => {
@@ -1591,6 +1595,25 @@ export default function SongNhacPage() {
                   >
                     {tab.label}
                   </button>
+                ))}
+              </div>
+              <div style={{ fontSize: 10, letterSpacing: 0.5, color: '#475569' }}>KHO MẪU</div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 4 }}>
+                {STOCK_ITEMS.map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => applyMediaItem(item.kind, item.dataUrl)}
+                    title={item.name}
+                    style={{
+                      padding: 0,
+                      border: '1px solid #1e293b',
+                      borderRadius: 6,
+                      height: 34,
+                      cursor: 'pointer',
+                      background: `url(${item.dataUrl}) center / cover no-repeat`,
+                    }}
+                  />
                 ))}
               </div>
               <button type="button" onClick={addMediaFromDialog} style={projectButtonStyle}>

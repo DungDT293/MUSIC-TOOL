@@ -1341,11 +1341,21 @@ export class AveeVisualizerEngine {
     }
 
     if (layer.type === 'image') {
-      // fetch + createImageBitmap works for data:, http(s): and the app:// protocol alike;
-      // a plain <img> silently fails for some of those in the packaged renderer.
-      fetch(layer.src)
-        .then((response) => response.blob())
-        .then((blob) => createImageBitmap(blob))
+      // fetch + createImageBitmap works for http(s) and the app:// protocol, but the CSP
+      // blocks data: URLs in connect-src, so those go through an <img> element instead.
+      const source: Promise<ImageBitmap> = layer.src.startsWith('data:')
+        ? new Promise<ImageBitmap>((resolve, reject) => {
+            const image = new Image()
+            image.onload = () => {
+              createImageBitmap(image).then(resolve).catch(reject)
+            }
+            image.onerror = () => reject(new Error('Không đọc được ảnh stock.'))
+            image.src = layer.src
+          })
+        : fetch(layer.src)
+            .then((response) => response.blob())
+            .then((blob) => createImageBitmap(blob))
+      source
         .then((bitmap) => {
           if (this.isDisposed) {
             bitmap.close()

@@ -11,7 +11,7 @@ Mục tiêu: clone toàn bộ chức năng editor Vizzy vào Sóng nhạc. Mỗi
 | **Analyzers** | analyzer theo layer: dải tần, màu, độ nhạy | ✅ dải tần + độ nhạy + làm mượt theo từng layer (rail Analyzer + Inspector) |
 | **Effects** | blending, two-pass blur, global alpha, FXAA, tint, mirror, camera shake | ✅ blur (1 pass / 2 pass separable), alpha, tint, mirror, zoom, shake, **FXAA** |
 | **Automations** | keyframe theo thuộc tính | ✅ keyframe opacity/scaleX/scaleY/x/y/rotation, nội suy tuyến tính, hiện trên timeline |
-| **Media** | uploads, stock, audio, images, videos | 🟡 thư viện 3 tab (ảnh/video/audio) lưu localStorage, bấm để thêm lớp; chưa có stock |
+| **Media** | uploads, stock, audio, images, videos | ✅ thư viện 3 tab + **kho mẫu 8 nền SVG dựng sẵn** (bấm là thêm lớp) |
 | **Projects** | project settings/history, list | ✅ lưu/mở .json, **danh sách gần đây (10)**, **tự lưu nháp + khôi phục khi mở app** |
 | **Lyrics** | nhập lyric, LRCLIB | ✅ nhập LRC/plain, tự chia thời gian, overlay lyric, **tìm lời online qua LRCLIB** |
 
