@@ -1,7 +1,12 @@
 import * as THREE from 'three'
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js'
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
 import type { SongNhacAudioFrame } from '../core/types'
 
-export type AveeColorTheme = 'cyberpunk' | 'emerald' | 'gold' | 'ocean'
+export type AveeColorTheme = 'cyberpunk' | 'emerald' | 'gold' | 'ocean' | 'sunset' | 'mono'
+export type AveeQuality = 'low' | 'balanced' | 'full'
 
 export interface AveeVisualizerOptions {
   theme?: AveeColorTheme
@@ -10,51 +15,143 @@ export interface AveeVisualizerOptions {
   showParticles?: boolean
   showBars?: boolean
   showLogo?: boolean
+  showRing?: boolean
+  quality?: AveeQuality
+  /** Seed for every pseudo-random element so exports are reproducible. */
+  seed?: number
 }
 
-export const AVEE_THEMES: Record<
-  AveeColorTheme,
-  {
-    name: string
-    primary: number
-    secondary: number
-    particles: number
-    ring: number
-    bg: string
-  }
-> = {
+interface ThemePalette {
+  name: string
+  primary: number
+  secondary: number
+  accent: number
+  particles: number
+  ring: number
+  background: [string, string, string]
+  bloom: number
+}
+
+export const AVEE_THEMES: Record<AveeColorTheme, ThemePalette> = {
   cyberpunk: {
-    name: 'Cyberpunk (Xanh - Hồng)',
+    name: 'Cyberpunk',
     primary: 0x00f2fe,
     secondary: 0xfe0979,
+    accent: 0x7c3aed,
     particles: 0x4facfe,
     ring: 0x00f2fe,
-    bg: '#040714',
+    background: ['#0a1030', '#050818', '#01030a'],
+    bloom: 1.0,
   },
   emerald: {
-    name: 'Emerald (Xanh ngọc)',
+    name: 'Emerald',
     primary: 0x00f5a0,
     secondary: 0x00d9f5,
+    accent: 0x22c55e,
     particles: 0x70f5b0,
     ring: 0x00f5a0,
-    bg: '#030f0a',
+    background: ['#04160f', '#02100a', '#010604'],
+    bloom: 0.95,
   },
   gold: {
-    name: 'Gold (Vàng kim)',
+    name: 'Gold',
     primary: 0xffd200,
     secondary: 0xf7971e,
+    accent: 0xff7b00,
     particles: 0xffe680,
     ring: 0xffd200,
-    bg: '#0f0b03',
+    background: ['#1a1204', '#0f0b03', '#070501'],
+    bloom: 1.05,
   },
   ocean: {
-    name: 'Ocean (Xanh dương)',
+    name: 'Ocean',
     primary: 0x2193b0,
     secondary: 0x6dd5ed,
+    accent: 0x1e3a8a,
     particles: 0x9be2f5,
     ring: 0x2193b0,
-    bg: '#020b14',
+    background: ['#03182b', '#020d18', '#01060c'],
+    bloom: 0.9,
   },
+  sunset: {
+    name: 'Sunset',
+    primary: 0xff7e5f,
+    secondary: 0xfeb47b,
+    accent: 0xb91c5b,
+    particles: 0xffd6a5,
+    ring: 0xff7e5f,
+    background: ['#1c0d16', '#120710', '#08030a'],
+    bloom: 1.0,
+  },
+  mono: {
+    name: 'Mono',
+    primary: 0xffffff,
+    secondary: 0xa1a1aa,
+    accent: 0x52525b,
+    particles: 0xe4e4e7,
+    ring: 0xffffff,
+    background: ['#101014', '#0a0a0d', '#040405'],
+    bloom: 0.8,
+  },
+}
+
+export const AVEE_THEME_LIST = (Object.keys(AVEE_THEMES) as AveeColorTheme[]).map((id) => ({
+  id,
+  label: AVEE_THEMES[id].name,
+}))
+
+const QUALITY_PRESETS = {
+  low: { bars: 96, particles: 260, bloom: 0.5, pixelRatio: 1 },
+  balanced: { bars: 160, particles: 520, bloom: 0.7, pixelRatio: 1 },
+  full: { bars: 224, particles: 900, bloom: 1, pixelRatio: 1.5 },
+} as const
+
+const BAR_BASE_RADIUS = 1.32
+const DEFAULT_RADIUS = 1.18
+
+function fract(value: number): number {
+  return value - Math.floor(value)
+}
+
+/** Deterministic hash-based pseudo random in [0, 1). */
+function hash(index: number, seed: number): number {
+  return fract(Math.sin(index * 12.9898 + seed * 78.233) * 43758.5453)
+}
+
+function createGlowTexture(inner: string, outer: string): THREE.Texture {
+  const size = 256
+  const canvas = document.createElement('canvas')
+  canvas.width = size
+  canvas.height = size
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return new THREE.CanvasTexture(canvas)
+  const gradient = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2)
+  gradient.addColorStop(0, inner)
+  gradient.addColorStop(0.45, outer)
+  gradient.addColorStop(1, 'rgba(0,0,0,0)')
+  ctx.fillStyle = gradient
+  ctx.fillRect(0, 0, size, size)
+  const texture = new THREE.CanvasTexture(canvas)
+  texture.needsUpdate = true
+  return texture
+}
+
+function createSoftDotTexture(): THREE.Texture {
+  const size = 128
+  const canvas = document.createElement('canvas')
+  canvas.width = size
+  canvas.height = size
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return new THREE.CanvasTexture(canvas)
+  const gradient = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2)
+  gradient.addColorStop(0, 'rgba(255,255,255,1)')
+  gradient.addColorStop(0.35, 'rgba(255,255,255,0.65)')
+  gradient.addColorStop(1, 'rgba(255,255,255,0)')
+  ctx.fillStyle = gradient
+  ctx.fillRect(0, 0, size, size)
+  const texture = new THREE.CanvasTexture(canvas)
+  texture.needsUpdate = true
+  return texture
 }
 
 function createDefaultLogoTexture(): THREE.CanvasTexture {
@@ -66,282 +163,423 @@ function createDefaultLogoTexture(): THREE.CanvasTexture {
 
   const cx = 256
   const cy = 256
-  const r = 240
+  const r = 248
 
-  // Background gradient disc
-  const bgGrad = ctx.createRadialGradient(cx, cy, 30, cx, cy, r)
-  bgGrad.addColorStop(0, '#0f172a')
-  bgGrad.addColorStop(0.7, '#070b14')
-  bgGrad.addColorStop(1, '#020408')
+  const bgGrad = ctx.createRadialGradient(cx, cy, 20, cx, cy, r)
+  bgGrad.addColorStop(0, '#0b1224')
+  bgGrad.addColorStop(0.65, '#05080f')
+  bgGrad.addColorStop(1, '#010204')
   ctx.fillStyle = bgGrad
   ctx.beginPath()
   ctx.arc(cx, cy, r, 0, Math.PI * 2)
   ctx.fill()
 
-  // Inner rings
-  ctx.lineWidth = 4
+  ctx.lineWidth = 6
   ctx.strokeStyle = '#00f2fe'
   ctx.beginPath()
-  ctx.arc(cx, cy, r - 12, 0, Math.PI * 2)
+  ctx.arc(cx, cy, r - 14, 0, Math.PI * 2)
   ctx.stroke()
 
   ctx.lineWidth = 2
   ctx.strokeStyle = '#fe0979'
   ctx.beginPath()
-  ctx.arc(cx, cy, r - 22, 0, Math.PI * 2)
+  ctx.arc(cx, cy, r - 26, 0, Math.PI * 2)
   ctx.stroke()
 
-  // Accent arc dots
   ctx.fillStyle = '#ffffff'
   for (let i = 0; i < 12; i += 1) {
     const angle = (i / 12) * Math.PI * 2
-    const dotX = cx + Math.cos(angle) * (r - 17)
-    const dotY = cy + Math.sin(angle) * (r - 17)
     ctx.beginPath()
-    ctx.arc(dotX, dotY, 3, 0, Math.PI * 2)
+    ctx.arc(cx + Math.cos(angle) * (r - 19), cy + Math.sin(angle) * (r - 19), 3, 0, Math.PI * 2)
     ctx.fill()
   }
 
-  // Typography "93"
   ctx.textAlign = 'center'
   ctx.textBaseline = 'middle'
-  ctx.font = '900 130px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
-  const textGrad = ctx.createLinearGradient(cx - 100, cy - 50, cx + 100, cy + 50)
-  textGrad.addColorStop(0, '#00f2fe')
-  textGrad.addColorStop(0.5, '#ffffff')
-  textGrad.addColorStop(1, '#fe0979')
+  ctx.font = '900 140px "Segoe UI", Roboto, sans-serif'
+  const textGrad = ctx.createLinearGradient(cx - 110, cy - 60, cx + 110, cy + 60)
+  textGrad.addColorStop(0, '#0891b2')
+  textGrad.addColorStop(0.5, '#67e8f9')
+  textGrad.addColorStop(1, '#db2777')
   ctx.fillStyle = textGrad
-  ctx.fillText('93', cx, cy - 20)
+  ctx.fillText('93', cx, cy - 22)
 
-  // Typography "MEDIA"
-  ctx.font = '700 30px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
-  ctx.fillStyle = '#94a3b8'
-  ctx.letterSpacing = '10px'
-  ctx.fillText('M E D I A', cx + 5, cy + 65)
+  ctx.font = '700 28px "Segoe UI", Roboto, sans-serif'
+  ctx.fillStyle = '#64748b'
+  ctx.fillText('M E D I A', cx + 4, cy + 66)
 
   const texture = new THREE.CanvasTexture(canvas)
   texture.needsUpdate = true
   return texture
 }
 
+const BACKGROUND_VERT = /* glsl */ `
+  varying vec2 vUv;
+  void main() {
+    vUv = uv;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`
+
+const BACKGROUND_FRAG = /* glsl */ `
+  precision highp float;
+  varying vec2 vUv;
+  uniform vec3 uInner;
+  uniform vec3 uMid;
+  uniform vec3 uOuter;
+  uniform vec3 uAccent;
+  uniform float uPulse;
+  uniform float uAspect;
+
+  void main() {
+    vec2 p = (vUv - 0.5) * vec2(uAspect, 1.0);
+    float d = length(p);
+    float glow = smoothstep(0.85, 0.0, d);
+    vec3 col = mix(uOuter, uMid, smoothstep(0.0, 0.55, glow));
+    col = mix(col, uInner, smoothstep(0.35, 1.0, glow));
+    // accent halo that breathes with the kick drum
+    float halo = smoothstep(0.45, 0.0, abs(d - 0.18 - uPulse * 0.05));
+    col += uAccent * halo * (0.12 + uPulse * 0.25);
+    // subtle vignette
+    col *= 1.0 - smoothstep(0.55, 1.15, d) * 0.55;
+    gl_FragColor = vec4(col, 1.0);
+  }
+`
+
+const PARTICLE_VERT = /* glsl */ `
+  attribute float aSize;
+  attribute float aAlpha;
+  varying float vAlpha;
+  uniform float uPixelRatio;
+  void main() {
+    vAlpha = aAlpha;
+    vec4 mv = modelViewMatrix * vec4(position, 1.0);
+    gl_PointSize = aSize * uPixelRatio * (18.0 / -mv.z);
+    gl_Position = projectionMatrix * mv;
+  }
+`
+
+const PARTICLE_FRAG = /* glsl */ `
+  varying float vAlpha;
+  uniform vec3 uColor;
+  void main() {
+    vec2 c = gl_PointCoord - vec2(0.5);
+    float d = length(c);
+    float alpha = smoothstep(0.5, 0.0, d) * vAlpha;
+    if (alpha <= 0.001) discard;
+    gl_FragColor = vec4(uColor, alpha);
+  }
+`
+
 export class AveeVisualizerEngine {
   private canvas: HTMLCanvasElement
   private renderer: THREE.WebGLRenderer
   private scene: THREE.Scene
   private camera: THREE.PerspectiveCamera
+  private composer: EffectComposer
+  private bloomPass: UnrealBloomPass
+
+  private backgroundMesh: THREE.Mesh
+  private backgroundMaterial: THREE.ShaderMaterial
+
+  private barsMesh: THREE.InstancedMesh
+  private barsInner: THREE.InstancedMesh
+  private barColors: Float32Array
+  private barCount = 0
 
   private logoMesh: THREE.Mesh
   private logoMaterial: THREE.MeshBasicMaterial
+  private logoGlow: THREE.Sprite
   private innerRing: THREE.Mesh
   private outerRing: THREE.LineLoop
-  private barsGroup: THREE.Group
-  private barMeshes: THREE.Mesh[] = []
-  private particles: THREE.Points
+  private particlePoints: THREE.Points
   private particlePositions: Float32Array
-  private particleVelocities: Float32Array
+  private particleSeeds: Float32Array
 
   private defaultTexture: THREE.CanvasTexture
   private customTexture: THREE.Texture | null = null
+  private glowTexture: THREE.Texture
+  private dotTexture: THREE.Texture
 
   private options: Required<AveeVisualizerOptions>
-  private barCount = 96
-  private baseRadius = 1.35
-  private currentLogoScale = 1.0
-  private currentCameraZ = 6.2
+  private currentLogoScale = 1
+  private currentCameraZ = 7
+  private lastTimeSec = -1
   private isDisposed = false
 
   constructor(canvas: HTMLCanvasElement, options: AveeVisualizerOptions = {}) {
     this.canvas = canvas
     this.options = {
-      theme: options.theme || 'cyberpunk',
-      logoUrl: options.logoUrl || null,
-      intensity: options.intensity ?? 1.0,
+      theme: options.theme ?? 'cyberpunk',
+      logoUrl: options.logoUrl ?? null,
+      intensity: options.intensity ?? 1,
       showParticles: options.showParticles ?? true,
       showBars: options.showBars ?? true,
       showLogo: options.showLogo ?? true,
+      showRing: options.showRing ?? true,
+      quality: options.quality ?? 'balanced',
+      seed: options.seed ?? 93,
     }
 
-    const width = canvas.width || 960
-    const height = canvas.height || 540
+    const width = canvas.width || 1280
+    const height = canvas.height || 720
 
-    // Setup Scene & Camera
     this.scene = new THREE.Scene()
-    this.camera = new THREE.PerspectiveCamera(50, width / height, 0.1, 100)
+    this.camera = new THREE.PerspectiveCamera(46, width / height, 0.1, 100)
     this.camera.position.set(0, 0, this.currentCameraZ)
 
-    // WebGL Renderer
     this.renderer = new THREE.WebGLRenderer({
       canvas,
       antialias: true,
-      alpha: true,
+      alpha: false,
       powerPreference: 'high-performance',
     })
+    this.renderer.setPixelRatio(this.resolvePixelRatio())
     this.renderer.setSize(width, height, false)
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping
+    this.renderer.toneMappingExposure = 1.05
 
-    // Default Texture
     this.defaultTexture = createDefaultLogoTexture()
+    this.glowTexture = createGlowTexture('rgba(255,255,255,0.95)', 'rgba(120,180,255,0.18)')
+    this.dotTexture = createSoftDotTexture()
 
-    // 1. Logo Mesh
-    const logoGeometry = new THREE.CircleGeometry(this.baseRadius, 64)
+    // ── Background ────────────────────────────────────────────────────────────
+    this.backgroundMaterial = new THREE.ShaderMaterial({
+      vertexShader: BACKGROUND_VERT,
+      fragmentShader: BACKGROUND_FRAG,
+      depthWrite: false,
+      depthTest: false,
+      uniforms: {
+        uInner: { value: new THREE.Color() },
+        uMid: { value: new THREE.Color() },
+        uOuter: { value: new THREE.Color() },
+        uAccent: { value: new THREE.Color() },
+        uPulse: { value: 0 },
+        uAspect: { value: width / height },
+      },
+    })
+    this.backgroundMesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.backgroundMaterial)
+    this.backgroundMesh.position.z = -20
+    this.backgroundMesh.frustumCulled = false
+    this.updateBackgroundScale()
+    this.scene.add(this.backgroundMesh)
+
+    // ── Logo disc ─────────────────────────────────────────────────────────────
     this.logoMaterial = new THREE.MeshBasicMaterial({
       map: this.defaultTexture,
       transparent: true,
-      side: THREE.DoubleSide,
+      depthWrite: false,
     })
-    this.logoMesh = new THREE.Mesh(logoGeometry, this.logoMaterial)
+    this.logoMesh = new THREE.Mesh(new THREE.CircleGeometry(DEFAULT_RADIUS, 96), this.logoMaterial)
     this.scene.add(this.logoMesh)
 
-    // 2. Rings
-    const currentTheme = AVEE_THEMES[this.options.theme]
-    const ringGeo = new THREE.RingGeometry(this.baseRadius + 0.02, this.baseRadius + 0.05, 64)
-    const ringMat = new THREE.MeshBasicMaterial({
-      color: currentTheme.ring,
-      transparent: true,
-      opacity: 0.9,
-      side: THREE.DoubleSide,
-    })
-    this.innerRing = new THREE.Mesh(ringGeo, ringMat)
-    this.scene.add(this.innerRing)
+    this.logoGlow = new THREE.Sprite(
+      new THREE.SpriteMaterial({
+        map: this.glowTexture,
+        transparent: true,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        depthTest: false,
+        opacity: 0.22,
+      }),
+    )
+    this.logoGlow.position.z = -0.25
+    this.logoGlow.scale.setScalar(DEFAULT_RADIUS * 2.3)
+    this.scene.add(this.logoGlow)
 
-    // Outer subtle dashed ring
-    const outerRingPoints: THREE.Vector3[] = []
-    const outerRadius = this.baseRadius + 0.12
-    for (let i = 0; i <= 64; i += 1) {
-      const a = (i / 64) * Math.PI * 2
-      outerRingPoints.push(new THREE.Vector3(Math.cos(a) * outerRadius, Math.sin(a) * outerRadius, 0))
-    }
-    const outerRingGeo = new THREE.BufferGeometry().setFromPoints(outerRingPoints)
-    const outerRingMat = new THREE.LineBasicMaterial({
-      color: currentTheme.secondary,
-      transparent: true,
-      opacity: 0.45,
-    })
-    this.outerRing = new THREE.LineLoop(outerRingGeo, outerRingMat)
-    this.scene.add(this.outerRing)
-
-    // 3. Circular Spectrum Bars
-    this.barsGroup = new THREE.Group()
-    this.scene.add(this.barsGroup)
-    this.initSpectrumBars()
-
-    // 4. Stardust Particles
-    const particleCount = 450
-    const particleGeo = new THREE.BufferGeometry()
-    this.particlePositions = new Float32Array(particleCount * 3)
-    this.particleVelocities = new Float32Array(particleCount * 3)
-
-    for (let i = 0; i < particleCount; i += 1) {
-      const idx = i * 3
-      const rad = 1.5 + Math.random() * 8.0
-      const theta = Math.random() * Math.PI * 2
-      this.particlePositions[idx] = Math.cos(theta) * rad
-      this.particlePositions[idx + 1] = Math.sin(theta) * rad
-      this.particlePositions[idx + 2] = (Math.random() - 0.5) * 6.0
-
-      this.particleVelocities[idx] = (Math.random() - 0.5) * 0.008
-      this.particleVelocities[idx + 1] = (Math.random() - 0.5) * 0.008
-      this.particleVelocities[idx + 2] = 0.01 + Math.random() * 0.02
-    }
-    particleGeo.setAttribute('position', new THREE.BufferAttribute(this.particlePositions, 3))
-
-    const particleMat = new THREE.PointsMaterial({
-      size: 0.05,
-      color: currentTheme.particles,
-      transparent: true,
-      opacity: 0.75,
-      blending: THREE.AdditiveBlending,
-    })
-    this.particles = new THREE.Points(particleGeo, particleMat)
-    this.scene.add(this.particles)
-
-    // Load custom logo if provided
-    if (this.options.logoUrl) {
-      this.loadLogo(this.options.logoUrl)
-    }
-  }
-
-  private initSpectrumBars(): void {
-    const theme = AVEE_THEMES[this.options.theme]
-    const barWidth = 0.038
-    const baseUnitHeight = 1.0
-
-    // Single unit box geometry with bottom pivot
-    const barGeo = new THREE.BoxGeometry(barWidth, baseUnitHeight, 0.02)
-    barGeo.translate(0, 0.5, 0) // Shift origin to base so scaleY grows outward
-
-    const col1 = new THREE.Color(theme.primary)
-    const col2 = new THREE.Color(theme.secondary)
-
-    for (let i = 0; i < this.barCount; i += 1) {
-      // Color interpolation around circle
-      const t = Math.sin((i / this.barCount) * Math.PI)
-      const barColor = col1.clone().lerp(col2, t)
-
-      const mat = new THREE.MeshBasicMaterial({
-        color: barColor,
+    // ── Rings ─────────────────────────────────────────────────────────────────
+    const ringGeometry = new THREE.RingGeometry(DEFAULT_RADIUS + 0.015, DEFAULT_RADIUS + 0.055, 128)
+    this.innerRing = new THREE.Mesh(
+      ringGeometry,
+      new THREE.MeshBasicMaterial({
+        color: 0xffffff,
         transparent: true,
         opacity: 0.9,
-      })
-      const mesh = new THREE.Mesh(barGeo, mat)
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      }),
+    )
+    this.scene.add(this.innerRing)
 
-      const angle = (i / this.barCount) * Math.PI * 2 - Math.PI / 2
-      mesh.position.x = Math.cos(angle) * (this.baseRadius + 0.16)
-      mesh.position.y = Math.sin(angle) * (this.baseRadius + 0.16)
-      mesh.rotation.z = angle - Math.PI / 2
-      mesh.scale.set(1, 0.04, 1)
-
-      this.barsGroup.add(mesh)
-      this.barMeshes.push(mesh)
+    const outerPoints: THREE.Vector3[] = []
+    const outerRadius = DEFAULT_RADIUS + 0.16
+    for (let i = 0; i <= 96; i += 1) {
+      const angle = (i / 96) * Math.PI * 2
+      outerPoints.push(new THREE.Vector3(Math.cos(angle) * outerRadius, Math.sin(angle) * outerRadius, 0))
     }
+    this.outerRing = new THREE.LineLoop(
+      new THREE.BufferGeometry().setFromPoints(outerPoints),
+      new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.4 }),
+    )
+    this.scene.add(this.outerRing)
+
+    // ── Spectrum bars ─────────────────────────────────────────────────────────
+    const preset = QUALITY_PRESETS[this.options.quality]
+    this.barCount = preset.bars
+    const barGeometry = new THREE.BoxGeometry(1, 1, 1)
+    barGeometry.translate(0, 0.5, 0)
+    this.barsMesh = new THREE.InstancedMesh(
+      barGeometry,
+      new THREE.MeshBasicMaterial({ vertexColors: false, toneMapped: false }),
+      this.barCount,
+    )
+    this.barsMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+    this.barColors = new Float32Array(this.barCount * 3)
+    this.barsMesh.instanceColor = new THREE.InstancedBufferAttribute(this.barColors, 3)
+    this.barsMesh.instanceColor.setUsage(THREE.DynamicDrawUsage)
+    this.barsMesh.instanceMatrix.needsUpdate = true
+    this.scene.add(this.barsMesh)
+
+    // Inner "echo" layer: shorter, additive bars offset by half a step. It reads as a
+    // soft secondary ring without doubling the draw cost.
+    const innerGeometry = new THREE.BoxGeometry(1, 1, 1)
+    innerGeometry.translate(0, 0.5, 0)
+    this.barsInner = new THREE.InstancedMesh(
+      innerGeometry,
+      new THREE.MeshBasicMaterial({
+        transparent: true,
+        opacity: 0.34,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        toneMapped: false,
+      }),
+      this.barCount,
+    )
+    this.barsInner.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+    this.barsInner.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(this.barCount * 3), 3)
+    this.barsInner.instanceColor.setUsage(THREE.DynamicDrawUsage)
+    this.scene.add(this.barsInner)
+
+    // ── Particles ─────────────────────────────────────────────────────────────
+    const particleCount = preset.particles
+    this.particlePositions = new Float32Array(particleCount * 3)
+    this.particleSeeds = new Float32Array(particleCount * 4)
+    for (let i = 0; i < particleCount; i += 1) {
+      this.particleSeeds[i * 4 + 0] = hash(i + 1, this.options.seed) * Math.PI * 2
+      this.particleSeeds[i * 4 + 1] = 1.6 + hash(i + 101, this.options.seed) * 7.4
+      this.particleSeeds[i * 4 + 2] = 0.15 + hash(i + 211, this.options.seed) * 0.75
+      this.particleSeeds[i * 4 + 3] = hash(i + 307, this.options.seed)
+    }
+    const particleGeometry = new THREE.BufferGeometry()
+    particleGeometry.setAttribute('position', new THREE.BufferAttribute(this.particlePositions, 3))
+    const alphas = new Float32Array(particleCount)
+    const sizes = new Float32Array(particleCount)
+    for (let i = 0; i < particleCount; i += 1) {
+      alphas[i] = 0.25 + this.particleSeeds[i * 4 + 3] * 0.55
+      sizes[i] = 0.5 + this.particleSeeds[i * 4 + 2] * 1.6
+    }
+    particleGeometry.setAttribute('aAlpha', new THREE.BufferAttribute(alphas, 1))
+    particleGeometry.setAttribute('aSize', new THREE.BufferAttribute(sizes, 1))
+
+    const particleMaterial = new THREE.ShaderMaterial({
+      vertexShader: PARTICLE_VERT,
+      fragmentShader: PARTICLE_FRAG,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      uniforms: {
+        uColor: { value: new THREE.Color() },
+        uPixelRatio: { value: this.resolvePixelRatio() },
+      },
+    })
+    this.particlePoints = new THREE.Points(particleGeometry, particleMaterial)
+    this.scene.add(this.particlePoints)
+
+    // ── Post processing ───────────────────────────────────────────────────────
+    this.composer = new EffectComposer(this.renderer)
+    this.composer.setPixelRatio(this.resolvePixelRatio())
+    this.composer.setSize(width, height)
+    this.composer.addPass(new RenderPass(this.scene, this.camera))
+    this.bloomPass = new UnrealBloomPass(new THREE.Vector2(width, height), 0.55, 0.45, 0.85)
+    this.composer.addPass(this.bloomPass)
+    this.composer.addPass(new OutputPass())
+
+    this.applyTheme(this.options.theme)
+    this.applyVisibility()
+    this.positionParticles(0)
+
+    if (this.options.logoUrl) this.loadLogo(this.options.logoUrl)
+    this.updateBackgroundScale()
+  }
+
+  private resolvePixelRatio(): number {
+    const base = QUALITY_PRESETS[this.options.quality].bloom
+    const device = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1
+    return Math.min(device, 1.25 + base * 0.25)
+  }
+
+  private updateBackgroundScale(): void {
+    const distance = this.camera.position.z - this.backgroundMesh.position.z
+    const height = 2 * Math.tan((this.camera.fov * Math.PI) / 360) * distance
+    const width = height * this.camera.aspect
+    this.backgroundMesh.scale.set(width / 2, height / 2, 1)
+    this.backgroundMaterial.uniforms.uAspect.value = this.camera.aspect
+  }
+
+  private applyTheme(theme: AveeColorTheme): void {
+    const palette = AVEE_THEMES[theme]
+    this.backgroundMaterial.uniforms.uInner.value.set(palette.background[0])
+    this.backgroundMaterial.uniforms.uMid.value.set(palette.background[1])
+    this.backgroundMaterial.uniforms.uOuter.value.set(palette.background[2])
+    this.backgroundMaterial.uniforms.uAccent.value.set(palette.accent)
+    ;(this.innerRing.material as THREE.MeshBasicMaterial).color.setHex(palette.primary)
+    ;(this.outerRing.material as THREE.LineBasicMaterial).color.setHex(palette.secondary)
+    ;(this.particlePoints.material as THREE.ShaderMaterial).uniforms.uColor.value.setHex(palette.particles)
+    ;(this.logoGlow.material as THREE.SpriteMaterial).color.setHex(palette.primary)
+    this.bloomPass.strength = palette.bloom * 0.55
+    this.writeBarColors(palette.primary, palette.secondary, palette.accent)
+  }
+
+  private writeBarColors(primary: number, secondary: number, accent: number): void {
+    const colorA = new THREE.Color(primary)
+    const colorB = new THREE.Color(secondary)
+    const colorC = new THREE.Color(accent)
+    const innerAttr = this.barsInner?.instanceColor
+    for (let i = 0; i < this.barCount; i += 1) {
+      const t = i / Math.max(1, this.barCount - 1)
+      // mirror the palette around the vertical axis so both halves match
+      const mirrored = t <= 0.5 ? t * 2 : (1 - t) * 2
+      const color = colorA.clone().lerp(colorB, mirrored)
+      if (mirrored > 0.85) color.lerp(colorC, (mirrored - 0.85) / 0.15 * 0.5)
+      this.barColors[i * 3 + 0] = color.r
+      this.barColors[i * 3 + 1] = color.g
+      this.barColors[i * 3 + 2] = color.b
+      if (innerAttr) {
+        innerAttr.setXYZ(i, color.r * 0.8, color.g * 0.8, color.b * 0.8)
+      }
+    }
+    if (this.barsMesh.instanceColor) this.barsMesh.instanceColor.needsUpdate = true
+    if (innerAttr) innerAttr.needsUpdate = true
+  }
+
+  private applyVisibility(): void {
+    this.particlePoints.visible = this.options.showParticles
+    this.barsMesh.visible = this.options.showBars
+    this.barsInner.visible = this.options.showBars
+    this.logoMesh.visible = this.options.showLogo
+    this.logoGlow.visible = this.options.showLogo
+    this.innerRing.visible = this.options.showLogo && this.options.showRing
+    this.outerRing.visible = this.options.showLogo && this.options.showRing
   }
 
   public setOptions(options: Partial<AveeVisualizerOptions>): void {
     if (options.theme && options.theme !== this.options.theme) {
       this.options.theme = options.theme
-      this.updateThemeColors()
+      this.applyTheme(options.theme)
     }
     if (options.intensity !== undefined) {
-      this.options.intensity = Math.max(0.1, Math.min(3.0, options.intensity))
+      this.options.intensity = Math.max(0.1, Math.min(3, options.intensity))
     }
     if (options.logoUrl !== undefined && options.logoUrl !== this.options.logoUrl) {
       this.options.logoUrl = options.logoUrl
-      if (options.logoUrl) {
-        this.loadLogo(options.logoUrl)
-      } else {
-        this.resetDefaultLogo()
-      }
+      if (options.logoUrl) this.loadLogo(options.logoUrl)
+      else this.resetDefaultLogo()
     }
-    if (options.showParticles !== undefined) {
-      this.options.showParticles = options.showParticles
-      this.particles.visible = options.showParticles
-    }
-    if (options.showBars !== undefined) {
-      this.options.showBars = options.showBars
-      this.barsGroup.visible = options.showBars
-    }
-    if (options.showLogo !== undefined) {
-      this.options.showLogo = options.showLogo
-      this.logoMesh.visible = options.showLogo
-      this.innerRing.visible = options.showLogo
-      this.outerRing.visible = options.showLogo
-    }
-  }
-
-  private updateThemeColors(): void {
-    const theme = AVEE_THEMES[this.options.theme]
-    ;(this.innerRing.material as THREE.MeshBasicMaterial).color.setHex(theme.ring)
-    ;(this.outerRing.material as THREE.LineBasicMaterial).color.setHex(theme.secondary)
-    ;(this.particles.material as THREE.PointsMaterial).color.setHex(theme.particles)
-
-    const col1 = new THREE.Color(theme.primary)
-    const col2 = new THREE.Color(theme.secondary)
-
-    for (let i = 0; i < this.barMeshes.length; i += 1) {
-      const t = Math.sin((i / this.barMeshes.length) * Math.PI)
-      const barColor = col1.clone().lerp(col2, t)
-      ;(this.barMeshes[i].material as THREE.MeshBasicMaterial).color.copy(barColor)
-    }
+    if (options.showParticles !== undefined) this.options.showParticles = options.showParticles
+    if (options.showBars !== undefined) this.options.showBars = options.showBars
+    if (options.showLogo !== undefined) this.options.showLogo = options.showLogo
+    if (options.showRing !== undefined) this.options.showRing = options.showRing
+    this.applyVisibility()
   }
 
   public loadLogo(url: string): void {
@@ -350,13 +588,13 @@ export class AveeVisualizerEngine {
       url,
       (texture) => {
         if (this.isDisposed) return
+        texture.colorSpace = THREE.SRGBColorSpace
         this.customTexture = texture
         this.logoMaterial.map = texture
         this.logoMaterial.needsUpdate = true
       },
       undefined,
-      (err) => {
-        console.warn('Không tải được ảnh logo, dùng logo mặc định:', err)
+      () => {
         this.resetDefaultLogo()
       },
     )
@@ -371,99 +609,111 @@ export class AveeVisualizerEngine {
   public resize(width: number, height: number): void {
     this.camera.aspect = width / height
     this.camera.updateProjectionMatrix()
+    this.renderer.setPixelRatio(this.resolvePixelRatio())
     this.renderer.setSize(width, height, false)
+    this.composer.setPixelRatio(this.resolvePixelRatio())
+    this.composer.setSize(width, height)
+    this.bloomPass.setSize(width, height)
+    this.updateBackgroundScale()
   }
 
+  private positionParticles(timeSec: number): void {
+    const count = this.particlePositions.length / 3
+    const spread = 9
+    for (let i = 0; i < count; i += 1) {
+      const angle = this.particleSeeds[i * 4 + 0] + timeSec * 0.06 * (0.4 + this.particleSeeds[i * 4 + 3])
+      const radius = this.particleSeeds[i * 4 + 1]
+      const speed = 0.25 + this.particleSeeds[i * 4 + 2]
+      const z = ((this.particleSeeds[i * 4 + 3] * spread + timeSec * speed) % spread) - spread / 2
+      this.particlePositions[i * 3 + 0] = Math.cos(angle) * radius
+      this.particlePositions[i * 3 + 1] = Math.sin(angle) * radius
+      this.particlePositions[i * 3 + 2] = z
+    }
+    const attr = this.particlePoints.geometry.getAttribute('position') as THREE.BufferAttribute
+    attr.needsUpdate = true
+  }
+
+  private updateBars(frame: SongNhacAudioFrame): void {
+    const intensity = this.options.intensity
+    const data = frame.frequencyData
+    const dataLength = Math.min(data.length, 180)
+    const half = Math.floor(this.barCount / 2)
+    const dummy = new THREE.Object3D()
+    const barWidth = (2 * Math.PI * BAR_BASE_RADIUS) / this.barCount * 0.74
+    const innerRadius = BAR_BASE_RADIUS - 0.1
+
+    for (let i = 0; i < this.barCount; i += 1) {
+      // index mirrored across the vertical axis: left half rises, right half mirrors
+      const mirrored = i < half ? half - 1 - i : i - half
+      const normalized = Math.pow(mirrored / Math.max(1, half - 1), 1.35)
+      const freqIndex = dataLength > 0 ? Math.min(dataLength - 1, Math.floor(normalized * dataLength)) : -1
+      const raw = freqIndex >= 0 ? (data[freqIndex] ?? 0) / 255 : 0
+      const height = 0.035 + raw * 1.05 * intensity
+
+      const angle = (i / this.barCount) * Math.PI * 2 - Math.PI / 2
+      dummy.position.set(Math.cos(angle) * BAR_BASE_RADIUS, Math.sin(angle) * BAR_BASE_RADIUS, 0)
+      dummy.rotation.set(0, 0, angle - Math.PI / 2)
+      dummy.scale.set(barWidth, Math.max(0.02, height), 0.06)
+      dummy.updateMatrix()
+      this.barsMesh.setMatrixAt(i, dummy.matrix)
+
+      // Secondary echo ring, offset by half a step so the two layers interleave.
+      const innerAngle = angle + Math.PI / this.barCount
+      dummy.position.set(Math.cos(innerAngle) * innerRadius, Math.sin(innerAngle) * innerRadius, -0.02)
+      dummy.rotation.set(0, 0, innerAngle - Math.PI / 2)
+      dummy.scale.set(barWidth * 0.58, Math.max(0.015, height * 0.42), 0.04)
+      dummy.updateMatrix()
+      this.barsInner.setMatrixAt(i, dummy.matrix)
+    }
+    this.barsMesh.instanceMatrix.needsUpdate = true
+    this.barsInner.instanceMatrix.needsUpdate = true
+  }
+
+  /**
+   * Render a single frame. Deterministic for a given frame payload, which is what
+   * the export pipeline relies on to produce exactly what the preview shows.
+   */
   public render(frame: SongNhacAudioFrame): void {
     if (this.isDisposed) return
+    const timeSec = Number.isFinite(frame.timeSec) ? frame.timeSec : 0
+    const dt = this.lastTimeSec < 0 ? 1 / 60 : Math.max(0, Math.min(0.25, timeSec - this.lastTimeSec))
+    this.lastTimeSec = timeSec
 
-    const { bass, beat, frequencyData, timeSec } = frame
     const intensity = this.options.intensity
+    const bass = Math.max(0, Math.min(1, frame.bass))
+    const beat = Math.max(0, Math.min(1, frame.beat))
 
-    // 1. Logo Beat Zoom In / Zoom Out (Pulse)
-    const targetScale = 1.0 + (bass * 0.32 + beat * 0.16) * intensity
-    this.currentLogoScale += (targetScale - this.currentLogoScale) * 0.22
-    this.logoMesh.scale.set(this.currentLogoScale, this.currentLogoScale, 1)
-    this.innerRing.scale.set(this.currentLogoScale, this.currentLogoScale, 1)
+    // Logo pulse
+    const targetScale = 1 + (bass * 0.28 + beat * 0.14) * intensity
+    this.currentLogoScale += (targetScale - this.currentLogoScale) * Math.min(1, dt * 14)
+    this.logoMesh.scale.setScalar(this.currentLogoScale)
+    this.innerRing.scale.setScalar(this.currentLogoScale)
+    this.logoGlow.scale.setScalar(DEFAULT_RADIUS * 2.6 * this.currentLogoScale)
+    ;(this.logoGlow.material as THREE.SpriteMaterial).opacity = 0.16 + bass * 0.3
 
-    // 2. Camera Beat Breathing (Zoom in on kick, spring back)
-    const targetCameraZ = 6.2 - (bass * 0.75 + beat * 0.35) * intensity
-    this.currentCameraZ += (targetCameraZ - this.currentCameraZ) * 0.14
+    // Camera breathing
+    const targetZ = 7 - (bass * 0.7 + beat * 0.3) * intensity
+    this.currentCameraZ += (targetZ - this.currentCameraZ) * Math.min(1, dt * 10)
     this.camera.position.z = this.currentCameraZ
+    this.camera.rotation.z = Math.sin(timeSec * 9) * beat * 0.01 * intensity
 
-    // Subtle rotational shake on beat
-    const targetRotZ = Math.sin(timeSec * 16) * beat * 0.018 * intensity
-    this.camera.rotation.z += (targetRotZ - this.camera.rotation.z) * 0.2
+    this.outerRing.rotation.z = timeSec * 0.18
+    this.backgroundMaterial.uniforms.uPulse.value = bass * intensity
 
-    // Ring slow idle rotation
-    this.outerRing.rotation.z -= 0.004
+    if (this.options.showBars) this.updateBars(frame)
+    if (this.options.showParticles) this.positionParticles(timeSec)
 
-    // 3. Update Circular Spectrum Bars
-    if (this.options.showBars && frequencyData.length > 0) {
-      const halfCount = this.barCount / 2
-      const dataLen = Math.min(frequencyData.length, 180)
-
-      for (let i = 0; i < halfCount; i += 1) {
-        // Map bar index to frequency curve (exponential for better bass/mid distribution)
-        const normalizedIdx = Math.pow(i / halfCount, 1.45)
-        const freqIdx = Math.min(dataLen - 1, Math.floor(normalizedIdx * dataLen))
-        const val = frequencyData[freqIdx] || 0
-
-        // Bar height: min 0.05, max ~ 1.8
-        const rawHeight = 0.04 + (val / 255) * 1.65 * intensity
-
-        // Left mirror
-        const leftIdx = halfCount - 1 - i
-        const rightIdx = halfCount + i
-
-        const meshLeft = this.barMeshes[leftIdx]
-        const meshRight = this.barMeshes[rightIdx]
-
-        if (meshLeft) {
-          const currentY = meshLeft.scale.y
-          meshLeft.scale.y = currentY + (rawHeight - currentY) * 0.4
-        }
-        if (meshRight) {
-          const currentY = meshRight.scale.y
-          meshRight.scale.y = currentY + (rawHeight - currentY) * 0.4
-        }
-      }
-    }
-
-    // 4. Update Stardust Particles
-    if (this.options.showParticles) {
-      const posAttr = this.particles.geometry.attributes.position as THREE.BufferAttribute
-      const positions = posAttr.array as Float32Array
-      const beatSpeedMultiplier = 1.0 + beat * 3.5 * intensity
-
-      for (let i = 0; i < positions.length / 3; i += 1) {
-        const idx = i * 3
-        positions[idx] += this.particleVelocities[idx] * beatSpeedMultiplier
-        positions[idx + 1] += this.particleVelocities[idx + 1] * beatSpeedMultiplier
-        positions[idx + 2] += this.particleVelocities[idx + 2] * beatSpeedMultiplier
-
-        // Reset if particle moves past camera
-        if (positions[idx + 2] > 5.0) {
-          const rad = 1.5 + Math.random() * 8.0
-          const theta = Math.random() * Math.PI * 2
-          positions[idx] = Math.cos(theta) * rad
-          positions[idx + 1] = Math.sin(theta) * rad
-          positions[idx + 2] = -4.0 - Math.random() * 3.0
-        }
-      }
-      posAttr.needsUpdate = true
-    }
-
-    // Render frame
-    this.renderer.render(this.scene, this.camera)
+    this.composer.render()
   }
 
   public dispose(): void {
     this.isDisposed = true
     this.scene.clear()
+    this.composer.dispose()
     this.renderer.dispose()
     this.defaultTexture.dispose()
+    this.glowTexture.dispose()
+    this.dotTexture.dispose()
     if (this.customTexture) this.customTexture.dispose()
   }
 }
-
