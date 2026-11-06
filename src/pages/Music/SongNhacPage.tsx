@@ -28,6 +28,13 @@ function formatClock(seconds: number): string {
   const secs = total % 60
   return `${mins}:${String(secs).padStart(2, '0')}`
 }
+const PREVIEW_SIZES = [
+  { label: '720p', width: 1280, height: 720 },
+  { label: '1080p', width: 1920, height: 1080 },
+  { label: '1440p', width: 2560, height: 1440 },
+  { label: '4K', width: 3840, height: 2160 },
+]
+
 const RAIL_ITEMS: Array<{ id: 'composition' | 'presets' | 'export'; short: string; hint: string }> = [
   { id: 'composition', short: 'Lớp', hint: 'Cây lớp của composition' },
   { id: 'presets', short: 'Preset', hint: 'Thư viện preset sóng' },
@@ -229,8 +236,28 @@ export default function SongNhacPage() {
     setSelectionBounds((current) => current)
   }
   const [leftTab, setLeftTab] = useState<'composition' | 'presets' | 'export'>('composition')
+  const [rightTab, setRightTab] = useState<'objects' | 'visualizer'>('objects')
   const [audioDuration, setAudioDuration] = useState(0)
   const [playhead, setPlayhead] = useState(0)
+  const [waveformUrl, setWaveformUrl] = useState('')
+
+  // Waveform picture for the timeline, rendered once per audio file by ffmpeg.
+  useEffect(() => {
+    let cancelled = false
+    if (!audioPath) {
+      setWaveformUrl('')
+      return
+    }
+    window.api.songNhac
+      .waveformImage?.(audioPath, 1600, 96)
+      .then((result) => {
+        if (!cancelled && result?.success && result.dataUrl) setWaveformUrl(result.dataUrl)
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [audioPath])
   const tracks = layers.filter((layer) => layer.type !== 'group')
   const [isExporting, setIsExporting] = useState(false)
   const [exportWidth, setExportWidth] = useState(1920)
@@ -440,6 +467,19 @@ export default function SongNhacPage() {
   useEffect(() => {
     const unsubscribe = window.api.songNhac?.onProgress?.(setProgress)
     return unsubscribe
+  }, [])
+
+  // Dev-only hook so the editor can be exercised without the native file dialog.
+  useEffect(() => {
+    if (!import.meta.env.DEV) return
+    ;(window as unknown as Record<string, unknown>).__songNhacSetAudio = (path: string) => {
+      setAudioPath(path)
+      const audio = audioRef.current
+      if (audio) {
+        audio.src = localFileUrl(path)
+        audio.load()
+      }
+    }
   }, [])
 
   const applyWavePreset = (presetId: string) => {
@@ -707,6 +747,50 @@ export default function SongNhacPage() {
             </div>
           )}
         </aside>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minHeight: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ fontSize: 10, letterSpacing: 0.8, color: '#64748b', fontWeight: 700 }}>PREVIEW</span>
+            {PREVIEW_SIZES.map((item) => {
+              const active = exportWidth === item.width && exportHeight === item.height
+              return (
+                <button
+                  key={item.label}
+                  type="button"
+                  onClick={() => {
+                    setExportWidth(item.width)
+                    setExportHeight(item.height)
+                  }}
+                  style={{
+                    padding: '3px 10px',
+                    borderRadius: 999,
+                    border: active ? '1px solid #0ea5e9' : '1px solid #1e293b',
+                    background: active ? '#0c4a6e' : '#0f172a',
+                    color: active ? '#e0f2fe' : '#94a3b8',
+                    fontSize: 11,
+                    cursor: 'pointer',
+                  }}
+                >
+                  {item.label}
+                </button>
+              )
+            })}
+            <button
+              type="button"
+              onClick={() => setExportFps(exportFps === 60 ? 30 : 60)}
+              style={{
+                marginLeft: 'auto',
+                padding: '3px 10px',
+                borderRadius: 999,
+                border: '1px solid #1e293b',
+                background: '#0f172a',
+                color: '#94a3b8',
+                fontSize: 11,
+                cursor: 'pointer',
+              }}
+            >
+              {exportFps} fps
+            </button>
+          </div>
         {/* Canvas Display Viewport */}
         <div
           style={{
@@ -866,6 +950,7 @@ export default function SongNhacPage() {
             </button>
           </div>
         </div>
+        </div>
 
         {/* Controls Sidebar */}
         <div
@@ -883,6 +968,69 @@ export default function SongNhacPage() {
           }}
         >
           {/* 1. Audio File */}
+          {/* Objects / Visualizer tabs */}
+          <div style={{ display: 'flex', gap: 6 }}>
+            {(['objects', 'visualizer'] as const).map((tab) => (
+              <button
+                key={tab}
+                type="button"
+                onClick={() => setRightTab(tab)}
+                style={{
+                  flex: 1,
+                  padding: '6px 10px',
+                  borderRadius: 8,
+                  border: rightTab === tab ? '1px solid #0ea5e9' : '1px solid #1e293b',
+                  background: rightTab === tab ? '#0c4a6e' : '#0f172a',
+                  color: rightTab === tab ? '#e0f2fe' : '#94a3b8',
+                  fontSize: 11,
+                  fontWeight: 700,
+                  letterSpacing: 0.4,
+                  cursor: 'pointer',
+                }}
+              >
+                {tab === 'objects' ? 'OBJECTS' : 'VISUALIZER'}
+              </button>
+            ))}
+          </div>
+
+          {rightTab === 'visualizer' ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+                {WAVE_PRESETS.map((preset) => (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    onClick={() => applyWavePreset(preset.id)}
+                    title={preset.description}
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 4,
+                      padding: 6,
+                      borderRadius: 8,
+                      border: '1px solid #1e293b',
+                      background: '#0f172a',
+                      color: '#cbd5e1',
+                      fontSize: 10,
+                      textAlign: 'left',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <span
+                      style={{
+                        height: 30,
+                        borderRadius: 5,
+                        background: `linear-gradient(135deg, ${preset.visualizer.color1 ?? '#22d3ee'}, ${preset.visualizer.color2 ?? '#f472b6'})`,
+                      }}
+                    />
+                    {preset.name}
+                  </button>
+                ))}
+              </div>
+              <InspectorPanel />
+            </div>
+          ) : (
+            <>
           <div>
             <div style={{ fontWeight: 600, color: '#f1f5f9', marginBottom: 6 }}>1. Tệp âm thanh</div>
             <button
@@ -1078,7 +1226,6 @@ export default function SongNhacPage() {
           )}
 
           {/* Layers + inspector */}
-          <InspectorPanel />
 
           {/* 4. Output MP4 */}
           <div>
@@ -1256,6 +1403,8 @@ export default function SongNhacPage() {
           >
             {message}
           </div>
+            </>
+          )}
         </div>
       </div>
 
@@ -1285,6 +1434,24 @@ export default function SongNhacPage() {
         </div>
 
         <div style={{ position: 'relative', paddingLeft: 132 }}>
+          {waveformUrl && (
+            <div
+              style={{
+                height: 54,
+                marginBottom: 6,
+                background: '#0f172a',
+                border: '1px solid #1e293b',
+                borderRadius: 6,
+                overflow: 'hidden',
+              }}
+            >
+              <img
+                src={waveformUrl}
+                alt=""
+                style={{ display: 'block', width: '100%', height: '100%', objectFit: 'fill' }}
+              />
+            </div>
+          )}
           <div style={{ position: 'absolute', left: 132, right: 0, top: 0, bottom: 0, pointerEvents: 'none' }}>
             <div
               style={{

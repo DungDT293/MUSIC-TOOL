@@ -40,11 +40,13 @@ import {
   SONG_NHAC_FRAMES_CHUNK,
   SONG_NHAC_FRAMES_END,
   SONG_NHAC_FRAMES_FLUSH,
+  SONG_NHAC_WAVEFORM,
   type SongNhacExportProgress,
   type SongNhacExportRequest,
   type SongNhacExportResult,
   type SongNhacFramesRequest,
   type SongNhacFramesResult,
+  type SongNhacWaveformResult,
 } from '../shared/songNhacChannels'
 
 const api: IPCAPI = {
@@ -432,6 +434,8 @@ const api: IPCAPI = {
       ipcRenderer.invoke(SONG_NHAC_FRAMES_END, requestId) as Promise<SongNhacFramesResult>,
     framesCancel: (requestId: string) =>
       ipcRenderer.invoke(SONG_NHAC_FRAMES_CANCEL, requestId) as Promise<{ success: boolean }>,
+    waveformImage: (audioPath: string, width?: number, height?: number) =>
+      ipcRenderer.invoke(SONG_NHAC_WAVEFORM, { audioPath, width, height }) as Promise<SongNhacWaveformResult>,
     onProgress: (handler: (progress: SongNhacExportProgress) => void) => {
       const listener = (_event: IpcRendererEvent, progress: SongNhacExportProgress) => handler(progress)
       ipcRenderer.on(SONG_NHAC_EXPORT_PROGRESS, listener)

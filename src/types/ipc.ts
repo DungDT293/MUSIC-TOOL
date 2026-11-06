@@ -4,6 +4,7 @@ import type {
   SongNhacExportResult,
   SongNhacFramesRequest,
   SongNhacFramesResult,
+  SongNhacWaveformResult,
 } from '../../shared/songNhacChannels'
 import type {
   FinalExportAudioFailure,
@@ -1177,6 +1178,7 @@ export interface IPCAPI {
     framesFlush: (requestId: string) => Promise<{ success: boolean; receivedBytes?: number }>
     framesEnd: (requestId: string) => Promise<SongNhacFramesResult>
     framesCancel: (requestId: string) => Promise<{ success: boolean }>
+    waveformImage: (audioPath: string, width?: number, height?: number) => Promise<SongNhacWaveformResult>
     onProgress: (handler: (progress: SongNhacExportProgress) => void) => () => void
   }
   app: {

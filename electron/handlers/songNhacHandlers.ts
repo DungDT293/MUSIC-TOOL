@@ -11,6 +11,9 @@ import {
   SONG_NHAC_EXPORT_START,
   SONG_NHAC_FRAMES_BEGIN,
   SONG_NHAC_FRAMES_CANCEL,
+  SONG_NHAC_WAVEFORM,
+  type SongNhacWaveformRequest,
+  type SongNhacWaveformResult,
   SONG_NHAC_FRAMES_CHUNK,
   SONG_NHAC_FRAMES_END,
   SONG_NHAC_FRAMES_FLUSH,
@@ -190,6 +193,45 @@ function cleanupSession(requestId: string): void {
 }
 
 function registerFrameHandlers(): void {
+  ipcMain.handle(SONG_NHAC_WAVEFORM, async (_event, raw: unknown): Promise<SongNhacWaveformResult> => {
+    try {
+      const request = (raw ?? {}) as SongNhacWaveformRequest
+      const audioPath = typeof request.audioPath === 'string' ? request.audioPath.trim() : ''
+      if (!audioPath || !isValidAbsolutePath(audioPath)) throw new Error('Đường dẫn audio không hợp lệ.')
+      if (!fs.existsSync(audioPath)) throw new Error('Không tìm thấy file audio.')
+      const width = Math.max(200, Math.min(4000, Math.round(Number(request.width) || 1400)))
+      const height = Math.max(40, Math.min(400, Math.round(Number(request.height) || 96)))
+      const { ffmpeg } = getFfmpegPaths()
+      const buffer = await new Promise<Buffer>((resolve, reject) => {
+        const child = spawn(
+          ffmpeg,
+          [
+            '-hide_banner', '-loglevel', 'error',
+            '-i', audioPath,
+            '-filter_complex', `showwavespic=s=${width}x${height}:colors=0x38bdf8:split_channels=0`,
+            '-frames:v', '1',
+            '-f', 'image2pipe', '-vcodec', 'png', 'pipe:1',
+          ],
+          { windowsHide: true },
+        )
+        const collected: Buffer[] = []
+        let stderr = ''
+        child.stdout.on('data', (chunk: Buffer) => collected.push(chunk))
+        child.stderr.on('data', (chunk: Buffer) => {
+          stderr += chunk.toString('utf8')
+        })
+        child.once('error', reject)
+        child.once('close', (code) => {
+          if (code === 0 && collected.length) resolve(Buffer.concat(collected))
+          else reject(new Error(stderr.trim().slice(-400) || `FFmpeg waveform lỗi (code ${code}).`))
+        })
+      })
+      return { success: true, dataUrl: `data:image/png;base64,${buffer.toString('base64')}` }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
+
   ipcMain.handle(SONG_NHAC_FRAMES_BEGIN, async (_event, raw: unknown): Promise<SongNhacFramesResult> => {
     let requestId = ''
     try {

@@ -9,6 +9,21 @@ export const SONG_NHAC_FRAMES_FLUSH = 'song-nhac:frames:flush'
 export const SONG_NHAC_FRAMES_END = 'song-nhac:frames:end'
 export const SONG_NHAC_FRAMES_CANCEL = 'song-nhac:frames:cancel'
 
+/** Renders a waveform picture for the editor timeline (ffmpeg showwavespic). */
+export const SONG_NHAC_WAVEFORM = 'song-nhac:waveform'
+
+export interface SongNhacWaveformRequest {
+  audioPath: string
+  width?: number
+  height?: number
+}
+
+export interface SongNhacWaveformResult {
+  success: boolean
+  dataUrl?: string
+  error?: string
+}
+
 export interface SongNhacFramesRequest {
   requestId: string
   audioPath: string
