@@ -11,9 +11,9 @@ Tài liệu tham chiếu: `legacy-song-nhac/` (106 file, ~20.158 dòng — chỉ
 | P0 | ✅ | Export mang theo layer, z theo thứ tự mảng |
 | P1 | ✅ | Model legacy + store zustand + history + page wiring |
 | P2 | ✅ | Inspector 13 section (Transform, Ảnh/Video, Văn bản, Viền & bóng, Filter, Sóng, Thời gian) |
-| P3 | 🟡 | LayersPanel đầy đủ (8 nút, group, multi-select, khoá) — **thiếu 10 preset sóng + template localStorage** |
-| P4 | 🟡 | Gizmo kéo/xoay/zoom + phím tắt + undo/redo — **chưa có khung chọn và tay nắm** |
-| P5 | 🟡 | Filter bake (ảnh/chữ), tham số sóng theo lớp — **thiếu beat pulse ảnh, sóng quanh ảnh** |
+| P3 | ✅ | LayersPanel đầy đủ (8 nút, group, multi-select, khoá) + **10 preset sóng** + **template localStorage** |
+| P4 | 🟡 | Kéo/xoay/zoom trên canvas, khung chọn 3D, phím tắt, undo/redo — **chưa có tay nắm góc để thu phóng** |
+| P5 | 🟡 | Filter bake (ảnh/chữ), tham số sóng theo lớp, **beat pulse cho ảnh** — thiếu sóng quanh ảnh |
 | P6 | ✅ | Độ phân giải, FPS, khoảng thời gian khi xuất |
 
 Giới hạn đã biết:
