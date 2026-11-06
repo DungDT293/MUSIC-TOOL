@@ -1042,7 +1042,7 @@ export class AveeVisualizerEngine {
       return `particles:${layer.amount}:${layer.shape}:${layer.color}:${layer.sizeMin}:${layer.sizeMax}`
     }
     if (layer.type === 'text') {
-      return `text:${layer.text}|${layer.fontSize}|${layer.color}|${layer.strokeColor}|${layer.strokeWidth}|${layer.fontWeight}|${layer.italic}|${layer.fontFamily}|${layer.textShadowBlur}|${layer.textShadowColor}|${layer.textShadowOffsetX}|${layer.textShadowOffsetY}|${filterKey}`
+      return `text:${layer.text}|${layer.fontSize}|${layer.color}|${layer.strokeColor}|${layer.strokeWidth}|${layer.fontWeight}|${layer.italic}|${layer.fontFamily}|${layer.textShadowBlur}|${layer.textShadowColor}|${layer.textShadowOffsetX}|${layer.textShadowOffsetY}|${layer.align}|${layer.lineHeight}|${layer.letterSpacing}|${filterKey}`
     }
     if (layer.type === 'lyrics') {
       return `lyrics:${layer.fontSize}:${layer.color}:${layer.showNeighbours}:${layer.lines.map((line) => `${line.timeSec}|${line.text}`).join('~')}`
@@ -1700,29 +1700,47 @@ export class AveeVisualizerEngine {
     let width = 512
     let height = Math.ceil(layer.fontSize * 1.6)
 
+    // Multi-line aware: measure every line, then draw with the requested alignment,
+    // line height and letter spacing (ctx.letterSpacing is Chromium-only but supported).
+    const lines = (layer.text || ' ').split('\n')
+    const lineHeightPx = Math.max(layer.fontSize * 0.6, layer.fontSize * (layer.lineHeight || 1.2))
+    const letterSpacing = layer.letterSpacing || 0
     if (ctx) {
       ctx.font = font
-      width = Math.ceil(ctx.measureText(layer.text || ' ').width + padding * 2)
-      canvas.width = width
-      canvas.height = height
+      ;(ctx as unknown as { letterSpacing?: string }).letterSpacing = `${letterSpacing}px`
+      const widest = lines.reduce((max, line) => Math.max(max, ctx.measureText(line || ' ').width), 0)
+      width = Math.ceil(widest + padding * 2 + Math.abs(letterSpacing))
+      height = Math.ceil(lineHeightPx * lines.length + padding)
+    }
+    canvas.width = width
+    canvas.height = height
+
+    if (ctx) {
       ctx.clearRect(0, 0, width, height)
       ctx.filter = buildCssFilter(layer.filter)
       ctx.font = font
-      ctx.textAlign = 'center'
+      ;(ctx as unknown as { letterSpacing?: string }).letterSpacing = `${letterSpacing}px`
+      const align = layer.align || 'center'
+      ctx.textAlign = align === 'left' ? 'left' : align === 'right' ? 'right' : 'center'
+      const anchorX = align === 'left' ? padding : align === 'right' ? width - padding : width / 2
       ctx.textBaseline = 'middle'
+      const firstY = padding / 2 + lineHeightPx / 2
       if (layer.textShadowBlur > 0) {
         ctx.shadowColor = layer.textShadowColor
         ctx.shadowBlur = layer.textShadowBlur
         ctx.shadowOffsetX = layer.textShadowOffsetX
         ctx.shadowOffsetY = layer.textShadowOffsetY
       }
-      if (layer.strokeWidth > 0) {
-        ctx.lineWidth = layer.strokeWidth
-        ctx.strokeStyle = layer.strokeColor
-        ctx.strokeText(layer.text, width / 2, height / 2)
-      }
-      ctx.fillStyle = layer.color
-      ctx.fillText(layer.text, width / 2, height / 2)
+      lines.forEach((line, index) => {
+        const y = firstY + index * lineHeightPx
+        if (layer.strokeWidth > 0) {
+          ctx.lineWidth = layer.strokeWidth
+          ctx.strokeStyle = layer.strokeColor
+          ctx.strokeText(line, anchorX, y)
+        }
+        ctx.fillStyle = layer.color
+        ctx.fillText(line, anchorX, y)
+      })
     }
 
     const texture = new THREE.CanvasTexture(canvas)

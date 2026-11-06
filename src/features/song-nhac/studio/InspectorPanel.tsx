@@ -187,7 +187,7 @@ export function InspectorPanel() {
   const endHistoryGesture = useSongNhacLayerStore((state) => state.endHistoryGesture)
   const setFocusContentInputId = useSongNhacLayerStore((state) => state.setFocusContentInputId)
   const focusContentInputId = useSongNhacLayerStore((state) => state.focusContentInputId)
-  const contentInputRef = useRef<HTMLInputElement>(null)
+  const contentInputRef = useRef<HTMLTextAreaElement>(null)
 
   const layer = layers.find((item) => item.id === selectedLayerId) ?? null
 
@@ -259,9 +259,10 @@ export function InspectorPanel() {
         {isTextLayer(layer) && (
           <>
             <Section title="Văn bản">
-              <input
+              <textarea
                 ref={contentInputRef}
-                style={inputStyle}
+                rows={2}
+                style={{ ...inputStyle, resize: 'vertical', fontFamily: 'inherit' }}
                 value={layer.text}
                 onChange={(event) => updateLayer(layer.id, { text: event.target.value })}
               />
@@ -275,6 +276,44 @@ export function InspectorPanel() {
                   ))}
                 </select>
               </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={labelStyle}>Căn lề</span>
+              {(['left', 'center', 'right'] as const).map((value) => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => updateLayerWithHistory(layer.id, { align: value })}
+                  style={{
+                    ...miniButtonStyle,
+                    flex: 1,
+                    color: layer.align === value ? '#67e8f9' : '#94a3b8',
+                    borderColor: layer.align === value ? '#0ea5e9' : '#334155',
+                  }}
+                >
+                  {value === 'left' ? 'Trái' : value === 'center' ? 'Giữa' : 'Phải'}
+                </button>
+              ))}
+            </div>
+            <SliderRow
+              label="Giãn dòng"
+              value={layer.lineHeight}
+              min={0.8}
+              max={3}
+              step={0.05}
+              format={(value) => value.toFixed(2)}
+              onChange={(lineHeight) => updateLayer(layer.id, { lineHeight })}
+              onCommit={commit}
+            />
+            <SliderRow
+              label="Giãn chữ"
+              value={layer.letterSpacing}
+              min={-5}
+              max={30}
+              step={0.5}
+              format={(value) => `${value.toFixed(1)}px`}
+              onChange={(letterSpacing) => updateLayer(layer.id, { letterSpacing })}
+              onCommit={commit}
+            />
               <div style={{ display: 'flex', gap: 6 }}>
                 <button
                   type="button"

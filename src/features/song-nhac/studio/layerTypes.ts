@@ -169,6 +169,8 @@ export interface VideoLayer extends StudioLayerBase {
   plate: StudioPlateStyle
 }
 
+export type StudioTextAlign = 'left' | 'center' | 'right'
+
 export interface TextLayer extends StudioLayerBase {
   type: 'text'
   text: string
@@ -183,6 +185,12 @@ export interface TextLayer extends StudioLayerBase {
   textShadowBlur: number
   textShadowOffsetX: number
   textShadowOffsetY: number
+  /** Multi-line alignment inside the text box. */
+  align: StudioTextAlign
+  /** Line spacing multiplier (1 = the font size). */
+  lineHeight: number
+  /** Extra pixels between characters. */
+  letterSpacing: number
 }
 
 export interface VisualizerLayer extends StudioLayerBase {
@@ -407,6 +415,9 @@ export function createTextLayer(text = 'Tên bài hát'): TextLayer {
     textShadowBlur: 0,
     textShadowOffsetX: 0,
     textShadowOffsetY: 2,
+    align: 'center',
+    lineHeight: 1.2,
+    letterSpacing: 0,
   }
 }
 

@@ -23,7 +23,7 @@ Mục tiêu: clone toàn bộ chức năng editor Vizzy vào Sóng nhạc. Mỗi
 | **Particles** | shape 5 kiểu, color, mirror, constant size, front/back limit + time, alpha, amount, opacity range, size range, fade in/out, random, behaviour, origin, transform | 🟡 15 tham số: shape 3 kiểu, màu, amount, size/opacity range, speed, spread, gravity, beat, mirror, **origin X/Y, mờ dần vào/ra, cỡ cố định** (thiếu front/back limit, random, behaviour) |
 | **Image** | appearance, blending, flatten, transform | ✅ thêm blend, anchor, bo góc, viền, bóng đổ |
 | **Video** | như image | ✅ cùng bộ với image |
-| **Text** | font, stroke, shadow, alignment | 🟡 font/cỡ/màu/viền/bóng, chưa có căn lề nhiều dòng |
+| **Text** | font, stroke, shadow, alignment | ✅ font/cỡ/màu/viền/bóng + **căn trái/giữa/phải, giãn dòng, giãn chữ, nhiều dòng** |
 
 ## Timeline
 
