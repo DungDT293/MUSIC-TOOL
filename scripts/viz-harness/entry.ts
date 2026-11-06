@@ -20,6 +20,7 @@ interface HarnessOptions {
   withLayers?: boolean
   waveStyle?: string
   videoSrc?: string
+  skipImage?: boolean
 }
 
 function makeBrightLogoDataUrl(): string {
@@ -85,6 +86,7 @@ function syntheticSpectrum(bins: number, time: number): Uint8Array {
     engine.setLayers([videoLayer, createVisualizerLayer(), createTextLayer('Video filter test')])
   } else if (options.withLayers) {
     const imageLayer = createImageLayer(makeBrightLogoDataUrl(), 'Anh nen')
+    imageLayer.visible = !options.skipImage
     imageLayer.fitMode = 'cover'
     imageLayer.waveAroundEnabled = options.waveStyle === 'wavearound'
     imageLayer.transform = { ...imageLayer.transform, scaleX: 0.6, scaleY: 0.6 }

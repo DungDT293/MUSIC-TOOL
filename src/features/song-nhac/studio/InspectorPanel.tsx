@@ -26,6 +26,7 @@ const WAVE_STYLES = [
   { id: 'pulse', label: 'Vòng nhịp' },
   { id: 'grid', label: 'Lưới địa hình' },
   { id: 'polar', label: 'Hào quang' },
+  { id: 'orb', label: 'Cầu năng lượng' },
 ]
 
 const panelStyle: React.CSSProperties = {

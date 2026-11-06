@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import type { SongNhacAudioFrame } from '../core/types'
 
-export type ShaderSceneMode = 'grid' | 'polar'
+export type ShaderSceneMode = 'grid' | 'polar' | 'orb'
 
 export interface ShaderSceneParams {
   colorA: number
@@ -134,12 +134,56 @@ void main() {
 }
 `
 
+/** Energy orb: sphere displaced by the spectrum, fresnel rim, additive glow. */
+const ORB_VERTEX = /* glsl */ `
+attribute float aEnergy;
+uniform float uTime;
+uniform float uSpeed;
+uniform float uIntensity;
+varying float vEnergy;
+varying vec3 vNormal;
+varying vec3 vViewPos;
+
+void main() {
+  vEnergy = aEnergy;
+  float ripple = sin(position.y * 7.0 + uTime * 2.2 * uSpeed) * 0.03;
+  float displacement = (aEnergy * 0.42 + ripple) * uIntensity;
+  vec3 displaced = position + normalize(position) * displacement;
+  vec4 mv = modelViewMatrix * vec4(displaced, 1.0);
+  vNormal = normalize(normalMatrix * normal);
+  vViewPos = mv.xyz;
+  gl_Position = projectionMatrix * mv;
+}
+`
+
+const ORB_FRAGMENT = /* glsl */ `
+precision highp float;
+uniform vec3 uColorA;
+uniform vec3 uColorB;
+uniform vec3 uAccent;
+uniform float uIntensity;
+varying float vEnergy;
+varying vec3 vNormal;
+varying vec3 vViewPos;
+
+void main() {
+  vec3 viewDir = normalize(-vViewPos);
+  float fresnel = pow(1.0 - clamp(abs(dot(normalize(vNormal), viewDir)), 0.0, 1.0), 3.1);
+  vec3 base = mix(uColorA, uColorB, clamp(vEnergy * 1.6, 0.0, 1.0));
+  vec3 color = base * (fresnel * (0.55 + vEnergy * 1.1) + 0.008);
+  color += uAccent * fresnel * 0.12;
+  gl_FragColor = vec4(color * (0.5 + uIntensity * 0.5), 1.0);
+}
+`
 export class ShaderScene {
   readonly object: THREE.Mesh
   private readonly material: THREE.ShaderMaterial
   private readonly spectrumData: Uint8Array
   private readonly spectrumTexture: THREE.DataTexture
   private mode: ShaderSceneMode = 'grid'
+  private orbEnergy: Float32Array | null = null
+  private orbLon: Float32Array | null = null
+  private orbGeometry: THREE.SphereGeometry | null = null
 
   constructor(mode: ShaderSceneMode, colorA: number, colorB: number, accent: number) {
     this.mode = mode
@@ -151,9 +195,10 @@ export class ShaderScene {
     this.spectrumTexture.wrapS = THREE.ClampToEdgeWrapping
     this.spectrumTexture.needsUpdate = true
 
+    const isOrb = mode === 'orb'
     this.material = new THREE.ShaderMaterial({
-      vertexShader: VERTEX,
-      fragmentShader: mode === 'polar' ? POLAR_FRAGMENT : FRAGMENT,
+      vertexShader: isOrb ? ORB_VERTEX : VERTEX,
+      fragmentShader: isOrb ? ORB_FRAGMENT : mode === 'polar' ? POLAR_FRAGMENT : FRAGMENT,
       uniforms: {
         uTime: { value: 0 },
         uBass: { value: 0 },
@@ -166,14 +211,30 @@ export class ShaderScene {
         uColorB: { value: new THREE.Color(colorB) },
         uAccent: { value: new THREE.Color(accent) },
       },
-      depthWrite: true,
+      depthWrite: !isOrb,
       depthTest: true,
-      transparent: false,
+      transparent: isOrb,
+      blending: isOrb ? THREE.AdditiveBlending : THREE.NormalBlending,
     })
 
-    this.object = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), this.material)
+    this.object = new THREE.Mesh(isOrb ? new THREE.SphereGeometry(1.6, 160, 110) : new THREE.PlaneGeometry(1, 1), this.material)
     this.object.frustumCulled = false
     this.object.renderOrder = 0
+
+    if (isOrb) {
+      const geometry = this.object.geometry as THREE.SphereGeometry
+      this.orbGeometry = geometry
+      const position = geometry.getAttribute('position')
+      const count = position.count
+      this.orbEnergy = new Float32Array(count)
+      this.orbLon = new Float32Array(count)
+      for (let i = 0; i < count; i += 1) {
+        const x = position.getX(i)
+        const z = position.getZ(i)
+        this.orbLon[i] = Math.atan2(z, x) / (Math.PI * 2) + 0.5
+      }
+      geometry.setAttribute('aEnergy', new THREE.BufferAttribute(this.orbEnergy, 1))
+    }
   }
 
   get modeId(): ShaderSceneMode {
@@ -182,6 +243,11 @@ export class ShaderScene {
 
   /** Scales the quad to cover the visible stage at its depth. */
   resize(width: number, height: number): void {
+    if (this.mode === 'orb') {
+      this.object.scale.setScalar(Math.max(0.6, Math.min(1.6, height / 2.2)))
+      this.material.uniforms.uAspect.value = width / Math.max(0.001, height)
+      return
+    }
     this.object.scale.set(width, height, 1)
     this.material.uniforms.uAspect.value = width / Math.max(0.001, height)
   }
@@ -197,6 +263,17 @@ export class ShaderScene {
       this.spectrumData[i * 4 + 3] = 255
     }
     this.spectrumTexture.needsUpdate = true
+    if (this.mode === 'orb' && this.orbEnergy && this.orbLon && this.orbGeometry) {
+      // Sphere vertices sample the spectrum by longitude; CPU-side keeps the vertex
+      // shader free of texture fetches (WebGL1-safe).
+      const count = this.orbEnergy.length
+      for (let i = 0; i < count; i += 1) {
+        const bin = Math.min(bins - 1, Math.floor(this.orbLon[i] * bins))
+        this.orbEnergy[i] = this.spectrumData[bin * 4] / 255
+      }
+      const attribute = this.orbGeometry.getAttribute('aEnergy') as THREE.BufferAttribute
+      attribute.needsUpdate = true
+    }
     const uniforms = this.material.uniforms
     uniforms.uTime.value = timeSec
     uniforms.uBass.value = Math.max(0, Math.min(1, frame.bass))
@@ -212,6 +289,6 @@ export class ShaderScene {
   }
 }
 
-export function isShaderScene(style: string): style is 'grid' | 'polar' {
-  return style === 'grid' || style === 'polar'
+export function isShaderScene(style: string): style is 'grid' | 'polar' | 'orb' {
+  return style === 'grid' || style === 'polar' || style === 'orb'
 }
