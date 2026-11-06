@@ -11,6 +11,7 @@ import { InspectorPanel } from '../../features/song-nhac/studio/InspectorPanel'
 import { useSongNhacLayerStore } from '../../features/song-nhac/studio/songNhacLayerStore'
 import { WAVE_PRESETS } from '../../features/song-nhac/studio/builtInPresets'
 import { useCompositionEffects } from '../../features/song-nhac/studio/effectsStore'
+import { parseLyrics } from '../../features/song-nhac/studio/lyrics'
 import type { SongNhacExportProgress } from '../../../shared/songNhacChannels'
 
 
@@ -62,15 +63,17 @@ const LEFT_TITLES: Record<string, string> = {
   presets: 'PRESET SÓNG',
   effects: 'HIỆU ỨNG',
   analyzer: 'ANALYZER',
+  lyrics: 'LYRICS',
   project: 'PROJECT',
   export: 'XUẤT VIDEO',
 }
 
-const RAIL_ITEMS: Array<{ id: 'composition' | 'presets' | 'effects' | 'analyzer' | 'project' | 'export'; short: string; hint: string }> = [
+const RAIL_ITEMS: Array<{ id: 'composition' | 'presets' | 'effects' | 'analyzer' | 'lyrics' | 'project' | 'export'; short: string; hint: string }> = [
   { id: 'composition', short: 'Lớp', hint: 'Cây lớp của composition' },
   { id: 'presets', short: 'Preset', hint: 'Thư viện preset sóng' },
   { id: 'effects', short: 'Hiệu ứng', hint: 'Hiệu ứng toàn composition' },
   { id: 'analyzer', short: 'Analyzer', hint: 'Dải tần theo từng lớp' },
+  { id: 'lyrics', short: 'Lyrics', hint: 'Lời bài hát theo thời gian' },
   { id: 'project', short: 'Project', hint: 'Lưu / mở project' },
   { id: 'export', short: 'Xuất', hint: 'Cài đặt xuất video' },
 ]
@@ -269,7 +272,8 @@ export default function SongNhacPage() {
     useSongNhacLayerStore.getState().endHistoryGesture()
     setSelectionBounds((current) => current)
   }
-  const [leftTab, setLeftTab] = useState<'composition' | 'presets' | 'effects' | 'analyzer' | 'project' | 'export'>('composition')
+  const [leftTab, setLeftTab] = useState<'composition' | 'presets' | 'effects' | 'analyzer' | 'lyrics' | 'project' | 'export'>('composition')
+  const [lyricsText, setLyricsText] = useState('')
   const effects = useCompositionEffects()
   const [rightTab, setRightTab] = useState<'objects' | 'visualizer'>('visualizer')
 
@@ -440,7 +444,9 @@ export default function SongNhacPage() {
       } else {
         // Idle animation: without it the preview is a black rectangle until the user
         // presses play, which reads as "broken" rather than "waiting for audio".
-        frame = idleAudioFrame(performance.now() / 1000)
+        // Once a track is loaded, idle time follows the playhead so seeking previews
+        // lyrics and keyframes at the right moment.
+        frame = idleAudioFrame(audio && audio.readyState > 0 && audio.duration ? audio.currentTime : performance.now() / 1000)
       }
 
       if (style === 'avee-circle' && !webglUnavailableRef.current && !aveeEngineRef.current) {
@@ -641,6 +647,16 @@ export default function SongNhacPage() {
     layers: unknown[]
   }
 
+  const createLyricsLayer = () => {
+    const lines = parseLyrics(lyricsText, audioDuration)
+    if (!lines.length) {
+      setMessage('Chưa có lời để tạo lớp lyric.')
+      return
+    }
+    useSongNhacLayerStore.getState().addLyricsLayer('Lyrics', lines)
+    setLeftTab('composition')
+    setMessage(`Đã tạo lớp lyric với ${lines.length} dòng.`)
+  }
   const saveProject = async () => {
     try {
       const picked = await window.api.dialog.saveProjectFile(`song-nhac-${new Date().toISOString().slice(0, 10)}.json`)
@@ -913,6 +929,35 @@ export default function SongNhacPage() {
             {LEFT_TITLES[leftTab] ?? 'COMPOSITION'}
           </div>
           {leftTab === 'composition' && <LayersPanel />}
+          {leftTab === 'lyrics' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12, color: '#cbd5e1' }}>
+              <div style={{ color: '#94a3b8', lineHeight: 1.5 }}>
+                Dán lời (mỗi dòng một câu). Có timestamp LRC <code>[00:12.34]</code> thì dùng luôn, không thì tự chia đều theo độ dài nhạc.
+              </div>
+              <textarea
+                value={lyricsText}
+                onChange={(event) => setLyricsText(event.target.value)}
+                placeholder={'[00:12.00] Câu đầu tiên\n[00:16.50] Câu thứ hai\n\nhoặc dán lời thường, không cần timestamp'}
+                style={{
+                  minHeight: 160,
+                  resize: 'vertical',
+                  padding: 8,
+                  borderRadius: 8,
+                  border: '1px solid #334155',
+                  background: '#0f172a',
+                  color: '#e2e8f0',
+                  fontSize: 12,
+                  fontFamily: 'inherit',
+                }}
+              />
+              <button type="button" onClick={createLyricsLayer} style={projectButtonStyle}>
+                Tạo lớp lyric
+              </button>
+              <div style={{ fontSize: 11, color: '#64748b' }}>
+                {parseLyrics(lyricsText, audioDuration).length} dòng
+              </div>
+            </div>
+          )}
           {leftTab === 'project' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12, color: '#cbd5e1' }}>
               <div style={{ color: '#94a3b8', lineHeight: 1.5 }}>

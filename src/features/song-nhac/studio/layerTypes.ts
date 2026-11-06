@@ -6,7 +6,7 @@
  * so a layout keeps its proportions at any resolution.
  */
 
-export type StudioLayerType = 'image' | 'text' | 'visualizer' | 'video' | 'group' | 'particles'
+export type StudioLayerType = 'image' | 'text' | 'visualizer' | 'video' | 'group' | 'particles' | 'lyrics'
 export type StudioFitMode = 'free' | 'contain' | 'cover'
 export type StudioLayerRole = 'normal' | 'watermark'
 export type StudioColorMode = 'rainbow' | 'solid' | 'gradient'
@@ -201,6 +201,20 @@ export interface VisualizerLayer extends StudioLayerBase {
   sensitivity: number
 }
 
+export interface LyricLine {
+  timeSec: number
+  text: string
+}
+
+export interface LyricsLayer extends StudioLayerBase {
+  type: 'lyrics'
+  lines: LyricLine[]
+  fontSize: number
+  color: string
+  /** Previous + next line preview, like most lyric videos. */
+  showNeighbours: boolean
+}
+
 export interface GroupLayer {
   id: string
   name: string
@@ -208,7 +222,7 @@ export interface GroupLayer {
   children: string[]
 }
 
-export type StudioLayer = ImageLayer | VideoLayer | TextLayer | VisualizerLayer | ParticlesLayer
+export type StudioLayer = ImageLayer | VideoLayer | TextLayer | VisualizerLayer | ParticlesLayer | LyricsLayer
 export type StudioAnyLayer = StudioLayer | GroupLayer
 
 export const DEFAULT_TRANSFORM: StudioTransform = {
@@ -434,6 +448,17 @@ export function createParticlesLayer(name = 'Hạt'): ParticlesLayer {
     gravity: 0.02,
     beatBoost: 0.6,
     mirror: true,
+  }
+}
+
+export function createLyricsLayer(name = 'Lyrics', lines: LyricLine[] = []): LyricsLayer {
+  return {
+    ...createBase('lyrics', name),
+    type: 'lyrics',
+    lines,
+    fontSize: 72,
+    color: '#ffffff',
+    showNeighbours: true,
   }
 }
 

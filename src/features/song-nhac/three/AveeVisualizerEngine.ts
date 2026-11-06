@@ -7,6 +7,7 @@ import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
 import { FinishPass } from './finishPass'
 import type { SongNhacAudioFrame } from '../core/types'
 import { SpectrumRing } from './SpectrumRing'
+import { activeLyricIndex } from '../studio/lyrics'
 import { createFxStyle, isFxStyle, type WaveStyleObject } from './waveStyles'
 import { ShaderScene, isShaderScene } from './shaderScene'
 import { DEFAULT_EFFECTS, type CompositionEffects } from '../studio/effectsStore'
@@ -20,6 +21,7 @@ import {
   type VisualizerLayer,
   type ImageLayer,
   type ParticlesLayer,
+  type LyricsLayer,
   type StudioAnalyzer,
   DEFAULT_ANALYZER,
   evaluateAutomation,
@@ -1018,6 +1020,9 @@ export class AveeVisualizerEngine {
     if (layer.type === 'text') {
       return `text:${layer.text}|${layer.fontSize}|${layer.color}|${layer.strokeColor}|${layer.strokeWidth}|${layer.fontWeight}|${layer.italic}|${layer.fontFamily}|${layer.textShadowBlur}|${layer.textShadowColor}|${layer.textShadowOffsetX}|${layer.textShadowOffsetY}|${filterKey}`
     }
+    if (layer.type === 'lyrics') {
+      return `lyrics:${layer.fontSize}:${layer.color}:${layer.showNeighbours}:${layer.lines.map((line) => `${line.timeSec}|${line.text}`).join('~')}`
+    }
     const plate = layer.plate
     const plateKey = plate
       ? `${plate.cornerRadius}|${plate.borderWidth}|${plate.borderColor}|${plate.shadowBlur}|${plate.shadowColor}|${plate.shadowOffsetX}|${plate.shadowOffsetY}`
@@ -1292,6 +1297,7 @@ export class AveeVisualizerEngine {
   private createLayerNode(layer: Exclude<StudioLayer, { type: 'visualizer' }>): LayerNode | null {
     if (layer.type === 'text') return this.createTextNode(layer)
     if (layer.type === 'particles') return this.createParticlesNode(layer)
+    if (layer.type === 'lyrics') return this.createLyricsNode(layer)
 
     const material = new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false })
     const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), material)
@@ -1452,6 +1458,79 @@ export class AveeVisualizerEngine {
 
     this.scene.add(mesh)
     return node
+  }
+
+  /**
+   * Lyric overlay: re-bakes its canvas only when the active line changes, so a pasted
+   * lyric costs one draw call per line instead of one per frame.
+   */
+  private createLyricsNode(layer: LyricsLayer): LayerNode {
+    const canvas = document.createElement('canvas')
+    canvas.width = 1280
+    canvas.height = 360
+    const ctx = canvas.getContext('2d')
+    const texture = new THREE.CanvasTexture(canvas)
+    texture.colorSpace = THREE.SRGBColorSpace
+    // Lyrics are an overlay: draw last and ignore depth, otherwise the ring and the
+    // logo plate would cover them.
+    const material = new THREE.MeshBasicMaterial({
+      map: texture,
+      transparent: true,
+      depthWrite: false,
+      depthTest: false,
+      toneMapped: false,
+    })
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), material)
+    mesh.renderOrder = 999
+    this.scene.add(mesh)
+    let lastIndex = -2
+    const baseWidth = this.stageWidth * 0.92
+    const node: LayerNode = {
+      object: mesh,
+      key: this.layerKey(layer),
+      baseWidth,
+      baseHeight: (baseWidth * canvas.height) / canvas.width,
+      depthFactor: 1,
+      layer,
+      tick: () => {
+        const index = activeLyricIndex(layer.lines, this.lastTimeSec)
+        if (index === lastIndex) return
+        lastIndex = index
+        this.drawLyricsCanvas(ctx, layer, index)
+        texture.needsUpdate = true
+      },
+      dispose: () => {
+        texture.dispose()
+        material.dispose()
+        mesh.geometry.dispose()
+      },
+    }
+    this.drawLyricsCanvas(ctx, layer, -1)
+    return node
+  }
+
+  private drawLyricsCanvas(ctx: CanvasRenderingContext2D | null, layer: LyricsLayer, index: number): void {
+    if (!ctx) return
+    const { width, height } = ctx.canvas
+    ctx.clearRect(0, 0, width, height)
+    const current = layer.lines[index]
+    if (!current) return
+    const scale = width / 1280
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.65)'
+    ctx.shadowBlur = 18
+    ctx.fillStyle = layer.color
+    ctx.font = `${Math.max(10, Math.round(layer.fontSize * scale))}px system-ui, sans-serif`
+    ctx.fillText(current.text, width / 2, height / 2)
+    if (layer.showNeighbours) {
+      ctx.fillStyle = `${layer.color}99`
+      ctx.font = `${Math.max(8, Math.round(layer.fontSize * 0.6 * scale))}px system-ui, sans-serif`
+      const previous = layer.lines[index - 1]
+      const next = layer.lines[index + 1]
+      if (previous) ctx.fillText(previous.text, width / 2, height / 2 - layer.fontSize * 1.2 * scale)
+      if (next) ctx.fillText(next.text, width / 2, height / 2 + layer.fontSize * 1.2 * scale)
+    }
   }
 
   /**

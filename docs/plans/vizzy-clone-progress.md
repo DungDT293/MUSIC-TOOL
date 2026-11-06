@@ -13,7 +13,7 @@ Mục tiêu: clone toàn bộ chức năng editor Vizzy vào Sóng nhạc. Mỗi
 | **Automations** | keyframe theo thuộc tính | ✅ keyframe opacity/scaleX/scaleY/x/y/rotation, nội suy tuyến tính, hiện trên timeline |
 | **Media** | uploads, stock, audio, images, videos | 🟡 chọn file được, chưa có thư viện |
 | **Projects** | project settings/history, list | 🟡 lưu/mở file .json (layers + keyframe + effects + cài đặt xuất); chưa có danh sách project gần đây |
-| **Lyrics** | nhập lyric, LRCLIB | ❌ chưa có |
+| **Lyrics** | nhập lyric, LRCLIB | 🟡 nhập LRC/plain + tự chia thời gian, lớp lyric overlay (câu hiện tại + câu trước/sau), chưa có LRCLIB |
 
 ## Panel phải (Inspector theo loại object)
 

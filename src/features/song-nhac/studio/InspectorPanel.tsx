@@ -362,6 +362,37 @@ export function InspectorPanel() {
           </Section>
         )}
 
+        {layer.type === 'lyrics' && (
+          <Section title="Lyrics">
+            <SliderRow
+              label="Cỡ chữ"
+              value={layer.fontSize}
+              min={24}
+              max={140}
+              step={1}
+              format={(value) => `${Math.round(value)}px`}
+              onChange={(fontSize) => updateLayerWithHistory(layer.id, { fontSize })}
+              onCommit={commit}
+            />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={labelStyle}>Màu chữ</span>
+              <input
+                type="color"
+                value={layer.color}
+                onChange={(event) => updateLayer(layer.id, { color: event.target.value })}
+                onBlur={commit}
+                style={{ flex: 1, height: 26, background: 'transparent', border: '1px solid #334155', borderRadius: 6 }}
+              />
+            </div>
+            <CheckRow
+              label="Hiện câu trước / sau"
+              checked={layer.showNeighbours}
+              onChange={(showNeighbours) => updateLayerWithHistory(layer.id, { showNeighbours })}
+            />
+            <div style={{ fontSize: 10, color: '#64748b' }}>{layer.lines.length} dòng lyric</div>
+          </Section>
+        )}
+
         <Section title="Automation (keyframe)" defaultOpen={false}>
           {(() => {
             const store = useSongNhacLayerStore.getState()

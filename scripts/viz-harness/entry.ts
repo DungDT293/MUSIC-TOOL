@@ -2,6 +2,7 @@ import { AveeVisualizerEngine } from '../../src/features/song-nhac/three/AveeVis
 import {
   createImageLayer,
   createTextLayer,
+  createLyricsLayer,
   createVideoLayer,
   createVisualizerLayer,
 } from '../../src/features/song-nhac/studio/layerTypes'
@@ -148,6 +149,7 @@ function syntheticSpectrum(bins: number, time: number): Uint8Array {
   ;(window as unknown as Record<string, unknown>).__layerDebug = engine.debugLayers()
   ;(window as unknown as Record<string, unknown>).__engine = engine
   ;(window as unknown as Record<string, unknown>).__createTextLayer = createTextLayer
+  ;(window as unknown as Record<string, unknown>).__createLyricsLayer = createLyricsLayer
   return true
 }
 

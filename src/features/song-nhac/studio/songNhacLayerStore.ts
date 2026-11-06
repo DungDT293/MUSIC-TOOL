@@ -9,6 +9,8 @@ import {
   createVideoLayer,
   createVisualizerLayer,
   createParticlesLayer,
+  createLyricsLayer,
+  type LyricLine,
   type StudioAutomationProperty,
   isGroupLayer,
   type StudioAnyLayer,
@@ -57,6 +59,7 @@ export interface LayerStoreState {
   addIntroLayer: (durationSec?: number) => string
   addOutroLayer: (totalSec: number, durationSec?: number) => string
   addParticlesLayer: (name?: string) => string
+  addLyricsLayer: (name?: string, lines?: LyricLine[]) => string
   /** Time used when inserting keyframes from the inspector. */
   currentTimeSec: number
   setCurrentTime: (timeSec: number) => void
@@ -238,6 +241,14 @@ export const useSongNhacLayerStore = create<LayerStoreState>((set, get) => ({
         : layer,
     )
     set({ layers })
+  },
+
+  addLyricsLayer: (name, lines) => {
+    const layer = createLyricsLayer(name || 'Lyrics', lines ?? [])
+    const state = get()
+    state.pushHistorySnapshot(state.layers)
+    set({ layers: [...state.layers, layer], selectedLayerId: layer.id, selectedIds: [layer.id] })
+    return layer.id
   },
 
   addParticlesLayer: (name) => {
