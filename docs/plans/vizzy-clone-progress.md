@@ -85,6 +85,7 @@ căn giữa giãn chữ + effects blur 15%) rồi xuất 3 giây qua hàng đợ
 | ~~Keyframe easing~~ | ✅ linear / easeIn / easeOut / easeInOut, đổi ngay trên chip keyframe |
 | ~~Hạt 5 kiểu~~ | ✅ dot / square / star / **cloud** / **moon** (uShape 0..4) |
 | ~~Text gradient~~ | ✅ bật gradient 2 màu cho chữ (đo: trái xanh 23,232,0 → phải đỏ 232,22,0) |
+| ~~Thanh menu trên~~ | ✅ File / Edit / Project / View / Help, mở bằng click, đổi menu bằng hover, Esc đóng |
 | Vizzy "Explore creations" / publish | Không thuộc phạm vi app offline |
 | 48 preset built-in của Vizzy | Mình có 15 preset + preset tự tạo |
 ## Xác nhận hoàn thiện (vòng 40)

@@ -7,6 +7,7 @@ import { AveeVisualizerEngine, AVEE_THEMES, type AveeColorTheme } from '../../fe
 import { exportSongNhacFrames } from '../../features/song-nhac/export/exportSongNhacFrames'
 import { FrameEncoder } from '../../features/song-nhac/export/frameEncoder'
 import { LayersPanel } from '../../features/song-nhac/studio/LayersPanel'
+import { MenuBar } from '../../features/song-nhac/studio/MenuBar'
 import { InspectorPanel } from '../../features/song-nhac/studio/InspectorPanel'
 import { useSongNhacLayerStore } from '../../features/song-nhac/studio/songNhacLayerStore'
 import { WAVE_PRESETS } from '../../features/song-nhac/studio/builtInPresets'
@@ -1097,6 +1098,23 @@ export default function SongNhacPage() {
     return true
   }
 
+  const newProject = () => {
+    const store = useSongNhacLayerStore.getState()
+    store.pushHistorySnapshot(store.layers)
+    for (const layer of store.layers.slice()) store.removeLayer(layer.id)
+    setMessage('Đã tạo project mới (trống).')
+  }
+
+  const showShortcuts = () => {
+    setMessage(
+      'Space phát/dừng · ←/→ tua 1s (Shift 5s) · Ctrl+D nhân bản · Delete xoá · Ctrl+Z/Y hoàn tác · S snap · Ctrl+S lưu · Ctrl+C/V sao chép/dán · Ctrl+Shift+V dán tại playhead',
+    )
+  }
+
+  const showAbout = () => {
+    setMessage('Sóng nhạc 4.5.4 · Visualizer 3D three.js · export WebCodecs H.264/HEVC')
+  }
+
   const saveProject = async () => {
     try {
       const picked = await window.api.dialog.saveProjectFile(`song-nhac-${new Date().toISOString().slice(0, 10)}.json`)
@@ -1594,6 +1612,29 @@ export default function SongNhacPage() {
   }, [saveProject, togglePlay])
   return (
     <section style={{ height: 'calc(100vh - 96px)', minHeight: 0, display: 'flex', flexDirection: 'column', color: '#e5e7eb', fontFamily: 'Inter, system-ui, sans-serif' }}>
+      <MenuBar
+        actions={{
+          saveProject: () => void saveProject(),
+          openProject: () => void openProject(),
+          newProject,
+          exportVideo: () => void startExport(),
+          undo: () => useSongNhacLayerStore.getState().undo(),
+          redo: () => useSongNhacLayerStore.getState().redo(),
+          duplicate: () => useSongNhacLayerStore.getState().duplicateSelectedLayers(),
+          removeSelected: () => useSongNhacLayerStore.getState().removeSelectedLayers(),
+          copy: () => useSongNhacLayerStore.getState().copySelectedLayers(),
+          paste: () => useSongNhacLayerStore.getState().pasteLayers(),
+          setResolution: (width, height) => {
+            setExportWidth(width)
+            setExportHeight(height)
+            setMessage(`Độ phân giải xuất: ${width}×${height}`)
+          },
+          toggleSnap: () => setSnapEnabled((value) => !value),
+          resetTimelineZoom: () => setTimelineZoom(1),
+          showShortcuts,
+          showAbout,
+        }}
+      />
       <h1 style={{ marginTop: 0, marginBottom: 4, fontSize: 24, fontWeight: 700 }}>Sóng nhạc</h1>
       <p style={{ color: '#94a3b8', marginTop: 0, marginBottom: 18, fontSize: 13 }}>
         Visualizer 3D phong cách Avee Player · WebGL Three.js · Beat Audio Reactive
