@@ -6,10 +6,10 @@ Write-Host ""
 
 # Set Cloudflare API token
 if (-not $env:CLOUDFLARE_API_TOKEN) {
-    $env:CLOUDFLARE_API_TOKEN = "ilJo9lCFk4VV7qbdC5WgkjJYTVF6y4xF3Le26Ied"
+    $env:CLOUDFLARE_API_TOKEN = $env:CLOUDFLARE_API_TOKEN
 }
 
-$expectedToken = "Dung28072022"
+$expectedToken = "<ADMIN_TOKEN>"
 
 Write-Host "Expected token: $expectedToken" -ForegroundColor Yellow
 Write-Host "Token length: $($expectedToken.Length)" -ForegroundColor Yellow

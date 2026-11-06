@@ -8,8 +8,8 @@ Write-Host ""
 $adminToken = $env:ADMIN_TOKEN
 if (-not $adminToken) {
     # Try default token from set-token-dung28072022.bat
-    $adminToken = "Dung28072022"
-    Write-Host "ADMIN_TOKEN not set, using default: Dung28072022" -ForegroundColor Yellow
+    $adminToken = $env:ADMIN_TOKEN
+    Write-Host "ADMIN_TOKEN not set, using default: <ADMIN_TOKEN>" -ForegroundColor Yellow
     Write-Host "If this token is incorrect, set it:" -ForegroundColor Yellow
     Write-Host "   `$env:ADMIN_TOKEN = 'your-actual-token'" -ForegroundColor Cyan
     Write-Host ""

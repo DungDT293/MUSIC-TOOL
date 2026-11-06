@@ -23,7 +23,7 @@ $response.StatusCode
 
 ```powershell
 cd "d:\TOOL DUNG CODE\93-media-tool-mix-nhac\server"
-$env:CLOUDFLARE_API_TOKEN = "ilJo9lCFk4VV7qbdC5WgkjJYTVF6y4xF3Le26Ied"
+$env:CLOUDFLARE_API_TOKEN = "<YOUR_CLOUDFLARE_API_TOKEN>"
 npx wrangler secret list
 ```
 
@@ -33,7 +33,7 @@ Nếu token không đúng, set lại:
 
 ```powershell
 cd "d:\TOOL DUNG CODE\93-media-tool-mix-nhac\server"
-$env:CLOUDFLARE_API_TOKEN = "ilJo9lCFk4VV7qbdC5WgkjJYTVF6y4xF3Le26Ied"
+$env:CLOUDFLARE_API_TOKEN = "<YOUR_CLOUDFLARE_API_TOKEN>"
 npx wrangler secret put ADMIN_TOKEN
 ```
 

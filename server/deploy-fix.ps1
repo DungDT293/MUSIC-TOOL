@@ -7,7 +7,7 @@ Write-Host ""
 Set-Location $PSScriptRoot
 
 # Set API Token
-$env:CLOUDFLARE_API_TOKEN = "ilJo9lCFk4VV7qbdC5WgkjJYTVF6y4xF3Le26Ied"
+$env:CLOUDFLARE_API_TOKEN = $env:CLOUDFLARE_API_TOKEN
 
 Write-Host "[Bước 1/2] Kiểm tra Wrangler..." -ForegroundColor Yellow
 $wranglerVersion = npx wrangler --version 2>&1

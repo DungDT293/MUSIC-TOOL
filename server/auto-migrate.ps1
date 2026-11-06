@@ -5,8 +5,8 @@ Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
 # Set Cloudflare API token
-$env:CLOUDFLARE_API_TOKEN = "ilJo9lCFk4VV7qbdC5WgkjJYTVF6y4xF3Le26Ied"
-$adminToken = "Dung28072022"
+$env:CLOUDFLARE_API_TOKEN = $env:CLOUDFLARE_API_TOKEN
+$adminToken = $env:ADMIN_TOKEN
 
 Write-Host "Step 1: Setting ADMIN_TOKEN secret..." -ForegroundColor Yellow
 Write-Host "Token: $adminToken" -ForegroundColor Gray

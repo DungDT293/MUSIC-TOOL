@@ -8,7 +8,7 @@ echo.
 cd /d "%~dp0"
 
 echo [Bước 1/2] Set Cloudflare API Token...
-set CLOUDFLARE_API_TOKEN=ilJo9lCFk4VV7qbdC5WgkjJYTVF6y4xF3Le26Ied
+set CLOUDFLARE_API_TOKEN=%CLOUDFLARE_API_TOKEN%
 
 echo.
 echo [Bước 2/2] Set ADMIN_TOKEN secret...

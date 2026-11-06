@@ -1,20 +1,20 @@
 @echo off
 chcp 65001 >nul
 echo ========================================
-echo 🔐 Set Admin Token: Dung28072022
+echo 🔐 Set Admin Token: <ADMIN_TOKEN>
 echo ========================================
 echo.
 
 cd /d "%~dp0"
 
 echo [Bước 1/2] Set Cloudflare API Token...
-set CLOUDFLARE_API_TOKEN=ilJo9lCFk4VV7qbdC5WgkjJYTVF6y4xF3Le26Ied
+set CLOUDFLARE_API_TOKEN=%CLOUDFLARE_API_TOKEN%
 
 echo.
-echo [Bước 2/2] Set ADMIN_TOKEN = Dung28072022...
+echo [Bước 2/2] Set ADMIN_TOKEN = <ADMIN_TOKEN>...
 echo.
 
-echo Dung28072022| npx wrangler secret put ADMIN_TOKEN
+echo %ADMIN_TOKEN%| npx wrangler secret put ADMIN_TOKEN
 
 if %errorlevel% equ 0 (
     echo.
@@ -22,11 +22,11 @@ if %errorlevel% equ 0 (
     echo ✅ Đã set ADMIN_TOKEN thành công!
     echo ========================================
     echo.
-    echo 📋 Token: Dung28072022
+    echo 📋 Token: <ADMIN_TOKEN>
     echo.
     echo 🌐 Bây giờ bạn có thể:
     echo    1. Mở dashboard: https://license-server.dungdong333.workers.dev/dashboard
-    echo    2. Nhập token: Dung28072022
+    echo    2. Nhập token: <ADMIN_TOKEN>
     echo    3. Click "Đăng Nhập"
     echo.
 ) else (
@@ -35,7 +35,7 @@ if %errorlevel% equ 0 (
     echo.
     echo 💡 Thử cách thủ công:
     echo    npx wrangler secret put ADMIN_TOKEN
-    echo    (Sau đó nhập: Dung28072022)
+    echo    (Sau đó nhập: <ADMIN_TOKEN>)
     echo.
 )
 

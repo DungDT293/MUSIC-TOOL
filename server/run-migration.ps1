@@ -9,8 +9,8 @@ Write-Host ""
 $adminToken = $env:ADMIN_TOKEN
 if (-not $adminToken) {
     # Thu dung token mac dinh tu file set-token-dung28072022.bat
-    $adminToken = "Dung28072022"
-    Write-Host "ADMIN_TOKEN chua duoc set, su dung token mac dinh: Dung28072022" -ForegroundColor Yellow
+    $adminToken = $env:ADMIN_TOKEN
+    Write-Host "ADMIN_TOKEN chua duoc set, su dung token mac dinh: <ADMIN_TOKEN>" -ForegroundColor Yellow
     Write-Host "Neu token nay khong dung, hay set lai:" -ForegroundColor Yellow
     Write-Host "   `$env:ADMIN_TOKEN = 'your-actual-token'" -ForegroundColor Cyan
     Write-Host ""

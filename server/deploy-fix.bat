@@ -26,7 +26,7 @@ if %errorlevel% neq 0 (
     echo ⚠️  Chưa đăng nhập Cloudflare!
     echo.
     echo 📌 Đang thử dùng API Token...
-    set CLOUDFLARE_API_TOKEN=ilJo9lCFk4VV7qbdC5WgkjJYTVF6y4xF3Le26Ied
+    set CLOUDFLARE_API_TOKEN=%CLOUDFLARE_API_TOKEN%
     npx wrangler whoami >nul 2>&1
     if %errorlevel% neq 0 (
         echo ❌ API Token không hợp lệ hoặc không đủ quyền!
@@ -72,7 +72,7 @@ if %errorlevel% neq 0 (
     echo ⚠️  Chưa đăng nhập Cloudflare!
     echo.
     echo 📌 Đang thử dùng API Token...
-    set CLOUDFLARE_API_TOKEN=ilJo9lCFk4VV7qbdC5WgkjJYTVF6y4xF3Le26Ied
+    set CLOUDFLARE_API_TOKEN=%CLOUDFLARE_API_TOKEN%
     npx wrangler whoami >nul 2>&1
     if %errorlevel% neq 0 (
         echo ❌ API Token không hợp lệ hoặc không đủ quyền!
@@ -93,7 +93,7 @@ if %errorlevel% neq 0 (
 echo.
 echo [Bước 3/3] Đang deploy lên Cloudflare Workers...
 echo.
-set CLOUDFLARE_API_TOKEN=ilJo9lCFk4VV7qbdC5WgkjJYTVF6y4xF3Le26Ied
+set CLOUDFLARE_API_TOKEN=%CLOUDFLARE_API_TOKEN%
 call npx wrangler deploy
 
 if %errorlevel% equ 0 (

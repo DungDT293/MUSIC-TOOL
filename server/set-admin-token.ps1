@@ -7,11 +7,11 @@ Write-Host ""
 # Check if CLOUDFLARE_API_TOKEN is set
 if (-not $env:CLOUDFLARE_API_TOKEN) {
     Write-Host "Setting CLOUDFLARE_API_TOKEN..." -ForegroundColor Yellow
-    $env:CLOUDFLARE_API_TOKEN = "ilJo9lCFk4VV7qbdC5WgkjJYTVF6y4xF3Le26Ied"
+    $env:CLOUDFLARE_API_TOKEN = $env:CLOUDFLARE_API_TOKEN
 }
 
 # Default ADMIN_TOKEN
-$defaultToken = "Dung28072022"
+$defaultToken = $env:ADMIN_TOKEN
 
 Write-Host "This script will help you set ADMIN_TOKEN." -ForegroundColor Yellow
 Write-Host ""

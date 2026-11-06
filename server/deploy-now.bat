@@ -8,7 +8,7 @@ echo.
 cd /d "%~dp0"
 
 REM Set API Token
-set CLOUDFLARE_API_TOKEN=ilJo9lCFk4VV7qbdC5WgkjJYTVF6y4xF3Le26Ied
+set CLOUDFLARE_API_TOKEN=%CLOUDFLARE_API_TOKEN%
 
 echo [Bước 1/2] Đang deploy lên Cloudflare Workers...
 echo.
