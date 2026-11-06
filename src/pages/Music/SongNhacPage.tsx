@@ -23,6 +23,7 @@ import {
 } from '../../features/song-nhac/studio/presetThumbnails'
 import type { StudioLayer } from '../../features/song-nhac/studio/layerTypes'
 import type { LyricSearchHit } from '../../../shared/songNhacChannels'
+import type { StudioAutomationProperty } from '../../features/song-nhac/studio/layerTypes'
 import type { SongNhacExportProgress } from '../../../shared/songNhacChannels'
 
 
@@ -746,6 +747,51 @@ export default function SongNhacPage() {
     const onUp = () => {
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
+      useSongNhacLayerStore.getState().endHistoryGesture()
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+  }
+  /** Drag a keyframe diamond along the timeline (snaps to the grid and other keys). */
+  const beginKeyframeDrag = (
+    event: React.PointerEvent<HTMLElement>,
+    layer: StudioLayer,
+    property: StudioAutomationProperty,
+    keyframeTime: number,
+  ) => {
+    if (event.button !== 0) return
+    const lane = (event.currentTarget as HTMLElement).closest('[data-lane]') as HTMLElement | null
+    if (!lane) return
+    event.preventDefault()
+    event.stopPropagation()
+    const rect = lane.getBoundingClientRect()
+    const total = audioDuration > 0 ? audioDuration : 1
+    const secPerPx = total / Math.max(1, rect.width)
+    const startX = event.clientX
+    const origin = keyframeTime
+    const gridStep = total <= 240 ? 1 : total <= 900 ? 5 : 15
+    const targets: number[] = [0, total, playhead]
+    for (let mark = gridStep; mark < total; mark += gridStep) targets.push(mark)
+    for (const automation of layer.automations ?? []) {
+      for (const frame of automation.keyframes) targets.push(frame.timeSec)
+    }
+    const tolerance = snapEnabled ? 8 * secPerPx : 0
+    const store = useSongNhacLayerStore.getState()
+    store.beginHistoryGesture()
+    let current = origin
+    const onMove = (moveEvent: PointerEvent) => {
+      const delta = (moveEvent.clientX - startX) * secPerPx
+      const candidate = Math.max(0, Math.min(total, origin + delta))
+      const snapped = snapTime(candidate, targets, tolerance)
+      setSnapGuide(snapped.guide)
+      if (Math.abs(snapped.value - current) < 0.001) return
+      useSongNhacLayerStore.getState().moveKeyframe(layer.id, property, current, snapped.value)
+      current = snapped.value
+    }
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      setSnapGuide(null)
       useSongNhacLayerStore.getState().endHistoryGesture()
     }
     window.addEventListener('pointermove', onMove)
@@ -3022,7 +3068,8 @@ export default function SongNhacPage() {
                     automation.keyframes.map((keyframe) => (
                       <div
                         key={`${layer.id}-${automation.property}-${keyframe.timeSec}`}
-                        title={`${automation.property} = ${keyframe.value} @ ${keyframe.timeSec}s`}
+                        title={`${automation.property} = ${keyframe.value} @ ${keyframe.timeSec}s (kéo để đổi giờ)`}
+                        onPointerDown={(dragEvent) => beginKeyframeDrag(dragEvent, layer, automation.property, keyframe.timeSec)}
                         style={{
                           position: 'absolute',
                           left: `calc(${Math.max(0, Math.min(100, (keyframe.timeSec / Math.max(0.001, audioDuration || 1)) * 100))}% - 4px)`,
@@ -3032,6 +3079,7 @@ export default function SongNhacPage() {
                           background: '#fbbf24',
                           transform: 'rotate(45deg)',
                           borderRadius: 1,
+                          cursor: 'ew-resize',
                         }}
                       />
                     )),

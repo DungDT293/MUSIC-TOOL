@@ -65,6 +65,8 @@ export interface LayerStoreState {
   setCurrentTime: (timeSec: number) => void
   addKeyframe: (layerId: string, property: StudioAutomationProperty, value: number, timeSec?: number) => void
   clearAutomation: (layerId: string, property: StudioAutomationProperty) => void
+  /** Moves one keyframe in time (drag on the timeline). */
+  moveKeyframe: (layerId: string, property: StudioAutomationProperty, fromTimeSec: number, toTimeSec: number) => void
   addGroup: () => string
 
   removeLayer: (id: string) => void
@@ -228,6 +230,23 @@ export const useSongNhacLayerStore = create<LayerStoreState>((set, get) => ({
       } else {
         automations.push({ property, keyframes: [keyframe] })
       }
+      return { ...layer, automations } as typeof layer
+    })
+    set({ layers })
+  },
+  moveKeyframe: (layerId, property, fromTimeSec, toTimeSec) => {
+    const next = Math.max(0, toTimeSec)
+    const layers = get().layers.map((layer) => {
+      if (layer.id !== layerId || layer.type === 'group') return layer
+      const automations = (layer.automations ?? []).map((automation) => {
+        if (automation.property !== property) return automation
+        const keyframes = automation.keyframes
+          .map((frame) => (Math.abs(frame.timeSec - fromTimeSec) < 0.001 ? { ...frame, timeSec: next } : frame))
+          // Dropping a key onto another one keeps a single key instead of a zero-length segment.
+          .filter((frame, index, all) => all.findIndex((other) => Math.abs(other.timeSec - frame.timeSec) < 0.001) === index)
+          .sort((a, b) => a.timeSec - b.timeSec)
+        return { ...automation, keyframes }
+      })
       return { ...layer, automations } as typeof layer
     })
     set({ layers })
