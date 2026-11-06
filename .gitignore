@@ -83,3 +83,4 @@ scripts/viz-harness/export-bundle.js
 
 # Legacy Sóng nh?c studio (reference for the port, not compiled)
 legacy-song-nhac/
+*.bak2
