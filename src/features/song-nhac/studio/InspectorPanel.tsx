@@ -353,6 +353,59 @@ export function InspectorPanel() {
           </Section>
         )}
 
+        <Section title="Analyzer (dải tần)" defaultOpen={false}>
+          {(() => {
+            const analyzer = layer.analyzer ?? { bandStart: 0, bandEnd: 1, sensitivity: 1, smoothing: 0.35 }
+            return (
+              <>
+                <SliderRow
+                  label="Bắt đầu"
+                  value={analyzer.bandStart}
+                  min={0}
+                  max={0.95}
+                  step={0.01}
+                  format={(value) => `${Math.round(value * 100)}%`}
+                  onChange={(bandStart) => updateLayer(layer.id, { analyzer: { ...analyzer, bandStart: Math.min(bandStart, analyzer.bandEnd - 0.02) } })}
+                  onCommit={commit}
+                />
+                <SliderRow
+                  label="Kết thúc"
+                  value={analyzer.bandEnd}
+                  min={0.05}
+                  max={1}
+                  step={0.01}
+                  format={(value) => `${Math.round(value * 100)}%`}
+                  onChange={(bandEnd) => updateLayer(layer.id, { analyzer: { ...analyzer, bandEnd: Math.max(bandEnd, analyzer.bandStart + 0.02) } })}
+                  onCommit={commit}
+                />
+                <SliderRow
+                  label="Độ nhạy"
+                  value={analyzer.sensitivity}
+                  min={0.1}
+                  max={3}
+                  step={0.05}
+                  format={(value) => `${value.toFixed(2)}x`}
+                  onChange={(sensitivity) => updateLayer(layer.id, { analyzer: { ...analyzer, sensitivity } })}
+                  onCommit={commit}
+                />
+                <SliderRow
+                  label="Làm mượt"
+                  value={analyzer.smoothing}
+                  min={0}
+                  max={0.95}
+                  step={0.01}
+                  format={(value) => `${Math.round(value * 100)}%`}
+                  onChange={(smoothing) => updateLayer(layer.id, { analyzer: { ...analyzer, smoothing } })}
+                  onCommit={commit}
+                />
+                <div style={{ fontSize: 10, color: '#64748b' }}>
+                  Dải {Math.round(analyzer.bandStart * 100)}–{Math.round(analyzer.bandEnd * 100)}% phổ · nhạy {analyzer.sensitivity.toFixed(2)}x
+                </div>
+              </>
+            )
+          })()}
+        </Section>
+
         {(isImageLayer(layer) || isVideoLayer(layer)) && (
           <Section title="Khung & viền">
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>

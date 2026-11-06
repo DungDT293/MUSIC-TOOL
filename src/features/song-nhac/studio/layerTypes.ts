@@ -50,6 +50,25 @@ export interface StudioTimeRange {
   fadeOutSec: number
 }
 
+/** Frequency window + response that drives a layer (Vizzy's Analyzer). */
+export interface StudioAnalyzer {
+  /** 0..1 of the spectrum, inclusive start. */
+  bandStart: number
+  /** 0..1 of the spectrum, exclusive end. */
+  bandEnd: number
+  /** Multiplier applied to the band energy. */
+  sensitivity: number
+  /** 0..0.95 — higher means smoother motion. */
+  smoothing: number
+}
+
+export const DEFAULT_ANALYZER: StudioAnalyzer = {
+  bandStart: 0,
+  bandEnd: 1,
+  sensitivity: 1,
+  smoothing: 0.35,
+}
+
 export interface StudioLayerBase {
   id: string
   name: string
@@ -61,6 +80,7 @@ export interface StudioLayerBase {
   timeRange?: StudioTimeRange
   role: StudioLayerRole
   parentId?: string
+  analyzer?: StudioAnalyzer
 }
 
 export type StudioBlendMode = 'normal' | 'additive' | 'multiply' | 'screen'
@@ -275,6 +295,7 @@ function createBase(type: StudioLayerType, name: string): StudioLayerBase {
     transform: { ...DEFAULT_TRANSFORM },
     filter: { ...DEFAULT_FILTER },
     role: 'normal',
+    analyzer: { ...DEFAULT_ANALYZER },
   }
 }
 

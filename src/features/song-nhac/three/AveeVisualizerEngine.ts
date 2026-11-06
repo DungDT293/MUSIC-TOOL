@@ -20,6 +20,8 @@ import {
   type VisualizerLayer,
   type ImageLayer,
   type ParticlesLayer,
+  type StudioAnalyzer,
+  DEFAULT_ANALYZER,
 } from '../studio/layerTypes'
 
 interface LayerNode {
@@ -709,6 +711,27 @@ export class AveeVisualizerEngine {
     attr.needsUpdate = true
   }
 
+  /** Spectrum window + response configured for a layer. */
+  private analyzerOf(layer?: { analyzer?: StudioAnalyzer } | null): StudioAnalyzer {
+    return layer?.analyzer ?? DEFAULT_ANALYZER
+  }
+
+  /** Slice of the spectrum that the layer's analyzer listens to. */
+  private bandData(frame: SongNhacAudioFrame, analyzer: StudioAnalyzer): Uint8Array {
+    const data = frame.frequencyData
+    const start = Math.max(0, Math.min(data.length - 1, Math.floor(analyzer.bandStart * data.length)))
+    const end = Math.max(start + 1, Math.min(data.length, Math.ceil(analyzer.bandEnd * data.length)))
+    return data.subarray(start, end)
+  }
+
+  /** 0..1 energy of the band, used by particles and other beat-driven layers. */
+  private bandEnergy(frame: SongNhacAudioFrame, analyzer: StudioAnalyzer): number {
+    const band = this.bandData(frame, analyzer)
+    let sum = 0
+    for (let i = 0; i < band.length; i += 1) sum += band[i]
+    return Math.min(1, (sum / Math.max(1, band.length) / 255) * analyzer.sensitivity)
+  }
+
   private updateBars(frame: SongNhacAudioFrame): void {
     const style = this.currentVisualizerLayer?.type === 'visualizer' ? this.currentVisualizerLayer.waveStyle : 'circlebars'
     if (style === 'bars') {
@@ -720,7 +743,8 @@ export class AveeVisualizerEngine {
       return
     }
     const intensity = this.options.intensity
-    const data = frame.frequencyData
+    const analyzer = this.analyzerOf(this.currentVisualizerLayer)
+    const data = this.bandData(frame, analyzer)
     const dataLength = Math.min(data.length, 180)
     const half = Math.floor(this.barCount / 2)
     const dummy = new THREE.Object3D()
@@ -1473,7 +1497,7 @@ export class AveeVisualizerEngine {
       layer,
       tick: () => {
         const frame = this.lastFrame
-        const beat = frame ? Math.max(0, Math.min(1, frame.beat)) : 0
+        const beat = frame ? this.bandEnergy(frame, this.analyzerOf(layer)) : 0
         const dt = this.lastDelta
         const position = geometry.getAttribute('position') as THREE.BufferAttribute
         const data = position.array as Float32Array

@@ -47,10 +47,11 @@ const PREVIEW_SIZES = [
   { label: '4K', width: 3840, height: 2160 },
 ]
 
-const RAIL_ITEMS: Array<{ id: 'composition' | 'presets' | 'effects' | 'export'; short: string; hint: string }> = [
+const RAIL_ITEMS: Array<{ id: 'composition' | 'presets' | 'effects' | 'analyzer' | 'export'; short: string; hint: string }> = [
   { id: 'composition', short: 'Lớp', hint: 'Cây lớp của composition' },
   { id: 'presets', short: 'Preset', hint: 'Thư viện preset sóng' },
   { id: 'effects', short: 'Hiệu ứng', hint: 'Hiệu ứng toàn composition' },
+  { id: 'analyzer', short: 'Analyzer', hint: 'Dải tần theo từng lớp' },
   { id: 'export', short: 'Xuất', hint: 'Cài đặt xuất video' },
 ]
 
@@ -248,7 +249,7 @@ export default function SongNhacPage() {
     useSongNhacLayerStore.getState().endHistoryGesture()
     setSelectionBounds((current) => current)
   }
-  const [leftTab, setLeftTab] = useState<'composition' | 'presets' | 'effects' | 'export'>('composition')
+  const [leftTab, setLeftTab] = useState<'composition' | 'presets' | 'effects' | 'analyzer' | 'export'>('composition')
   const effects = useCompositionEffects()
   const [rightTab, setRightTab] = useState<'objects' | 'visualizer'>('visualizer')
 
@@ -794,9 +795,53 @@ export default function SongNhacPage() {
                 ? 'PRESET SÓNG'
                 : leftTab === 'effects'
                   ? 'HIỆU ỨNG'
+                  : leftTab === 'analyzer'
+                    ? 'ANALYZER'
                   : 'XUẤT VIDEO'}
           </div>
           {leftTab === 'composition' && <LayersPanel />}
+          {leftTab === 'analyzer' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12, color: '#cbd5e1' }}>
+              {tracks.map((layer) => {
+                const analyzer = layer.analyzer ?? { bandStart: 0, bandEnd: 1, sensitivity: 1, smoothing: 0.35 }
+                return (
+                  <button
+                    key={layer.id}
+                    type="button"
+                    onClick={() => useSongNhacLayerStore.getState().setSelection(layer.id)}
+                    style={{
+                      textAlign: 'left',
+                      padding: 8,
+                      borderRadius: 8,
+                      border: '1px solid #1e293b',
+                      background: '#0f172a',
+                      color: '#cbd5e1',
+                      fontSize: 11,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <div style={{ marginBottom: 6 }}>{layer.name}</div>
+                    <div style={{ position: 'relative', height: 10, background: '#020617', borderRadius: 5, overflow: 'hidden' }}>
+                      <div
+                        style={{
+                          position: 'absolute',
+                          left: `${analyzer.bandStart * 100}%`,
+                          width: `${Math.max(2, (analyzer.bandEnd - analyzer.bandStart) * 100)}%`,
+                          top: 0,
+                          bottom: 0,
+                          background: 'linear-gradient(90deg, #22d3ee, #f472b6)',
+                        }}
+                      />
+                    </div>
+                    <div style={{ marginTop: 4, color: '#64748b' }}>
+                      {Math.round(analyzer.bandStart * 100)}–{Math.round(analyzer.bandEnd * 100)}% · nhạy {analyzer.sensitivity.toFixed(2)}x · mượt {Math.round(analyzer.smoothing * 100)}%
+                    </div>
+                  </button>
+                )
+              })}
+              {tracks.length === 0 && <div style={{ color: '#475569' }}>Chưa có lớp nào.</div>}
+            </div>
+          )}
           {leftTab === 'effects' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10, fontSize: 12, color: '#cbd5e1' }}>
               {([

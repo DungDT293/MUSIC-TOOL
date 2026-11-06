@@ -8,7 +8,7 @@ Mục tiêu: clone toàn bộ chức năng editor Vizzy vào Sóng nhạc. Mỗi
 | Panel | Vizzy có | Trạng thái |
 |---|---|---|
 | **Composition** | cây nhóm → layer, thêm/xoá/nhân bản, thứ tự | ✅ (LayersPanel) |
-| **Analyzers** | analyzer theo layer: dải tần, màu, độ nhạy | ❌ chưa có |
+| **Analyzers** | analyzer theo layer: dải tần, màu, độ nhạy | ✅ dải tần + độ nhạy + làm mượt theo từng layer (rail Analyzer + Inspector) |
 | **Effects** | blending, two-pass blur, global alpha, FXAA, tint, mirror, camera shake | 🟡 có 6/8: blur, alpha, tint, mirror, zoom, shake (thiếu FXAA, two-pass riêng) |
 | **Automations** | keyframe theo thuộc tính | ❌ chưa có |
 | **Media** | uploads, stock, audio, images, videos | 🟡 chọn file được, chưa có thư viện |

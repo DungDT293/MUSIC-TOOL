@@ -20,6 +20,7 @@ interface HarnessOptions {
   withLayers?: boolean
   waveStyle?: string
   videoSrc?: string
+  analyzer?: { bandStart: number; bandEnd: number; sensitivity?: number; smoothing?: number }
   plate?: { cornerRadius?: number; borderWidth?: number; borderColor?: string; shadowBlur?: number; shadowOffsetX?: number; shadowOffsetY?: number; blend?: string; anchor?: string }
   skipImage?: boolean
 }
@@ -97,6 +98,9 @@ function syntheticSpectrum(bins: number, time: number): Uint8Array {
 
     const vizLayer = createVisualizerLayer()
     vizLayer.waveStyle = options.waveStyle ?? 'circlebars'
+    if (options.analyzer) {
+      vizLayer.analyzer = { sensitivity: 1, smoothing: 0.35, ...options.analyzer }
+    }
 
     const textLayer = createTextLayer('Ten bai hat')
 
