@@ -236,7 +236,13 @@ export default function SongNhacPage() {
     setSelectionBounds((current) => current)
   }
   const [leftTab, setLeftTab] = useState<'composition' | 'presets' | 'export'>('composition')
-  const [rightTab, setRightTab] = useState<'objects' | 'visualizer'>('objects')
+  const [rightTab, setRightTab] = useState<'objects' | 'visualizer'>('visualizer')
+
+  // Selecting a layer should land on the panel that can edit it, otherwise the click
+  // looks like it did nothing.
+  useEffect(() => {
+    if (selectedLayerId) setRightTab('visualizer')
+  }, [selectedLayerId])
   const [audioDuration, setAudioDuration] = useState(0)
   const [playhead, setPlayhead] = useState(0)
   const [waveformUrl, setWaveformUrl] = useState('')
@@ -482,8 +488,40 @@ export default function SongNhacPage() {
     }
   }, [])
 
-  const seekTo = (event: React.MouseEvent<HTMLDivElement>) => {
-    const audio = audioRef.current
+  /** Drop image / video / audio straight onto the stage, like the reference editor. */
+  const handleDrop = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    const files = Array.from(event.dataTransfer.files ?? [])
+    if (!files.length) return
+    const store = useSongNhacLayerStore.getState()
+    for (const file of files) {
+      const filePath = window.api.getPathForFile?.(file) ?? ''
+      if (!filePath) continue
+      const name = filePath.split(/[\\/]/).pop() ?? 'Media'
+      const lower = filePath.toLowerCase()
+      if (/\.(mp3|m4a|wav|aac|flac|ogg)$/.test(lower)) {
+        setAudioPath(filePath)
+        const audio = audioRef.current
+        if (audio) {
+          audio.src = localFileUrl(filePath)
+          audio.load()
+        }
+        continue
+      }
+      if (/\.(png|jpe?g|webp|gif|bmp)$/.test(lower)) {
+        const id = store.addImageLayer(name, localFileUrl(filePath))
+        store.setSelection(id)
+        continue
+      }
+      if (/\.(mp4|mov|webm|mkv|m4v)$/.test(lower)) {
+        const id = store.addVideoLayer(name, localFileUrl(filePath))
+        store.setSelection(id)
+      }
+    }
+    setMessage('Đã thêm file kéo thả vào composition.')
+  }
+
+  const seekTo = (event: React.MouseEvent<HTMLDivElement>) => {    const audio = audioRef.current
     if (!audio || !audioDuration) return
     const rect = event.currentTarget.getBoundingClientRect()
     const ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / Math.max(1, rect.width)))
@@ -760,6 +798,7 @@ export default function SongNhacPage() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minHeight: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <span style={{ fontSize: 10, letterSpacing: 0.8, color: '#64748b', fontWeight: 700 }}>PREVIEW</span>
+            <span style={{ fontSize: 10, color: '#475569' }}>Kéo trên khung để di chuyển · Shift+kéo để xoay · lăn chuột để thu phóng</span>
             {PREVIEW_SIZES.map((item) => {
               const active = exportWidth === item.width && exportHeight === item.height
               return (
@@ -816,7 +855,14 @@ export default function SongNhacPage() {
           }}
         >
           {/* Key forces fresh canvas element on style switch to avoid WebGL / 2D context collision */}
-          <div style={{ position: 'relative', width: '100%' }}>
+          <div
+            style={{ position: 'relative', width: '100%' }}
+            onDragOver={(event) => {
+              event.preventDefault()
+              event.dataTransfer.dropEffect = 'copy'
+            }}
+            onDrop={handleDrop}
+          >
           <canvas
             key={style === 'avee-circle' && !webglFallback ? 'canvas-three' : 'canvas-2d'}
             ref={canvasRef}

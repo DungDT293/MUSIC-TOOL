@@ -1298,6 +1298,8 @@ export interface IPCAPI {
     onUpdate: (handler: (job: JobInfo) => void) => () => void
   }
   readFileAsBase64?: (filePath: string) => Promise<{ ok: boolean; base64?: string; mime?: string; error?: string }>
+  /** Electron 32+ dropped File.path; drag & drop resolves the real path here. */
+  getPathForFile?: (file: File) => string
   // General IPC helpers (preload exposes api.on() only)
   on?: (channel: string, callback: (...args: any[]) => void) => () => void
   // Validate playlists for crossfade (top-level convenience)

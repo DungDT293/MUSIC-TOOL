@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
+import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 import type {
   AuthLoginPayload,
   AuthRegisterPayload,
@@ -289,6 +289,8 @@ const api: IPCAPI = {
     }
   },
   readFileAsBase64: (filePath: string) => ipcRenderer.invoke('system:readFileAsBase64', filePath),
+  /** Electron 32+ removed File.path; the drop handler needs this to resolve real paths. */
+  getPathForFile: (file: File) => webUtils.getPathForFile(file),
   // YouTube API
   youtube: {
     // Verify yt-dlp
