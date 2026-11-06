@@ -12,6 +12,7 @@ import { useSongNhacLayerStore } from '../../features/song-nhac/studio/songNhacL
 import { WAVE_PRESETS } from '../../features/song-nhac/studio/builtInPresets'
 import { useCompositionEffects } from '../../features/song-nhac/studio/effectsStore'
 import { parseLyrics } from '../../features/song-nhac/studio/lyrics'
+import { useMediaLibrary, type MediaKind } from '../../features/song-nhac/studio/mediaLibraryStore'
 import type { StudioLayer } from '../../features/song-nhac/studio/layerTypes'
 import type { SongNhacExportProgress } from '../../../shared/songNhacChannels'
 
@@ -59,21 +60,32 @@ const projectButtonStyle: React.CSSProperties = {
   cursor: 'pointer',
 }
 
+const miniIconStyle: React.CSSProperties = {
+  padding: '1px 6px',
+  borderRadius: 5,
+  border: '1px solid #334155',
+  background: '#0f172a',
+  fontSize: 10,
+  cursor: 'pointer',
+}
+
 const LEFT_TITLES: Record<string, string> = {
   composition: 'COMPOSITION',
   presets: 'PRESET SÓNG',
   effects: 'HIỆU ỨNG',
   analyzer: 'ANALYZER',
+  media: 'MEDIA',
   lyrics: 'LYRICS',
   project: 'PROJECT',
   export: 'XUẤT VIDEO',
 }
 
-const RAIL_ITEMS: Array<{ id: 'composition' | 'presets' | 'effects' | 'analyzer' | 'lyrics' | 'project' | 'export'; short: string; hint: string }> = [
+const RAIL_ITEMS: Array<{ id: 'composition' | 'presets' | 'effects' | 'analyzer' | 'media' | 'lyrics' | 'project' | 'export'; short: string; hint: string }> = [
   { id: 'composition', short: 'Lớp', hint: 'Cây lớp của composition' },
   { id: 'presets', short: 'Preset', hint: 'Thư viện preset sóng' },
   { id: 'effects', short: 'Hiệu ứng', hint: 'Hiệu ứng toàn composition' },
   { id: 'analyzer', short: 'Analyzer', hint: 'Dải tần theo từng lớp' },
+  { id: 'media', short: 'Media', hint: 'Thư viện ảnh / video / audio' },
   { id: 'lyrics', short: 'Lyrics', hint: 'Lời bài hát theo thời gian' },
   { id: 'project', short: 'Project', hint: 'Lưu / mở project' },
   { id: 'export', short: 'Xuất', hint: 'Cài đặt xuất video' },
@@ -273,7 +285,9 @@ export default function SongNhacPage() {
     useSongNhacLayerStore.getState().endHistoryGesture()
     setSelectionBounds((current) => current)
   }
-  const [leftTab, setLeftTab] = useState<'composition' | 'presets' | 'effects' | 'analyzer' | 'lyrics' | 'project' | 'export'>('composition')
+  const [leftTab, setLeftTab] = useState<'composition' | 'presets' | 'effects' | 'analyzer' | 'media' | 'lyrics' | 'project' | 'export'>('composition')
+  const [mediaTab, setMediaTab] = useState<MediaKind>('image')
+  const mediaLibrary = useMediaLibrary()
   const [lyricsText, setLyricsText] = useState('')
   const effects = useCompositionEffects()
   const [rightTab, setRightTab] = useState<'objects' | 'visualizer'>('visualizer')
@@ -368,6 +382,7 @@ export default function SongNhacPage() {
       if (import.meta.env.DEV) {
         ;(window as unknown as Record<string, unknown>).__songNhacEngine = aveeEngineRef.current
         ;(window as unknown as Record<string, unknown>).__songNhacStore = useSongNhacLayerStore
+        ;(window as unknown as Record<string, unknown>).__songNhacMedia = useMediaLibrary
       }
       aveeEngineRef.current.setLayers(useSongNhacLayerStore.getState().layers)
       aveeEngineRef.current.setSelectedLayer(useSongNhacLayerStore.getState().selectedLayerId)
@@ -710,6 +725,35 @@ export default function SongNhacPage() {
     layers: unknown[]
   }
 
+  const applyMediaItem = (kind: MediaKind, filePath: string) => {
+    const name = filePath.split(/[\\/]/).pop() || 'Media'
+    const store = useSongNhacLayerStore.getState()
+    if (kind === 'audio') {
+      setAudioPath(filePath)
+      const audio = audioRef.current
+      if (audio) {
+        audio.src = localFileUrl(filePath)
+        audio.load()
+      }
+      return
+    }
+    if (kind === 'video') store.addVideoLayer(name, localFileUrl(filePath))
+    else store.addImageLayer(name, localFileUrl(filePath))
+  }
+
+  const addMediaFromDialog = async () => {
+    const filters =
+      mediaTab === 'image'
+        ? [{ name: 'Ảnh', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'] }]
+        : mediaTab === 'video'
+          ? [{ name: 'Video', extensions: ['mp4', 'mov', 'webm', 'mkv', 'avi'] }]
+          : [{ name: 'Audio', extensions: ['mp3', 'm4a', 'wav', 'aac', 'flac', 'ogg'] }]
+    const picked = await window.api.dialog.openFile({ properties: ['openFile'], filters })
+    const filePath = picked.filePaths?.[0]
+    if (picked.canceled || !filePath) return
+    useMediaLibrary.getState().add(mediaTab, filePath)
+    applyMediaItem(mediaTab, filePath)
+  }
   const createLyricsLayer = () => {
     const lines = parseLyrics(lyricsText, audioDuration)
     if (!lines.length) {
@@ -992,6 +1036,85 @@ export default function SongNhacPage() {
             {LEFT_TITLES[leftTab] ?? 'COMPOSITION'}
           </div>
           {leftTab === 'composition' && <LayersPanel />}
+          {leftTab === 'media' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12, color: '#cbd5e1' }}>
+              <div style={{ display: 'flex', gap: 4 }}>
+                {([
+                  { key: 'image', label: 'Ảnh' },
+                  { key: 'video', label: 'Video' },
+                  { key: 'audio', label: 'Audio' },
+                ] as const).map((tab) => (
+                  <button
+                    key={tab.key}
+                    type="button"
+                    onClick={() => setMediaTab(tab.key)}
+                    style={{
+                      flex: 1,
+                      padding: '5px 0',
+                      borderRadius: 6,
+                      border: `1px solid ${mediaTab === tab.key ? '#0ea5e9' : '#1e293b'}`,
+                      background: mediaTab === tab.key ? '#0c4a6e' : '#0f172a',
+                      color: mediaTab === tab.key ? '#e0f2fe' : '#94a3b8',
+                      fontSize: 11,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+              <button type="button" onClick={addMediaFromDialog} style={projectButtonStyle}>
+                Thêm file…
+              </button>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                {(mediaLibrary[mediaTab] ?? []).map((item) => (
+                  <div
+                    key={item.path}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 6,
+                      padding: '5px 7px',
+                      borderRadius: 6,
+                      border: '1px solid #1e293b',
+                      background: '#0f172a',
+                    }}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => applyMediaItem(mediaTab, item.path)}
+                      title={item.path}
+                      style={{
+                        flex: 1,
+                        textAlign: 'left',
+                        background: 'transparent',
+                        border: 'none',
+                        color: '#cbd5e1',
+                        fontSize: 11,
+                        cursor: 'pointer',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {item.name}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => useMediaLibrary.getState().remove(mediaTab, item.path)}
+                      title="Xoá khỏi thư viện"
+                      style={{ ...miniIconStyle, color: '#fca5a5' }}
+                    >
+                      x
+                    </button>
+                  </div>
+                ))}
+                {(mediaLibrary[mediaTab] ?? []).length === 0 && (
+                  <div style={{ fontSize: 11, color: '#475569' }}>Chưa có file nào. Bấm "Thêm file…" để nạp.</div>
+                )}
+              </div>
+            </div>
+          )}
           {leftTab === 'lyrics' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12, color: '#cbd5e1' }}>
               <div style={{ color: '#94a3b8', lineHeight: 1.5 }}>
