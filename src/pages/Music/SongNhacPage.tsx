@@ -15,6 +15,7 @@ import { parseLyrics } from '../../features/song-nhac/studio/lyrics'
 import { TimelineClipMenu, type ClipMenuState } from '../../features/song-nhac/studio/TimelineClipMenu'
 import { useMediaLibrary, type MediaKind } from '../../features/song-nhac/studio/mediaLibraryStore'
 import { useExportQueue, type ExportJob } from '../../features/song-nhac/studio/exportQueueStore'
+import { useUserPresets } from '../../features/song-nhac/studio/userPresetsStore'
 import { useProjectHistory } from '../../features/song-nhac/studio/projectHistoryStore'
 import { renderPresetThumbnails } from '../../features/song-nhac/studio/presetThumbnails'
 import type { StudioLayer } from '../../features/song-nhac/studio/layerTypes'
@@ -295,6 +296,8 @@ export default function SongNhacPage() {
   const selectedIds = useSongNhacLayerStore((state) => state.selectedIds)
   const queueJobs = useExportQueue((state) => state.jobs)
   const projectHistory = useProjectHistory()
+  const userPresets = useUserPresets()
+  const [presetName, setPresetName] = useState('')
   const [clipMenu, setClipMenu] = useState<ClipMenuState | null>(null)
   const [snapEnabled, setSnapEnabled] = useState(true)
   const seekGuardRef = useRef(0)
@@ -759,6 +762,40 @@ export default function SongNhacPage() {
     audio.currentTime = next
     setPlayhead(next)
     useSongNhacLayerStore.getState().setCurrentTime(next)
+  }
+
+  const applyVisualizerPatch = (patch: Record<string, unknown>) => {
+    const state = useSongNhacLayerStore.getState()
+    const viz = state.layers.find((layer) => layer.type === 'visualizer')
+    if (!viz) return false
+    state.updateLayerWithHistory(viz.id, patch as never)
+    state.setSelection(viz.id)
+    return true
+  }
+
+  const saveCurrentPreset = () => {
+    const viz = useSongNhacLayerStore.getState().layers.find((layer) => layer.type === 'visualizer')
+    if (!viz || viz.type !== 'visualizer') {
+      setMessage('Chưa có lớp sóng để lưu preset.')
+      return
+    }
+    // window.prompt() is disabled in Electron, so the name comes from the inline field.
+    const name = presetName.trim() || `Preset ${userPresets.presets.length + 1}`
+    useUserPresets.getState().save(name, {
+      waveStyle: viz.waveStyle,
+      colorMode: viz.colorMode,
+      color1: viz.color1,
+      color2: viz.color2,
+      barCount: viz.barCount,
+      barWidth: viz.barWidth,
+      speed: viz.speed,
+      opacity: viz.opacity,
+      glowEnabled: viz.glowEnabled,
+      glowIntensity: viz.glowIntensity,
+      mirror: viz.mirror,
+      sensitivity: viz.sensitivity,
+    })
+    setMessage(`Đã lưu preset: ${name}`)
   }
 
   const applyWavePreset = (presetId: string) => {
@@ -1757,6 +1794,75 @@ export default function SongNhacPage() {
                   {preset.name}
                 </button>
               ))}
+            </div>
+          )}
+          {leftTab === 'presets' && (
+            <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <div style={{ fontSize: 10, letterSpacing: 0.5, color: '#475569' }}>PRESET CỦA TÔI</div>
+              <input
+                value={presetName}
+                onChange={(event) => setPresetName(event.target.value)}
+                placeholder={`Preset ${userPresets.presets.length + 1}`}
+                style={{
+                  padding: '6px 8px',
+                  borderRadius: 6,
+                  border: '1px solid #334155',
+                  background: '#0f172a',
+                  color: '#e2e8f0',
+                  fontSize: 11,
+                }}
+              />
+              <button type="button" onClick={saveCurrentPreset} style={projectButtonStyle}>
+                Lưu preset hiện tại
+              </button>
+              {userPresets.presets.map((preset) => (
+                <div key={preset.id} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <button
+                    type="button"
+                    onClick={() => applyVisualizerPatch(preset.visualizer)}
+                    title="Áp preset này cho lớp sóng"
+                    style={{
+                      flex: 1,
+                      textAlign: 'left',
+                      padding: '6px 8px',
+                      borderRadius: 6,
+                      border: '1px solid #1e293b',
+                      background: '#0f172a',
+                      color: '#cbd5e1',
+                      fontSize: 11,
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 6,
+                      overflow: 'hidden',
+                    }}
+                  >
+                    <span
+                      style={{
+                        width: 26,
+                        height: 16,
+                        borderRadius: 3,
+                        flexShrink: 0,
+                        background: `linear-gradient(135deg, ${preset.visualizer.color1 ?? '#22d3ee'}, ${preset.visualizer.color2 ?? '#f472b6'})`,
+                      }}
+                    />
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {preset.name}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => useUserPresets.getState().remove(preset.id)}
+                    title="Xoá preset"
+                    style={{ ...miniIconStyle, color: '#fca5a5' }}
+                  >
+                    x
+                  </button>
+                </div>
+              ))}
+              {userPresets.presets.length === 0 && (
+                <div style={{ fontSize: 11, color: '#475569' }}>Chưa có preset tự tạo.</div>
+              )}
             </div>
           )}
           {leftTab === 'export' && (
