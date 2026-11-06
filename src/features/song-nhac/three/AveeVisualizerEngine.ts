@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js'
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js'
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
@@ -285,6 +286,7 @@ export class AveeVisualizerEngine {
   private barsMesh: THREE.InstancedMesh
   private barsInner: THREE.InstancedMesh
   private barColors: Float32Array
+  private barHeights: Float32Array
   private barCount = 0
 
   private logoMesh: THREE.Mesh
@@ -428,7 +430,9 @@ export class AveeVisualizerEngine {
     // ── Spectrum bars ─────────────────────────────────────────────────────────
     const preset = QUALITY_PRESETS[this.options.quality]
     this.barCount = preset.bars
-    const barGeometry = new THREE.BoxGeometry(1, 1, 1)
+    // Rounded caps read as "designed" instead of "debug lines"; boxes with a 0.18 radius
+    // are cheap enough for a few hundred instances.
+    const barGeometry = new RoundedBoxGeometry(1, 1, 0.36, 2, 0.18)
     barGeometry.translate(0, 0.5, 0)
     this.barsMesh = new THREE.InstancedMesh(
       barGeometry,
@@ -437,6 +441,7 @@ export class AveeVisualizerEngine {
     )
     this.barsMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
     this.barColors = new Float32Array(this.barCount * 3)
+    this.barHeights = new Float32Array(this.barCount).fill(0.06)
     this.barsMesh.instanceColor = new THREE.InstancedBufferAttribute(this.barColors, 3)
     this.barsMesh.instanceColor.setUsage(THREE.DynamicDrawUsage)
     this.barsMesh.instanceMatrix.needsUpdate = true
@@ -444,7 +449,7 @@ export class AveeVisualizerEngine {
 
     // Inner "echo" layer: shorter, additive bars offset by half a step. It reads as a
     // soft secondary ring without doubling the draw cost.
-    const innerGeometry = new THREE.BoxGeometry(1, 1, 1)
+    const innerGeometry = new RoundedBoxGeometry(1, 1, 0.3, 2, 0.15)
     innerGeometry.translate(0, 0.5, 0)
     this.barsInner = new THREE.InstancedMesh(
       innerGeometry,
@@ -665,21 +670,32 @@ export class AveeVisualizerEngine {
     const dataLength = Math.min(data.length, 180)
     const half = Math.floor(this.barCount / 2)
     const dummy = new THREE.Object3D()
-    const barWidth = (2 * Math.PI * BAR_BASE_RADIUS) / this.barCount * 0.74
+    const barWidth = (2 * Math.PI * BAR_BASE_RADIUS) / this.barCount * 0.82
     const innerRadius = BAR_BASE_RADIUS - 0.1
+
+    // Auto-gain: without it a quiet mix leaves half the ring at zero and the visual
+    // looks broken. Normalising to the loudest bin keeps every bar alive.
+    let peak = 0
+    for (let i = 0; i < dataLength; i += 1) {
+      if (data[i] > peak) peak = data[i]
+    }
+    const gain = peak > 8 ? 255 / peak : 1
 
     for (let i = 0; i < this.barCount; i += 1) {
       // index mirrored across the vertical axis: left half rises, right half mirrors
       const mirrored = i < half ? half - 1 - i : i - half
-      const normalized = Math.pow(mirrored / Math.max(1, half - 1), 1.35)
+      const normalized = Math.pow(mirrored / Math.max(1, half - 1), 1.2)
       const freqIndex = dataLength > 0 ? Math.min(dataLength - 1, Math.floor(normalized * dataLength)) : -1
-      const raw = freqIndex >= 0 ? (data[freqIndex] ?? 0) / 255 : 0
-      const height = 0.035 + raw * 1.05 * intensity
+      const raw = freqIndex >= 0 ? Math.min(1, ((data[freqIndex] ?? 0) * gain) / 255) : 0
+      // gamma 0.65 lifts the quiet bins so the ring stays continuous
+      const target = 0.06 + Math.pow(raw, 0.65) * 1.15 * intensity
+      this.barHeights[i] += (target - this.barHeights[i]) * 0.35
+      const height = Math.max(0.02, this.barHeights[i])
 
       const angle = (i / this.barCount) * Math.PI * 2 - Math.PI / 2
       dummy.position.set(Math.cos(angle) * BAR_BASE_RADIUS, Math.sin(angle) * BAR_BASE_RADIUS, 0)
       dummy.rotation.set(0, 0, angle - Math.PI / 2)
-      dummy.scale.set(barWidth, Math.max(0.02, height), 0.06)
+      dummy.scale.set(barWidth, height, 0.06)
       dummy.updateMatrix()
       this.barsMesh.setMatrixAt(i, dummy.matrix)
 
