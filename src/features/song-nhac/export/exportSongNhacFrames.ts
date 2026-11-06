@@ -40,8 +40,11 @@ export async function exportSongNhacFrames(options: ExportSongNhacFramesOptions)
   const api = window.api.songNhac
 
   try {
-    const audioBase64 = await window.api.system.readFileAsBase64(options.audioPath)
-    const audioBytes = decodeBase64(audioBase64)
+    const file = await window.api.readFileAsBase64?.(options.audioPath)
+    if (!file?.ok || !file.base64) {
+      throw new Error(file?.error || 'Không đọc được file audio (readFileAsBase64).')
+    }
+    const audioBytes = decodeBase64(file.base64)
     const analysisContext = new OfflineAudioContext(1, 1, 48000)
     const audioBuffer = await analysisContext.decodeAudioData(audioBytes.slice(0))
 
