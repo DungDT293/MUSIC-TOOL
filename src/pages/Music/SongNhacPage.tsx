@@ -17,7 +17,10 @@ import { useMediaLibrary, type MediaKind } from '../../features/song-nhac/studio
 import { useExportQueue, type ExportJob } from '../../features/song-nhac/studio/exportQueueStore'
 import { useUserPresets } from '../../features/song-nhac/studio/userPresetsStore'
 import { useProjectHistory } from '../../features/song-nhac/studio/projectHistoryStore'
-import { renderPresetThumbnails } from '../../features/song-nhac/studio/presetThumbnails'
+import {
+  renderPresetThumbnails,
+  renderUserPresetThumbnails,
+} from '../../features/song-nhac/studio/presetThumbnails'
 import type { StudioLayer } from '../../features/song-nhac/studio/layerTypes'
 import type { SongNhacExportProgress } from '../../../shared/songNhacChannels'
 
@@ -302,6 +305,7 @@ export default function SongNhacPage() {
   const [snapEnabled, setSnapEnabled] = useState(true)
   const seekGuardRef = useRef(0)
   const [presetThumbs, setPresetThumbs] = useState<Record<string, string>>({})
+  const [userPresetThumbs, setUserPresetThumbs] = useState<Record<string, string>>({})
   const [snapGuide, setSnapGuide] = useState<number | null>(null)
   const [lyricsText, setLyricsText] = useState('')
   const effects = useCompositionEffects()
@@ -1039,6 +1043,27 @@ export default function SongNhacPage() {
       cancelled = true
     }
   }, [theme])
+  // Thumbnails for the presets the user saved (regenerated when the list changes).
+  useEffect(() => {
+    if (!userPresets.presets.length) {
+      setUserPresetThumbs({})
+      return
+    }
+    let cancelled = false
+    renderUserPresetThumbnails(
+      userPresets.presets.map((preset) => ({ id: preset.id, visualizer: preset.visualizer as Record<string, unknown> })),
+      theme,
+    )
+      .then((map) => {
+        if (!cancelled) setUserPresetThumbs(map)
+      })
+      .catch(() => {
+        // Cosmetic only: the colour swatch stays when rendering fails.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [userPresets.presets, theme])
 
   // Autosave draft: a crash or a closed window never loses the whole edit.
   useEffect(() => {
@@ -1843,7 +1868,9 @@ export default function SongNhacPage() {
                         height: 16,
                         borderRadius: 3,
                         flexShrink: 0,
-                        background: `linear-gradient(135deg, ${preset.visualizer.color1 ?? '#22d3ee'}, ${preset.visualizer.color2 ?? '#f472b6'})`,
+                        background: userPresetThumbs[preset.id]
+                          ? `url(${userPresetThumbs[preset.id]}) center / cover no-repeat`
+                          : `linear-gradient(135deg, ${preset.visualizer.color1 ?? '#22d3ee'}, ${preset.visualizer.color2 ?? '#f472b6'})`,
                       }}
                     />
                     <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -2253,7 +2280,9 @@ export default function SongNhacPage() {
                       aspectRatio: '1 / 1',
                       borderRadius: 8,
                       border: '1px solid #1e293b',
-                      background: `linear-gradient(135deg, ${preset.visualizer.color1 ?? '#22d3ee'}, ${preset.visualizer.color2 ?? '#f472b6'})`,
+                      background: presetThumbs[preset.id]
+                          ? `url(${presetThumbs[preset.id]}) center / cover no-repeat`
+                          : `linear-gradient(135deg, ${preset.visualizer.color1 ?? '#22d3ee'}, ${preset.visualizer.color2 ?? '#f472b6'})`,
                       cursor: 'pointer',
                     }}
                   />
