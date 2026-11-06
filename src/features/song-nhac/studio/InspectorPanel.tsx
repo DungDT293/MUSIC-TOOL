@@ -433,6 +433,51 @@ export function InspectorPanel() {
                       >
                         x
                       </button>
+                      {automation && automation.keyframes.length > 0 && (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, marginTop: 2, width: '100%' }}>
+                          {automation.keyframes.map((frame) => (
+                            <span
+                              key={`${row.property}-${frame.timeSec}`}
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: 3,
+                                padding: '1px 4px',
+                                borderRadius: 4,
+                                background: '#0b1220',
+                                border: '1px solid #1e293b',
+                                fontSize: 9,
+                                color: '#94a3b8',
+                              }}
+                            >
+                              <button
+                                type="button"
+                                onClick={() => store.setCurrentTime(frame.timeSec)}
+                                title={`Tới ${frame.timeSec}s`}
+                                style={{ background: 'transparent', border: 'none', color: '#cbd5e1', fontSize: 9, cursor: 'pointer', padding: 0 }}
+                              >
+                                {frame.timeSec.toFixed(1)}s
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => store.duplicateKeyframe(layer.id, row.property, frame.timeSec)}
+                                title="Nhân bản key này (+1s)"
+                                style={{ background: 'transparent', border: 'none', color: '#67e8f9', fontSize: 9, cursor: 'pointer', padding: 0 }}
+                              >
+                                ++
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => store.removeKeyframe(layer.id, row.property, frame.timeSec)}
+                                title="Xoá key này"
+                                style={{ background: 'transparent', border: 'none', color: '#fca5a5', fontSize: 9, cursor: 'pointer', padding: 0 }}
+                              >
+                                x
+                              </button>
+                            </span>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   )
                 })}

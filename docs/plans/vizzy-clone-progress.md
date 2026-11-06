@@ -37,6 +37,7 @@ Mục tiêu: clone toàn bộ chức năng editor Vizzy vào Sóng nhạc. Mỗi
 | Snap theo lưới thời gian (1s ≤4 phút, 5s ≤15 phút, 15s dài hơn) | ✅ |
 | chọn & kéo nhiều clip | ✅ Ctrl/Shift-click chọn nhiều, kéo thân là cả nhóm dời cùng delta |
 | keyframe trên track | ✅ hiện kim cương, **kéo để đổi thời điểm**, snap lưới + key khác |
+| Danh sách keyframe trong Inspector (nhảy tới, nhân bản +1s, xoá từng key) | ✅ |
 | ruler thời gian | ✅ mốc tự chọn theo độ dài |
 
 | Context menu chuột phải (chọn preset, thêm keyframe, ẩn, nhân bản, thứ tự, reset, xoá) | ✅ |

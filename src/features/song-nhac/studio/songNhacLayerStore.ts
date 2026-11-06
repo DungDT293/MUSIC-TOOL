@@ -67,6 +67,8 @@ export interface LayerStoreState {
   clearAutomation: (layerId: string, property: StudioAutomationProperty) => void
   /** Moves one keyframe in time (drag on the timeline). */
   moveKeyframe: (layerId: string, property: StudioAutomationProperty, fromTimeSec: number, toTimeSec: number) => void
+  removeKeyframe: (layerId: string, property: StudioAutomationProperty, timeSec: number) => void
+  duplicateKeyframe: (layerId: string, property: StudioAutomationProperty, timeSec: number, offsetSec?: number) => void
   addGroup: () => string
 
   removeLayer: (id: string) => void
@@ -248,6 +250,48 @@ export const useSongNhacLayerStore = create<LayerStoreState>((set, get) => ({
           .filter((frame, index, all) => all.findIndex((other) => Math.abs(other.timeSec - frame.timeSec) < 0.001) === index)
           .sort((a, b) => a.timeSec - b.timeSec)
         return { ...automation, keyframes }
+      })
+      return { ...layer, automations } as typeof layer
+    })
+    set({ layers })
+  },
+  removeKeyframe: (layerId, property, timeSec) => {
+    const state = get()
+    state.pushHistorySnapshot(state.layers)
+    const layers = state.layers.map((layer) => {
+      if (layer.id !== layerId || layer.type === 'group') return layer
+      const automations = (layer.automations ?? [])
+        .map((automation) =>
+          automation.property === property
+            ? {
+                ...automation,
+                keyframes: automation.keyframes.filter((frame) => Math.abs(frame.timeSec - timeSec) > 0.001),
+              }
+            : automation,
+        )
+        .filter((automation) => automation.keyframes.length > 0)
+      return { ...layer, automations } as typeof layer
+    })
+    set({ layers })
+  },
+
+  duplicateKeyframe: (layerId, property, timeSec, offsetSec = 1) => {
+    const state = get()
+    const target = state.layers.find((layer) => layer.id === layerId)
+    if (!target || target.type === 'group') return
+    const automation = (target.automations ?? []).find((item) => item.property === property)
+    const frame = automation?.keyframes.find((item) => Math.abs(item.timeSec - timeSec) < 0.001)
+    if (!frame) return
+    const nextTime = Math.max(0, frame.timeSec + offsetSec)
+    state.pushHistorySnapshot(state.layers)
+    const layers = state.layers.map((layer) => {
+      if (layer.id !== layerId || layer.type === 'group') return layer
+      const automations = (layer.automations ?? []).map((item) => {
+        if (item.property !== property) return item
+        const keyframes = [...item.keyframes.filter((other) => Math.abs(other.timeSec - nextTime) > 0.001)]
+        keyframes.push({ timeSec: Number(nextTime.toFixed(3)), value: frame.value })
+        keyframes.sort((a, b) => a.timeSec - b.timeSec)
+        return { ...item, keyframes }
       })
       return { ...layer, automations } as typeof layer
     })
