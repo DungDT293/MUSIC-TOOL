@@ -1,11 +1,17 @@
-﻿import * as THREE from 'three'
+import * as THREE from 'three'
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js'
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js'
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
 import type { SongNhacAudioFrame } from '../core/types'
-import { fitSize, type StudioLayer } from '../studio/layerTypes'
+import {
+  fitSize,
+  getLayerTimeOpacity,
+  type StudioAnyLayer,
+  type StudioLayer,
+  type VisualizerLayer,
+} from '../studio/layerTypes'
 
 interface LayerNode {
   object: THREE.Object3D
@@ -14,6 +20,7 @@ interface LayerNode {
   baseHeight: number
   lastTransform?: StudioLayer['transform']
   depthFactor: number
+  layer?: StudioLayer
   dispose: () => void
 }
 
@@ -284,7 +291,6 @@ const PARTICLE_FRAG = /* glsl */ `
 `
 
 export class AveeVisualizerEngine {
-  private canvas: HTMLCanvasElement
   private renderer: THREE.WebGLRenderer
   private scene: THREE.Scene
   private camera: THREE.PerspectiveCamera
@@ -324,11 +330,11 @@ export class AveeVisualizerEngine {
 
   private visualizerGroup = new THREE.Group()
   private layerNodes = new Map<string, LayerNode>()
+  private currentVisualizerLayer: StudioLayer | null = null
   private stageWidth = 10
   private stageHeight = 6
 
   constructor(canvas: HTMLCanvasElement, options: AveeVisualizerOptions = {}) {
-    this.canvas = canvas
     this.options = {
       theme: options.theme ?? 'cyberpunk',
       logoUrl: options.logoUrl ?? null,
@@ -742,20 +748,22 @@ export class AveeVisualizerEngine {
     this.stageWidth = height * this.camera.aspect
   }
 
-  // Ã¢â€â‚¬Ã¢â€â‚¬ Studio layers Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
-  // Every layer is a scene object, so the frame-accurate export path keeps working
-  // without knowing that images, video or text exist.
+  /** px of the 1080-high reference stage → world units. */
+  private get unit(): number {
+    return this.stageHeight / 1080
+  }
 
-  public setLayers(layers: StudioLayer[]): void {
+  public setLayers(layers: StudioAnyLayer[]): void {
     const seen = new Set<string>()
-    layers.forEach((layer, index) => {
+    const renderable = layers.filter((layer): layer is StudioLayer => layer.type !== 'group')
+    renderable.forEach((layer, index) => {
       if (layer.type === 'visualizer') {
         this.applyVisualizerLayer(layer, index)
         return
       }
       seen.add(layer.id)
       const key = this.layerKey(layer)
-      let node = this.layerNodes.get(layer.id)
+      let node: LayerNode | null | undefined = this.layerNodes.get(layer.id)
       if (node && node.key !== key) {
         this.disposeLayer(layer.id)
         node = undefined
@@ -765,64 +773,89 @@ export class AveeVisualizerEngine {
         if (!node) return
         this.layerNodes.set(layer.id, node)
       }
+      node.layer = layer
       this.applyLayerTransform(node, layer, index)
     })
     for (const id of Array.from(this.layerNodes.keys())) {
       if (!seen.has(id)) this.disposeLayer(id)
     }
+    this.refreshLayerOpacity(this.lastTimeSec < 0 ? 0 : this.lastTimeSec)
   }
 
   private layerKey(layer: Exclude<StudioLayer, { type: 'visualizer' }>): string {
     if (layer.type === 'text') {
-      return `text:${layer.text}|${layer.fontSize}|${layer.color}|${layer.strokeColor}|${layer.strokeWidth}|${layer.weight}|${layer.letterSpacing}|${layer.fontFamily}`
+      return `text:${layer.text}|${layer.fontSize}|${layer.color}|${layer.strokeColor}|${layer.strokeWidth}|${layer.fontWeight}|${layer.italic}|${layer.fontFamily}|${layer.textShadowBlur}|${layer.textShadowColor}|${layer.textShadowOffsetX}|${layer.textShadowOffsetY}`
     }
-    return `${layer.type}:${layer.url}:${layer.fit}`
+    return `${layer.type}:${layer.src}:${layer.fitMode}`
   }
 
   private applyVisualizerLayer(layer: StudioLayer, index: number): void {
+    if (layer.type !== 'visualizer') return
+    this.currentVisualizerLayer = layer
     const t = layer.transform
-    this.visualizerGroup.position.set(t.x * this.stageWidth, -t.y * this.stageHeight, -2.2 + index * 0.02)
-    this.visualizerGroup.scale.set(t.scale * (t.flipX ? -1 : 1), t.scale * (t.flipY ? -1 : 1), 1)
+    const unit = this.unit
+    this.visualizerGroup.position.set(t.x * unit, -t.y * unit, -2.2 + index * 0.02)
+    this.visualizerGroup.scale.set(t.scaleX * (t.flipX ? -1 : 1), t.scaleY * (t.flipY ? -1 : 1), 1)
     this.visualizerGroup.rotation.z = (t.rotation * Math.PI) / 180
     this.visualizerGroup.visible = layer.visible
   }
 
   private applyLayerTransform(node: LayerNode, layer: Exclude<StudioLayer, { type: 'visualizer' }>, index: number): void {
     const t = layer.transform
+    const unit = this.unit
     node.lastTransform = t
     // Array order is the stacking order: index 0 sits at the bottom.
     const z = -2.2 + index * 0.02
     node.depthFactor = (7 - z) / 7
-    node.object.position.set(t.x * this.stageWidth, -t.y * this.stageHeight, z)
-    // Scale composes with the fitted base size, otherwise "scale 1" would squish a
-    // full-frame image down to a 1x1 unit plane.
+    node.object.position.set(t.x * unit, -t.y * unit, z)
     node.object.scale.set(
-      node.baseWidth * node.depthFactor * t.scale * (t.flipX ? -1 : 1),
-      node.baseHeight * node.depthFactor * t.scale * (t.flipY ? -1 : 1),
+      node.baseWidth * node.depthFactor * t.scaleX * (t.flipX ? -1 : 1),
+      node.baseHeight * node.depthFactor * t.scaleY * (t.flipY ? -1 : 1),
       1,
     )
     node.object.rotation.z = (t.rotation * Math.PI) / 180
     node.object.visible = layer.visible
     const material = (node.object as THREE.Mesh).material as THREE.MeshBasicMaterial | undefined
-    if (material) material.opacity = t.opacity
+    if (material) {
+      material.opacity = layer.filter.opacity
+      // Media plates sit under a global bloom pass; full brightness washes the frame out.
+      const dim = layer.type === 'image' || layer.type === 'video' ? 0.65 : 1
+      material.color.setScalar(Math.max(0.05, dim * layer.filter.brightness))
+    }
+  }
+
+  /** Per-frame time fade + filter opacity; called from render(). */
+  private refreshLayerOpacity(timeSec: number): void {
+    for (const node of this.layerNodes.values()) {
+      const layer = node.layer
+      if (!layer) continue
+      const fade = getLayerTimeOpacity(layer, timeSec)
+      const material = (node.object as THREE.Mesh).material as THREE.MeshBasicMaterial | undefined
+      node.object.visible = layer.visible && fade >= 0
+      if (material) {
+        const base = layer.type === 'visualizer' ? (layer as VisualizerLayer).opacity : 1
+        material.opacity = Math.max(0, Math.min(1, (fade < 0 ? 0 : fade) * layer.filter.opacity * base))
+      }
+    }
+    const viz = this.currentVisualizerLayer
+    if (viz) {
+      const fade = getLayerTimeOpacity(viz, timeSec)
+      this.visualizerGroup.visible = viz.visible && fade >= 0
+    }
   }
 
   private createLayerNode(layer: Exclude<StudioLayer, { type: 'visualizer' }>): LayerNode | null {
     if (layer.type === 'text') return this.createTextNode(layer)
 
     const material = new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false })
-    // Bloom is global: a full-frame photo at full brightness would glow the whole
-    // screen white. Dim the media plate so only the visualizer crosses the threshold.
-    material.color.setScalar(0.55)
     const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), material)
     const node: LayerNode = {
       object: mesh,
       key: this.layerKey(layer),
       baseWidth: this.stageWidth,
       baseHeight: this.stageHeight,
-      // Layers sit off the z=0 plane, so the same world size covers a different share of
-      // the frame; scale by the frustum ratio at that depth.
       depthFactor: (7 + 2) / 7,
+      layer,
       dispose: () => {
         const map = material.map
         material.dispose()
@@ -834,13 +867,9 @@ export class AveeVisualizerEngine {
     if (layer.type === 'image') {
       // fetch + createImageBitmap works for data:, http(s): and the app:// protocol alike;
       // a plain <img> silently fails for some of those in the packaged renderer.
-      fetch(layer.url)
-        .then((response) => {
-          return response.blob()
-        })
-        .then((blob) => {
-          return createImageBitmap(blob)
-        })
+      fetch(layer.src)
+        .then((response) => response.blob())
+        .then((blob) => createImageBitmap(blob))
         .then((bitmap) => {
           if (this.isDisposed) {
             bitmap.close()
@@ -851,24 +880,26 @@ export class AveeVisualizerEngine {
           texture.needsUpdate = true
           material.map = texture
           material.needsUpdate = true
-          const fitted = fitSize(bitmap.width, bitmap.height, this.stageWidth, this.stageHeight, layer.fit)
-          node.baseWidth = fitted.width
-          node.baseHeight = fitted.height
+          const fitted = fitSize(bitmap.width, bitmap.height, this.stageWidth / this.unit, this.stageHeight / this.unit, layer.fitMode)
+          node.baseWidth = fitted.width * this.unit
+          node.baseHeight = fitted.height * this.unit
           const lt = node.lastTransform
           mesh.scale.set(
-            fitted.width * node.depthFactor * (lt?.scale ?? 1) * (lt?.flipX ? -1 : 1),
-            fitted.height * node.depthFactor * (lt?.scale ?? 1) * (lt?.flipY ? -1 : 1),
+            node.baseWidth * node.depthFactor * (lt?.scaleX ?? 1) * (lt?.flipX ? -1 : 1),
+            node.baseHeight * node.depthFactor * (lt?.scaleY ?? 1) * (lt?.flipY ? -1 : 1),
             1,
           )
+          node.layer = { ...layer, naturalWidth: bitmap.width, naturalHeight: bitmap.height }
         })
         .catch(() => {
           material.color.set('#111827')
         })
     } else {
       const video = document.createElement('video')
-      video.src = layer.url
+      video.src = layer.src
       video.muted = layer.muted
       video.loop = layer.loop
+      video.volume = layer.volume
       video.playsInline = true
       video.crossOrigin = 'anonymous'
       void video.play().catch(() => undefined)
@@ -890,10 +921,11 @@ export class AveeVisualizerEngine {
   private createTextNode(layer: Extract<StudioLayer, { type: 'text' }>): LayerNode {
     const canvas = document.createElement('canvas')
     const ctx = canvas.getContext('2d')
-    const font = `${layer.weight} ${layer.fontSize}px ${layer.fontFamily}`
-    const padding = Math.ceil(layer.fontSize * 0.4)
+    const style = layer.italic ? 'italic' : 'normal'
+    const font = `${style} ${layer.fontWeight} ${layer.fontSize}px ${layer.fontFamily}`
+    const padding = Math.ceil(layer.fontSize * 0.5)
     let width = 512
-    let height = Math.ceil(layer.fontSize * 1.5)
+    let height = Math.ceil(layer.fontSize * 1.6)
 
     if (ctx) {
       ctx.font = font
@@ -904,6 +936,12 @@ export class AveeVisualizerEngine {
       ctx.font = font
       ctx.textAlign = 'center'
       ctx.textBaseline = 'middle'
+      if (layer.textShadowBlur > 0) {
+        ctx.shadowColor = layer.textShadowColor
+        ctx.shadowBlur = layer.textShadowBlur
+        ctx.shadowOffsetX = layer.textShadowOffsetX
+        ctx.shadowOffsetY = layer.textShadowOffsetY
+      }
       if (layer.strokeWidth > 0) {
         ctx.lineWidth = layer.strokeWidth
         ctx.strokeStyle = layer.strokeColor
@@ -918,10 +956,9 @@ export class AveeVisualizerEngine {
     const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true, depthWrite: false })
     const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), material)
 
-    // 1080 px of canvas height maps to the stage height, so fontSize behaves like px.
-    const unit = this.stageHeight / 1080
-    const baseWidth = width * unit
-    const baseHeight = height * unit
+    // Canvas pixels are authored at 1080p scale, matching the transform unit.
+    const baseWidth = width * this.unit
+    const baseHeight = height * this.unit
     mesh.scale.set(baseWidth, baseHeight, 1)
 
     const node: LayerNode = {
@@ -930,6 +967,7 @@ export class AveeVisualizerEngine {
       baseWidth,
       baseHeight,
       depthFactor: (7 - 1.5) / 7,
+      layer,
       dispose: () => {
         texture.dispose()
         material.dispose()
@@ -993,6 +1031,9 @@ export class AveeVisualizerEngine {
 
     this.outerRing.rotation.z = timeSec * 0.18
     this.backgroundMaterial.uniforms.uPulse.value = bass * intensity
+
+    // timeRange fade + filter opacity are per-frame values, not layout state.
+    this.refreshLayerOpacity(timeSec)
 
     if (this.options.showBars) this.updateBars(frame)
     if (this.options.showParticles) this.positionParticles(timeSec)

@@ -423,7 +423,7 @@ const api: IPCAPI = {
     cancel: (requestId: string) => ipcRenderer.invoke(SONG_NHAC_EXPORT_CANCEL, requestId) as Promise<{ success: boolean; error?: string }>,
     framesBegin: (request: SongNhacFramesRequest) =>
       ipcRenderer.invoke(SONG_NHAC_FRAMES_BEGIN, request) as Promise<SongNhacFramesResult>,
-    framesChunk: (requestId: string, chunk: ArrayBuffer) => {
+    framesChunk: (requestId: string, chunk: ArrayBuffer | Uint8Array) => {
       ipcRenderer.send(SONG_NHAC_FRAMES_CHUNK, requestId, chunk)
     },
     framesFlush: (requestId: string) =>

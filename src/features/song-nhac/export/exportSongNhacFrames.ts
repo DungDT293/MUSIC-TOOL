@@ -1,6 +1,6 @@
 import type { AveeColorTheme, AveeQuality } from '../three/AveeVisualizerEngine'
 import { AveeVisualizerEngine } from '../three/AveeVisualizerEngine'
-import type { StudioLayer } from '../studio/layerTypes'
+import type { StudioAnyLayer } from '../studio/layerTypes'
 import { analyzeAudioBuffer } from './spectrumAnalyzer'
 import { renderSongNhacVideo, suggestBitrate } from './renderSongNhacVideo'
 import type { SongNhacFramesResult } from '../../../../shared/songNhacChannels'
@@ -18,7 +18,7 @@ export interface ExportSongNhacFramesOptions {
   quality: AveeQuality
   seed?: number
   /** Layer stack to render. Without it the exported video loses every image/text layer. */
-  layers?: StudioLayer[]
+  layers?: StudioAnyLayer[]
   signal?: AbortSignal
   onProgress?: (percent: number, renderedFrames: number, totalFrames: number) => void
 }

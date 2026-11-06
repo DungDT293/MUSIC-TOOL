@@ -1,15 +1,53 @@
-export type StudioLayerType = 'visualizer' | 'image' | 'video' | 'text'
+/**
+ * Song Nhạc studio layer model.
+ *
+ * Units: transform x/y are pixels relative to the centre of a 1080p-high stage
+ * (y grows downwards, like the old studio). The engine converts px → world units,
+ * so a layout keeps its proportions at any resolution.
+ */
+
+export type StudioLayerType = 'image' | 'text' | 'visualizer' | 'video' | 'group'
+export type StudioFitMode = 'free' | 'contain' | 'cover'
+export type StudioLayerRole = 'normal' | 'watermark'
+export type StudioColorMode = 'rainbow' | 'solid' | 'gradient'
 
 export interface StudioTransform {
-  /** Offset in stage fractions (-0.5 .. 0.5 of the stage width/height). */
   x: number
   y: number
-  scale: number
+  scaleX: number
+  scaleY: number
   /** Degrees. */
   rotation: number
-  opacity: number
   flipX: boolean
   flipY: boolean
+}
+
+export interface StudioLayerFilter {
+  opacity: number
+  brightness: number
+  contrast: number
+  saturation: number
+  /** Degrees 0..360. */
+  hue: number
+  grayscale: number
+  sepia: number
+  /** Pixels. */
+  blur: number
+  tintColor: string
+  tintOpacity: number
+  borderRadius: number
+  shadowBlur: number
+  shadowColor: string
+  shadowOffsetX: number
+  shadowOffsetY: number
+}
+
+export interface StudioTimeRange {
+  startSec: number
+  /** Exclusive; Infinity = until the end. */
+  endSec: number
+  fadeInSec: number
+  fadeOutSec: number
 }
 
 export interface StudioLayerBase {
@@ -19,49 +57,111 @@ export interface StudioLayerBase {
   visible: boolean
   locked: boolean
   transform: StudioTransform
-}
-
-export interface VisualizerLayer extends StudioLayerBase {
-  type: 'visualizer'
+  filter: StudioLayerFilter
+  timeRange?: StudioTimeRange
+  role: StudioLayerRole
+  parentId?: string
 }
 
 export interface ImageLayer extends StudioLayerBase {
   type: 'image'
-  url: string
-  fit: 'cover' | 'contain'
+  src: string
+  naturalWidth?: number
+  naturalHeight?: number
+  fitMode: StudioFitMode
+  waveAroundEnabled?: boolean
 }
 
 export interface VideoLayer extends StudioLayerBase {
   type: 'video'
-  url: string
-  fit: 'cover' | 'contain'
+  src: string
+  naturalWidth?: number
+  naturalHeight?: number
+  fitMode: StudioFitMode
   muted: boolean
   loop: boolean
+  volume: number
 }
 
 export interface TextLayer extends StudioLayerBase {
   type: 'text'
   text: string
   fontSize: number
-  fontFamily: string
-  weight: number
   color: string
+  fontFamily: string
+  fontWeight: string
+  italic: boolean
   strokeColor: string
   strokeWidth: number
-  letterSpacing: number
+  textShadowColor: string
+  textShadowBlur: number
+  textShadowOffsetX: number
+  textShadowOffsetY: number
 }
 
-export type StudioLayer = VisualizerLayer | ImageLayer | VideoLayer | TextLayer
+export interface VisualizerLayer extends StudioLayerBase {
+  type: 'visualizer'
+  waveStyle: string
+  colorMode: StudioColorMode
+  color1: string
+  color2: string
+  barCount: number
+  barWidth: number
+  speed: number
+  opacity: number
+  glowEnabled: boolean
+  glowIntensity: number
+  mirror: boolean
+  sensitivity: number
+}
+
+export interface GroupLayer {
+  id: string
+  name: string
+  type: 'group'
+  children: string[]
+}
+
+export type StudioLayer = ImageLayer | VideoLayer | TextLayer | VisualizerLayer
+export type StudioAnyLayer = StudioLayer | GroupLayer
 
 export const DEFAULT_TRANSFORM: StudioTransform = {
   x: 0,
   y: 0,
-  scale: 1,
+  scaleX: 1,
+  scaleY: 1,
   rotation: 0,
-  opacity: 1,
   flipX: false,
   flipY: false,
 }
+
+export const DEFAULT_FILTER: StudioLayerFilter = {
+  opacity: 1,
+  brightness: 1,
+  contrast: 1,
+  saturation: 1,
+  hue: 0,
+  grayscale: 0,
+  sepia: 0,
+  blur: 0,
+  tintColor: '',
+  tintOpacity: 0,
+  borderRadius: 0,
+  shadowBlur: 0,
+  shadowColor: 'rgba(0,0,0,0.5)',
+  shadowOffsetX: 0,
+  shadowOffsetY: 0,
+}
+
+export const FONT_FAMILIES = [
+  'system-ui, sans-serif',
+  'Arial, sans-serif',
+  'Georgia, serif',
+  '"Times New Roman", serif',
+  '"Courier New", monospace',
+  'Impact, sans-serif',
+  '"Comic Sans MS", cursive',
+] as const
 
 let layerCounter = 0
 
@@ -70,76 +170,168 @@ function nextId(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${layerCounter}`
 }
 
-export function createVisualizerLayer(): VisualizerLayer {
+export function isGroupLayer(layer: StudioAnyLayer): layer is GroupLayer {
+  return layer.type === 'group'
+}
+
+export function isVisualizerLayer(layer: StudioAnyLayer): layer is VisualizerLayer {
+  return layer.type === 'visualizer'
+}
+
+export function isImageLayer(layer: StudioAnyLayer): layer is ImageLayer {
+  return layer.type === 'image'
+}
+
+export function isVideoLayer(layer: StudioAnyLayer): layer is VideoLayer {
+  return layer.type === 'video'
+}
+
+export function isTextLayer(layer: StudioAnyLayer): layer is TextLayer {
+  return layer.type === 'text'
+}
+
+/** CSS filter string for canvas-2D drawing paths. */
+export function buildCssFilter(filter: StudioLayerFilter): string {
+  const parts = [
+    `brightness(${filter.brightness})`,
+    `contrast(${filter.contrast})`,
+    `saturate(${filter.saturation})`,
+    `hue-rotate(${filter.hue}deg)`,
+    `grayscale(${filter.grayscale})`,
+    `sepia(${filter.sepia})`,
+  ]
+  if (filter.blur > 0) parts.push(`blur(${filter.blur}px)`)
+  return parts.join(' ')
+}
+
+/** Fade-in/out multiplier for a layer at a given time. -1 means "not visible yet". */
+export function getLayerTimeOpacity(layer: StudioAnyLayer, timeSec: number): number {
+  if (!('timeRange' in layer) || !layer.timeRange) return 1
+  const { startSec, endSec, fadeInSec, fadeOutSec } = layer.timeRange
+  if (timeSec < startSec || timeSec >= endSec) return -1
+  if (fadeInSec > 0 && timeSec < startSec + fadeInSec) {
+    return Math.max(0, (timeSec - startSec) / fadeInSec)
+  }
+  if (fadeOutSec > 0 && timeSec > endSec - fadeOutSec) {
+    return Math.max(0, (endSec - timeSec) / fadeOutSec)
+  }
+  return 1
+}
+
+function createBase(type: StudioLayerType, name: string): StudioLayerBase {
   return {
-    id: nextId('viz'),
-    name: 'Sóng nhạc',
+    id: nextId(type),
+    name,
+    type,
+    visible: true,
+    locked: false,
+    transform: { ...DEFAULT_TRANSFORM },
+    filter: { ...DEFAULT_FILTER },
+    role: 'normal',
+  }
+}
+
+export function createVisualizerLayer(name = 'Sóng nhạc'): VisualizerLayer {
+  return {
+    ...createBase('visualizer', name),
     type: 'visualizer',
-    visible: true,
-    locked: false,
-    transform: { ...DEFAULT_TRANSFORM },
+    waveStyle: 'circlebars',
+    colorMode: 'gradient',
+    color1: '#00ccff',
+    color2: '#ff0066',
+    barCount: 128,
+    barWidth: 1,
+    speed: 1,
+    opacity: 1,
+    glowEnabled: true,
+    glowIntensity: 0.5,
+    mirror: false,
+    sensitivity: 1,
   }
 }
 
-export function createImageLayer(url: string, name?: string): ImageLayer {
+export function createImageLayer(src = '', name = 'Ảnh'): ImageLayer {
   return {
-    id: nextId('img'),
-    name: name || 'Ảnh nền',
+    ...createBase('image', name),
     type: 'image',
-    visible: true,
-    locked: false,
-    transform: { ...DEFAULT_TRANSFORM },
-    url,
-    fit: 'cover',
+    src,
+    fitMode: 'contain',
+    waveAroundEnabled: false,
   }
 }
 
-export function createVideoLayer(url: string, name?: string): VideoLayer {
+export function createVideoLayer(src = '', name = 'Video'): VideoLayer {
   return {
-    id: nextId('vid'),
-    name: name || 'Video nền',
+    ...createBase('video', name),
     type: 'video',
-    visible: true,
-    locked: false,
-    transform: { ...DEFAULT_TRANSFORM },
-    url,
-    fit: 'cover',
+    src,
+    fitMode: 'contain',
     muted: true,
     loop: true,
+    volume: 1,
   }
 }
 
 export function createTextLayer(text = 'Tên bài hát'): TextLayer {
   return {
-    id: nextId('txt'),
-    name: text.slice(0, 24) || 'Văn bản',
+    ...createBase('text', text.slice(0, 24) || 'Văn bản'),
     type: 'text',
-    visible: true,
-    locked: false,
-    transform: { ...DEFAULT_TRANSFORM, y: 0.32, scale: 0.8 },
+    transform: { ...DEFAULT_TRANSFORM, y: 320 },
     text,
     fontSize: 72,
-    fontFamily: 'Segoe UI, Roboto, sans-serif',
-    weight: 700,
     color: '#ffffff',
+    fontFamily: 'system-ui, sans-serif',
+    fontWeight: '700',
+    italic: false,
     strokeColor: '#000000',
     strokeWidth: 0,
-    letterSpacing: 0,
+    textShadowColor: 'rgba(0,0,0,0.5)',
+    textShadowBlur: 0,
+    textShadowOffsetX: 0,
+    textShadowOffsetY: 2,
   }
 }
 
-/**
- * Where a fitted media plane lands inside the stage, in stage units.
- * Returns the plane width/height so each layer can keep its aspect ratio.
- */
+export function createGroupLayer(name = 'Group'): GroupLayer {
+  return { id: nextId('grp'), name, type: 'group', children: [] }
+}
+
+export function createIntroLayer(durationSec = 5): ImageLayer {
+  return {
+    ...createImageLayer('', 'Intro'),
+    name: 'Intro',
+    timeRange: { startSec: 0, endSec: durationSec, fadeInSec: 0.5, fadeOutSec: 1 },
+  }
+}
+
+export function createOutroLayer(totalSec: number, durationSec = 5): ImageLayer {
+  const start = Math.max(0, totalSec - durationSec)
+  return {
+    ...createImageLayer('', 'Outro'),
+    name: 'Outro',
+    timeRange: { startSec: start, endSec: totalSec, fadeInSec: 1, fadeOutSec: 0.5 },
+  }
+}
+
+export function createLogoLayer(src = ''): ImageLayer {
+  const layer = createImageLayer(src, 'Logo')
+  layer.role = 'watermark'
+  layer.fitMode = 'free'
+  layer.transform = { ...DEFAULT_TRANSFORM, scaleX: 0.25, scaleY: 0.25 }
+  layer.filter = { ...DEFAULT_FILTER, opacity: 0.85 }
+  return layer
+}
+
+/** Size of a fitted media plane, in px of the 1080-high reference stage. */
 export function fitSize(
   mediaWidth: number,
   mediaHeight: number,
   stageWidth: number,
   stageHeight: number,
-  fit: 'cover' | 'contain',
+  fit: StudioFitMode,
 ): { width: number; height: number } {
   if (mediaWidth <= 0 || mediaHeight <= 0) return { width: stageWidth, height: stageHeight }
+  if (fit === 'free') return { width: mediaWidth, height: mediaHeight }
   const scaleX = stageWidth / mediaWidth
   const scaleY = stageHeight / mediaHeight
   const scale = fit === 'cover' ? Math.max(scaleX, scaleY) : Math.min(scaleX, scaleY)

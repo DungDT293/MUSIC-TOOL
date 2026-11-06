@@ -1173,7 +1173,7 @@ export interface IPCAPI {
     start: (request: SongNhacExportRequest) => Promise<SongNhacExportResult>
     cancel: (requestId: string) => Promise<{ success: boolean; error?: string }>
     framesBegin: (request: SongNhacFramesRequest) => Promise<SongNhacFramesResult>
-    framesChunk: (requestId: string, chunk: ArrayBuffer) => void
+    framesChunk: (requestId: string, chunk: ArrayBuffer | Uint8Array) => void
     framesFlush: (requestId: string) => Promise<{ success: boolean; receivedBytes?: number }>
     framesEnd: (requestId: string) => Promise<SongNhacFramesResult>
     framesCancel: (requestId: string) => Promise<{ success: boolean }>
