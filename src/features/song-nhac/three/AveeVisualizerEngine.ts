@@ -26,6 +26,8 @@ import {
   type ParticlesLayer,
   type LyricsLayer,
   type StudioAnalyzer,
+  type StudioTransform,
+  type GroupLayer,
   DEFAULT_ANALYZER,
   evaluateAutomation,
 } from '../studio/layerTypes'
@@ -967,7 +969,10 @@ export class AveeVisualizerEngine {
         this.layerNodes.set(layer.id, node)
       }
       node.layer = layer
-      this.applyLayerTransform(node, layer, index)
+      // Groups contribute their transform to every child, like a folder in the reference editor.
+      const groups = new Map<string, GroupLayer>()
+      for (const item of layers) if (item.type === 'group') groups.set(item.id, item)
+      this.applyLayerTransform(node, layer, index, this.composeGroupTransform(layer, groups))
       if (layer.type === 'image' && layer.waveAroundEnabled) this.ensureWaveRing(layer)
       else this.disposeWaveRing(layer.id)
     })
@@ -1196,8 +1201,31 @@ export class AveeVisualizerEngine {
     this.visualizerGroup.add(this.fxStyle.object)
   }
 
-  private applyLayerTransform(node: LayerNode, layer: Exclude<StudioLayer, { type: 'visualizer' }>, index: number): void {
-    const t = layer.transform
+
+  /** Walks parentId up to the root, composing group offsets/scales/rotations. */
+  /** Groups do not nest, so a child inherits exactly one group transform. */
+  /** Groups do not nest, so a child inherits exactly one group transform. */
+  private composeGroupTransform(layer: StudioLayer, groups: Map<string, GroupLayer>): StudioTransform {
+    const group = layer.parentId ? groups.get(layer.parentId) : undefined
+    if (!group) return layer.transform
+    const g = group.transform
+    const radians = (g.rotation * Math.PI) / 180
+    const cos = Math.cos(radians)
+    const sin = Math.sin(radians)
+    const dx = layer.transform.x * g.scaleX
+    const dy = layer.transform.y * g.scaleY
+    return {
+      ...layer.transform,
+      x: g.x + dx * cos - dy * sin,
+      y: g.y + dx * sin + dy * cos,
+      scaleX: layer.transform.scaleX * g.scaleX,
+      scaleY: layer.transform.scaleY * g.scaleY,
+      rotation: layer.transform.rotation + g.rotation,
+    }
+  }
+
+  private applyLayerTransform(node: LayerNode, layer: Exclude<StudioLayer, { type: 'visualizer' }>, index: number, groupTransform?: StudioTransform): void {
+    const t = groupTransform ?? layer.transform
     const unit = this.unit
     node.lastTransform = t
     // Array order is the stacking order: index 0 sits at the bottom.

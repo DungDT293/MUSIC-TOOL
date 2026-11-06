@@ -120,7 +120,7 @@ export function LayersPanel({ onChoosePreset }: { onChoosePreset?: () => void } 
     if (nextLayers) useSongNhacLayerStore.getState().applyTemplateLayers(nextLayers)
   }
 
-  const roots = layers.filter((layer) => !isGroupLayer(layer) && !layer.parentId) as StudioAnyLayer[]
+  const roots = layers.filter((layer) => isGroupLayer(layer) || !layer.parentId)
   const displayOrder = [...roots].reverse()
 
   const renderRow = (layer: StudioAnyLayer) => {

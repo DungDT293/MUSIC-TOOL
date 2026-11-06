@@ -259,6 +259,8 @@ export interface GroupLayer {
   name: string
   type: 'group'
   children: string[]
+  /** Offset/scale/rotation applied to every child. */
+  transform: StudioTransform
 }
 
 export type StudioLayer = ImageLayer | VideoLayer | TextLayer | VisualizerLayer | ParticlesLayer | LyricsLayer
@@ -529,7 +531,7 @@ export function createLyricsLayer(name = 'Lyrics', lines: LyricLine[] = []): Lyr
 }
 
 export function createGroupLayer(name = 'Group'): GroupLayer {
-  return { id: nextId('grp'), name, type: 'group', children: [] }
+  return { id: nextId('grp'), name, type: 'group', children: [], transform: { ...DEFAULT_TRANSFORM } }
 }
 
 export function createIntroLayer(durationSec = 5): ImageLayer {

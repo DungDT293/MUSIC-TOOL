@@ -215,6 +215,44 @@ export function InspectorPanel() {
         <div style={headerStyle}>Group</div>
         <div style={bodyStyle}>
           <input style={inputStyle} value={layer.name} onChange={(event) => updateLayer(layer.id, { name: event.target.value })} />
+          <NumRow
+            label="Vị trí X"
+            value={layer.transform.x}
+            min={-2000}
+            max={2000}
+            onChange={(x) => updateLayer(layer.id, { transform: { ...layer.transform, x } } as never)}
+          />
+          <NumRow
+            label="Vị trí Y"
+            value={layer.transform.y}
+            min={-2000}
+            max={2000}
+            onChange={(y) => updateLayer(layer.id, { transform: { ...layer.transform, y } } as never)}
+          />
+          <SliderRow
+            label="Scale"
+            value={layer.transform.scaleX}
+            min={0.1}
+            max={4}
+            step={0.01}
+            format={(value) => value.toFixed(2)}
+            onChange={(scale) =>
+              updateLayer(layer.id, {
+                transform: { ...layer.transform, scaleX: scale, scaleY: scale },
+              } as never)
+            }
+            onCommit={() => updateLayerWithHistory(layer.id, {})}
+          />
+          <SliderRow
+            label="Xoay"
+            value={layer.transform.rotation}
+            min={-180}
+            max={180}
+            step={1}
+            format={(value) => `${Math.round(value)}°`}
+            onChange={(rotation) => updateLayer(layer.id, { transform: { ...layer.transform, rotation } } as never)}
+            onCommit={() => updateLayerWithHistory(layer.id, {})}
+          />
           <div style={{ fontSize: 11, color: '#64748b' }}>{layer.children.length} lớp con</div>
         </div>
       </section>
@@ -256,6 +294,7 @@ export function InspectorPanel() {
             </button>
           </div>
         </Section>
+
 
         {isTextLayer(layer) && (
           <>

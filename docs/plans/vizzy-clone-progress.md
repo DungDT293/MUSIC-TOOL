@@ -81,7 +81,7 @@ căn giữa giãn chữ + effects blur 15%) rồi xuất 3 giây qua hàng đợ
 
 | Mục | Ghi chú |
 |---|---|
-| Group layer áp transform cho con | Nhóm đang chỉ là tổ chức cây, engine chưa nhân transform của nhóm vào con |
+| ~~Group layer áp transform cho con~~ | ✅ đã làm: nhóm có transform riêng, cộng offset/scale/rotation vào từng lớp con |
 | Keyframe easing (bezier) | Hiện chỉ nội suy tuyến tính |
 | Vizzy "Explore creations" / publish | Không thuộc phạm vi app offline |
 | 48 preset built-in của Vizzy | Mình có 15 preset + preset tự tạo |
