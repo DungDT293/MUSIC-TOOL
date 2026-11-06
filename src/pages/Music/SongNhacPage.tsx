@@ -1314,7 +1314,7 @@ export default function SongNhacPage() {
           <div style={{ fontSize: 11, letterSpacing: 0.6, color: '#64748b', fontWeight: 700, marginBottom: 8 }}>
             {LEFT_TITLES[leftTab] ?? 'COMPOSITION'}
           </div>
-          {leftTab === 'composition' && <LayersPanel />}
+          {leftTab === 'composition' && <LayersPanel onChoosePreset={() => setLeftTab('presets')} />}
           {leftTab === 'media' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12, color: '#cbd5e1' }}>
               <div style={{ display: 'flex', gap: 4 }}>

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { isGroupLayer, isVisualizerLayer, type StudioAnyLayer } from './layerTypes'
 import { useSongNhacLayerStore } from './songNhacLayerStore'
+import { LayerContextMenu, type LayerMenuState } from './LayerContextMenu'
 import { WAVE_PRESETS } from './builtInPresets'
 import {
   deleteTemplate,
@@ -57,7 +58,7 @@ const TYPE_LABEL: Record<string, string> = {
   group: 'Nhóm',
 }
 
-export function LayersPanel() {
+export function LayersPanel({ onChoosePreset }: { onChoosePreset?: () => void } = {}) {
   const layers = useSongNhacLayerStore((state) => state.layers)
   const selectedLayerId = useSongNhacLayerStore((state) => state.selectedLayerId)
   const selectedIds = useSongNhacLayerStore((state) => state.selectedIds)
@@ -91,6 +92,7 @@ export function LayersPanel() {
   }
 
   const [templates, setTemplates] = useState(() => listTemplates())
+  const [layerMenu, setLayerMenu] = useState<LayerMenuState | null>(null)
 
   const applyPreset = (presetId: string) => {
     const preset = WAVE_PRESETS.find((item) => item.id === presetId)
@@ -133,6 +135,11 @@ export function LayersPanel() {
       <div key={layer.id}>
         <div
           onClick={(event) => setSelection(layer.id, { ctrlKey: event.ctrlKey, shiftKey: event.shiftKey })}
+          onContextMenu={(event) => {
+            event.preventDefault()
+            setSelection(layer.id)
+            setLayerMenu({ x: event.clientX, y: event.clientY, layerId: layer.id })
+          }}
           onDoubleClick={() => (isGroup ? setEditingGroupId(editingGroupId === layer.id ? null : layer.id) : undefined)}
           style={{
             display: 'flex',
@@ -295,6 +302,13 @@ export function LayersPanel() {
           )}
         </div>
       </div>
+      {layerMenu && (
+        <LayerContextMenu
+          menu={layerMenu}
+          onClose={() => setLayerMenu(null)}
+          onChoosePreset={() => onChoosePreset?.()}
+        />
+      )}
     </section>
   )
 }
