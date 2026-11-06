@@ -59,6 +59,8 @@ export interface AveeVisualizerOptions {
   seed?: number
   /** Called when the GPU drops the WebGL context (driver reset, out of memory). */
   onContextLost?: () => void
+  /** Keep the drawing buffer so the canvas can be read with toDataURL() (thumbnails). */
+  preserveDrawingBuffer?: boolean
 }
 
 interface ThemePalette {
@@ -389,6 +391,7 @@ export class AveeVisualizerEngine {
       quality: options.quality ?? 'balanced',
       seed: options.seed ?? 93,
       onContextLost: options.onContextLost ?? (() => undefined),
+      preserveDrawingBuffer: options.preserveDrawingBuffer === true,
     }
 
     // A lost GPU context freezes the canvas and kills WebCodecs hardware encoding, so
@@ -420,6 +423,8 @@ export class AveeVisualizerEngine {
       antialias: true,
       alpha: false,
       powerPreference: 'high-performance',
+      // Only thumbnail rendering needs the buffer kept so toDataURL() works.
+      preserveDrawingBuffer: options.preserveDrawingBuffer === true,
     })
     this.renderer.setPixelRatio(this.resolvePixelRatio())
     this.renderer.setSize(width, height, false)

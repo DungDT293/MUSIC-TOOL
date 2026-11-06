@@ -15,6 +15,7 @@ import { parseLyrics } from '../../features/song-nhac/studio/lyrics'
 import { useMediaLibrary, type MediaKind } from '../../features/song-nhac/studio/mediaLibraryStore'
 import { useExportQueue, type ExportJob } from '../../features/song-nhac/studio/exportQueueStore'
 import { useProjectHistory } from '../../features/song-nhac/studio/projectHistoryStore'
+import { renderPresetThumbnails } from '../../features/song-nhac/studio/presetThumbnails'
 import type { StudioLayer } from '../../features/song-nhac/studio/layerTypes'
 import type { SongNhacExportProgress } from '../../../shared/songNhacChannels'
 
@@ -293,6 +294,7 @@ export default function SongNhacPage() {
   const selectedIds = useSongNhacLayerStore((state) => state.selectedIds)
   const queueJobs = useExportQueue((state) => state.jobs)
   const projectHistory = useProjectHistory()
+  const [presetThumbs, setPresetThumbs] = useState<Record<string, string>>({})
   const [snapGuide, setSnapGuide] = useState<number | null>(null)
   const [lyricsText, setLyricsText] = useState('')
   const effects = useCompositionEffects()
@@ -971,6 +973,22 @@ export default function SongNhacPage() {
     }
   }
 
+
+  // Real rendered preview per preset (cached per theme in localStorage).
+  useEffect(() => {
+    let cancelled = false
+    renderPresetThumbnails(theme)
+      .then((map) => {
+        if (!cancelled) setPresetThumbs(map)
+      })
+      .catch(() => {
+        // Thumbnails are cosmetic: a failure leaves the colour swatches in place.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [theme])
+
   // Autosave draft: a crash or a closed window never loses the whole edit.
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -1624,7 +1642,9 @@ export default function SongNhacPage() {
                     style={{
                       height: 34,
                       borderRadius: 6,
-                      background: `linear-gradient(135deg, ${preset.visualizer.color1 ?? '#22d3ee'}, ${preset.visualizer.color2 ?? '#f472b6'})`,
+                      background: presetThumbs[preset.id]
+                        ? `url(${presetThumbs[preset.id]}) center / cover no-repeat`
+                        : `linear-gradient(135deg, ${preset.visualizer.color1 ?? '#22d3ee'}, ${preset.visualizer.color2 ?? '#f472b6'})`,
                     }}
                   />
                   {preset.name}

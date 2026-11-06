@@ -39,6 +39,7 @@ Mục tiêu: clone toàn bộ chức năng editor Vizzy vào Sóng nhạc. Mỗi
 | ruler thời gian | ✅ mốc tự chọn theo độ dài |
 
 | Context menu chuột phải (chọn preset, thêm keyframe, ẩn, nhân bản, thứ tự, reset, xoá) | ✅ |
+| Preset thumbnail render thật (1 engine dùng lại, cache localStorage theo theme) | ✅ |
 
 ## Ngoài phạm vi Vizzy (làm cho quy trình số lượng lớn)
 
