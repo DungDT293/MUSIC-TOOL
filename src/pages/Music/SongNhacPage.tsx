@@ -14,6 +14,7 @@ import { useCompositionEffects } from '../../features/song-nhac/studio/effectsSt
 import { parseLyrics } from '../../features/song-nhac/studio/lyrics'
 import { useMediaLibrary, type MediaKind } from '../../features/song-nhac/studio/mediaLibraryStore'
 import { useExportQueue, type ExportJob } from '../../features/song-nhac/studio/exportQueueStore'
+import { useProjectHistory } from '../../features/song-nhac/studio/projectHistoryStore'
 import type { StudioLayer } from '../../features/song-nhac/studio/layerTypes'
 import type { SongNhacExportProgress } from '../../../shared/songNhacChannels'
 
@@ -291,6 +292,7 @@ export default function SongNhacPage() {
   const mediaLibrary = useMediaLibrary()
   const selectedIds = useSongNhacLayerStore((state) => state.selectedIds)
   const queueJobs = useExportQueue((state) => state.jobs)
+  const projectHistory = useProjectHistory()
   const [snapGuide, setSnapGuide] = useState<number | null>(null)
   const [lyricsText, setLyricsText] = useState('')
   const effects = useCompositionEffects()
@@ -388,6 +390,7 @@ export default function SongNhacPage() {
         ;(window as unknown as Record<string, unknown>).__songNhacStore = useSongNhacLayerStore
         ;(window as unknown as Record<string, unknown>).__songNhacMedia = useMediaLibrary
         ;(window as unknown as Record<string, unknown>).__songNhacQueue = useExportQueue
+        ;(window as unknown as Record<string, unknown>).__songNhacHistory = useProjectHistory
       }
       aveeEngineRef.current.setLayers(useSongNhacLayerStore.getState().layers)
       aveeEngineRef.current.setSelectedLayer(useSongNhacLayerStore.getState().selectedLayerId)
@@ -843,41 +846,82 @@ export default function SongNhacPage() {
     setLeftTab('composition')
     setMessage(`Đã tạo lớp lyric với ${lines.length} dòng.`)
   }
+  const buildProjectPayload = (): SongNhacProjectFile => ({
+    app: 'song-nhac',
+    version: 2,
+    savedAt: new Date().toISOString(),
+    audioPath,
+    outputPath,
+    settings: {
+      style,
+      theme,
+      intensity,
+      showParticles,
+      showLogo,
+      exportWidth,
+      exportHeight,
+      exportFps,
+      exportCodec,
+      bitrateTier,
+    },
+    effects: {
+      blur: effects.blur,
+      alpha: effects.alpha,
+      tint: effects.tint,
+      tintStrength: effects.tintStrength,
+      shake: effects.shake,
+      mirror: effects.mirror,
+      zoom: effects.zoom,
+      fxaa: effects.fxaa,
+      blurMode: effects.blurMode,
+    },
+    layers,
+  })
+
+  const applyProjectData = (data: SongNhacProjectFile): boolean => {
+    if (data.app !== 'song-nhac' || !Array.isArray(data.layers)) return false
+    useSongNhacLayerStore.getState().applyTemplateLayers(data.layers as never)
+    const settings = data.settings ?? {}
+    if (typeof settings.style === 'string') setStyle(settings.style as SongNhacStyle)
+    if (typeof settings.theme === 'string') setTheme(settings.theme as AveeColorTheme)
+    if (typeof settings.intensity === 'number') setIntensity(settings.intensity)
+    if (typeof settings.showParticles === 'boolean') setShowParticles(settings.showParticles)
+    if (typeof settings.showLogo === 'boolean') setShowLogo(settings.showLogo)
+    if (typeof settings.exportWidth === 'number') setExportWidth(settings.exportWidth)
+    if (typeof settings.exportHeight === 'number') setExportHeight(settings.exportHeight)
+    if (typeof settings.exportFps === 'number') setExportFps(settings.exportFps)
+    if (settings.exportCodec === 'h264' || settings.exportCodec === 'hevc') setExportCodec(settings.exportCodec)
+    if (settings.bitrateTier === 'high' || settings.bitrateTier === 'balanced' || settings.bitrateTier === 'light') {
+      setBitrateTier(settings.bitrateTier)
+    }
+    if (data.effects) useCompositionEffects.setState(data.effects as never)
+    if (data.outputPath) setOutputPath(data.outputPath)
+    if (data.audioPath) {
+      setAudioPath(data.audioPath)
+      const audio = audioRef.current
+      if (audio) {
+        audio.src = localFileUrl(data.audioPath)
+        audio.load()
+      }
+    }
+    return true
+  }
+
   const saveProject = async () => {
     try {
       const picked = await window.api.dialog.saveProjectFile(`song-nhac-${new Date().toISOString().slice(0, 10)}.json`)
       if (picked.canceled || !picked.filePath) return
-      const payload: SongNhacProjectFile = {
-        app: 'song-nhac',
-        version: 2,
-        savedAt: new Date().toISOString(),
-        audioPath,
-        outputPath,
-        settings: {
-          style,
-          theme,
-          intensity,
-          showParticles,
-          showLogo,
-          exportWidth,
-          exportHeight,
-          exportFps,
-          exportCodec,
-          bitrateTier,
-        },
-        effects: {
-          blur: effects.blur,
-          alpha: effects.alpha,
-          tint: effects.tint,
-          tintStrength: effects.tintStrength,
-          shake: effects.shake,
-          mirror: effects.mirror,
-          zoom: effects.zoom,
-        },
-        layers,
+      const result = await window.api.songNhac.projectSave(
+        picked.filePath,
+        JSON.stringify(buildProjectPayload(), null, 2),
+      )
+      if (result.success) {
+        useProjectHistory.getState().remember(picked.filePath, picked.filePath.split(/[\\/]/).pop() || 'Project')
+        useProjectHistory.getState().clearDraft()
+        setMessage(`Đã lưu project: ${picked.filePath}`)
+      } else {
+        setMessage(result.error || 'Lưu project thất bại.')
       }
-      const result = await window.api.songNhac.projectSave(picked.filePath, JSON.stringify(payload, null, 2))
-      setMessage(result.success ? `Đã lưu project: ${picked.filePath}` : result.error || 'Lưu project thất bại.')
     } catch (error) {
       setMessage(`Lưu project lỗi: ${error instanceof Error ? error.message : String(error)}`)
     }
@@ -898,39 +942,78 @@ export default function SongNhacPage() {
         return
       }
       const data = JSON.parse(result.data) as SongNhacProjectFile
-      if (data.app !== 'song-nhac' || !Array.isArray(data.layers)) {
+      if (!applyProjectData(data)) {
         setMessage('File này không phải project Sóng nhạc.')
         return
       }
-      useSongNhacLayerStore.getState().applyTemplateLayers(data.layers as never)
-      const settings = data.settings ?? {}
-      if (typeof settings.style === 'string') setStyle(settings.style as SongNhacStyle)
-      if (typeof settings.theme === 'string') setTheme(settings.theme as AveeColorTheme)
-      if (typeof settings.intensity === 'number') setIntensity(settings.intensity)
-      if (typeof settings.showParticles === 'boolean') setShowParticles(settings.showParticles)
-      if (typeof settings.showLogo === 'boolean') setShowLogo(settings.showLogo)
-      if (typeof settings.exportWidth === 'number') setExportWidth(settings.exportWidth)
-      if (typeof settings.exportHeight === 'number') setExportHeight(settings.exportHeight)
-      if (typeof settings.exportFps === 'number') setExportFps(settings.exportFps)
-      if (settings.exportCodec === 'h264' || settings.exportCodec === 'hevc') setExportCodec(settings.exportCodec)
-      if (settings.bitrateTier === 'high' || settings.bitrateTier === 'balanced' || settings.bitrateTier === 'light') {
-        setBitrateTier(settings.bitrateTier)
-      }
-      if (data.effects) useCompositionEffects.setState(data.effects as never)
-      if (data.outputPath) setOutputPath(data.outputPath)
-      if (data.audioPath) {
-        setAudioPath(data.audioPath)
-        const audio = audioRef.current
-        if (audio) {
-          audio.src = localFileUrl(data.audioPath)
-          audio.load()
-        }
-      }
+      useProjectHistory.getState().remember(filePath, filePath.split(/[\\/]/).pop() || 'Project')
       setMessage(`Đã mở project: ${filePath}`)
     } catch (error) {
       setMessage(`Mở project lỗi: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
+
+  const openRecentProject = async (filePath: string) => {
+    try {
+      const result = await window.api.songNhac.projectOpen(filePath)
+      if (!result.success || !result.data) {
+        setMessage(result.error || 'Mở project thất bại.')
+        return
+      }
+      if (!applyProjectData(JSON.parse(result.data) as SongNhacProjectFile)) {
+        setMessage('File này không phải project Sóng nhạc.')
+        return
+      }
+      useProjectHistory.getState().remember(filePath, filePath.split(/[\\/]/).pop() || 'Project')
+      setMessage(`Đã mở project: ${filePath}`)
+    } catch (error) {
+      setMessage(`Mở project lỗi: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  // Autosave draft: a crash or a closed window never loses the whole edit.
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      try {
+        useProjectHistory.getState().setDraft(JSON.stringify(buildProjectPayload()))
+      } catch {
+        // Dragging a slider can exceed the storage quota; ignore.
+      }
+    }, 1200)
+    return () => clearTimeout(timer)
+  }, [
+    layers,
+    effects,
+    style,
+    theme,
+    intensity,
+    showParticles,
+    showLogo,
+    exportWidth,
+    exportHeight,
+    exportFps,
+    exportCodec,
+    bitrateTier,
+    audioPath,
+    outputPath,
+  ])
+
+  // Restore the autosaved draft once, on first mount.
+  const draftRestoredRef = useRef(false)
+  useEffect(() => {
+    if (draftRestoredRef.current) return
+    draftRestoredRef.current = true
+    const draft = useProjectHistory.getState().draft
+    if (!draft) return
+    try {
+      const data = JSON.parse(draft.json) as SongNhacProjectFile
+      if (applyProjectData(data)) {
+        setMessage(`Đã khôi phục bản nháp lúc ${new Date(draft.savedAt).toLocaleTimeString()}`)
+      }
+    } catch {
+      // Corrupt draft: ignore it.
+    }
+  }, [])
 
   const togglePlay = async () => {
     const audio = audioRef.current
@@ -1351,6 +1434,38 @@ export default function SongNhacPage() {
               <button type="button" onClick={openProject} style={projectButtonStyle}>
                 Mở project (.json)
               </button>
+              <div style={{ marginTop: 4, fontSize: 11, color: '#64748b' }}>
+                Bản nháp tự lưu: {projectHistory.draft ? new Date(projectHistory.draft.savedAt).toLocaleTimeString() : 'chưa có'}
+              </div>
+              <div style={{ marginTop: 6, fontSize: 10, letterSpacing: 0.5, color: '#475569' }}>GẦN ĐÂY</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                {projectHistory.recents.map((item) => (
+                  <button
+                    key={item.path}
+                    type="button"
+                    onClick={() => openRecentProject(item.path)}
+                    title={item.path}
+                    style={{
+                      textAlign: 'left',
+                      padding: '5px 7px',
+                      borderRadius: 6,
+                      border: '1px solid #1e293b',
+                      background: '#0f172a',
+                      color: '#cbd5e1',
+                      fontSize: 11,
+                      cursor: 'pointer',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {item.name}
+                  </button>
+                ))}
+                {projectHistory.recents.length === 0 && (
+                  <div style={{ fontSize: 11, color: '#475569' }}>Chưa mở project nào.</div>
+                )}
+              </div>
               <div style={{ marginTop: 6, fontSize: 11, color: '#64748b' }}>
                 {layers.length} lớp · {tracks.reduce((sum, layer) => sum + (layer.automations ?? []).reduce((count, item) => count + item.keyframes.length, 0), 0)} keyframe
               </div>

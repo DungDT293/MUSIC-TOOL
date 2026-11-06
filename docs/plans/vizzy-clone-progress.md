@@ -12,7 +12,7 @@ Mục tiêu: clone toàn bộ chức năng editor Vizzy vào Sóng nhạc. Mỗi
 | **Effects** | blending, two-pass blur, global alpha, FXAA, tint, mirror, camera shake | ✅ blur (1 pass / 2 pass separable), alpha, tint, mirror, zoom, shake, **FXAA** |
 | **Automations** | keyframe theo thuộc tính | ✅ keyframe opacity/scaleX/scaleY/x/y/rotation, nội suy tuyến tính, hiện trên timeline |
 | **Media** | uploads, stock, audio, images, videos | 🟡 thư viện 3 tab (ảnh/video/audio) lưu localStorage, bấm để thêm lớp; chưa có stock |
-| **Projects** | project settings/history, list | 🟡 lưu/mở file .json (layers + keyframe + effects + cài đặt xuất); chưa có danh sách project gần đây |
+| **Projects** | project settings/history, list | ✅ lưu/mở .json, **danh sách gần đây (10)**, **tự lưu nháp + khôi phục khi mở app** |
 | **Lyrics** | nhập lyric, LRCLIB | 🟡 nhập LRC/plain + tự chia thời gian, lớp lyric overlay (câu hiện tại + câu trước/sau), chưa có LRCLIB |
 
 ## Panel phải (Inspector theo loại object)
