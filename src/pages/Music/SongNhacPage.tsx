@@ -196,7 +196,33 @@ export default function SongNhacPage() {
     if (drag.mode === 'rotate') {
       state.updateLayer(layer.id, { transform: { ...layer.transform, rotation: drag.baseRotation + dx * 0.4 } })
     } else {
-      state.updateLayer(layer.id, { transform: { ...layer.transform, x: drag.baseX + dx, y: drag.baseY + dy } })
+      let nextX = drag.baseX + dx
+      let nextY = drag.baseY + dy
+      // Snap the layer centre to the frame centre and to other layers' centres.
+      if (snapEnabled) {
+        const targetsX = [0]
+        const targetsY = [0]
+        for (const other of state.layers) {
+          if (other.id === layer.id || other.type === 'group') continue
+          targetsX.push(other.transform.x)
+          targetsY.push(other.transform.y)
+        }
+        const snap = (value: number, targets: number[]) => {
+          let best = value
+          let distance = 10
+          for (const target of targets) {
+            const delta = Math.abs(target - value)
+            if (delta <= distance) {
+              distance = delta
+              best = target
+            }
+          }
+          return best
+        }
+        nextX = snap(nextX, targetsX)
+        nextY = snap(nextY, targetsY)
+      }
+      state.updateLayer(layer.id, { transform: { ...layer.transform, x: nextX, y: nextY } })
     }
   }
 
