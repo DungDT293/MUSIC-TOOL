@@ -1,7 +1,7 @@
 # Kế hoạch: Khôi phục đầy đủ chức năng Sóng nhạc (studio như CapCut)
 
 Ngày lập: 2026-11-06
-Trạng thái: đang thực thi — P0, P1, P2, P4, P6 xong; P3/P5 một phần
+Trạng thái: HOÀN THÀNH P0–P6 (2 giới hạn đã ghi ở dưới)
 Tài liệu tham chiếu: `legacy-song-nhac/` (106 file, ~20.158 dòng — chỉ đọc, đã gitignore)
 
 ## Tiến độ
@@ -12,8 +12,8 @@ Tài liệu tham chiếu: `legacy-song-nhac/` (106 file, ~20.158 dòng — chỉ
 | P1 | ✅ | Model legacy + store zustand + history + page wiring |
 | P2 | ✅ | Inspector 13 section (Transform, Ảnh/Video, Văn bản, Viền & bóng, Filter, Sóng, Thời gian) |
 | P3 | ✅ | LayersPanel đầy đủ (8 nút, group, multi-select, khoá) + **10 preset sóng** + **template localStorage** |
-| P4 | 🟡 | Kéo/xoay/zoom trên canvas, khung chọn 3D, phím tắt, undo/redo — **chưa có tay nắm góc để thu phóng** |
-| P5 | 🟡 | Filter bake (ảnh/chữ), tham số sóng theo lớp, **beat pulse cho ảnh** — thiếu sóng quanh ảnh |
+| P4 | ✅ | Kéo/xoay/zoom, khung chọn 3D, **tay nắm góc để thu phóng**, phím tắt, undo/redo |
+| P5 | ✅ | Filter bake (ảnh/chữ), tham số sóng theo lớp, beat pulse, **3 kiểu sóng** (vòng tròn / cột dưới / điểm) |
 | P6 | ✅ | Độ phân giải, FPS, khoảng thời gian khi xuất |
 
 Giới hạn đã biết:
