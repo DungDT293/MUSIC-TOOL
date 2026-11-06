@@ -4,14 +4,34 @@ interface HarnessOptions {
   width?: number
   height?: number
   theme?: string
+  themeAfter?: string
   quality?: 'low' | 'balanced' | 'full'
   intensity?: number
   time?: number
   bins?: number
   seed?: number
+  simulateLogo?: boolean
   showParticles?: boolean
   showBars?: boolean
   showLogo?: boolean
+}
+
+function makeBrightLogoDataUrl(): string {
+  const canvas = document.createElement('canvas')
+  canvas.width = 256
+  canvas.height = 256
+  const ctx = canvas.getContext('2d')!
+  const gradient = ctx.createLinearGradient(0, 0, 256, 256)
+  gradient.addColorStop(0, '#ff9a3c')
+  gradient.addColorStop(0.5, '#ffd166')
+  gradient.addColorStop(1, '#ff5f6d')
+  ctx.fillStyle = gradient
+  ctx.fillRect(0, 0, 256, 256)
+  ctx.fillStyle = 'rgba(255,255,255,0.85)'
+  ctx.beginPath()
+  ctx.arc(128, 110, 52, 0, Math.PI * 2)
+  ctx.fill()
+  return canvas.toDataURL('image/png')
 }
 
 function syntheticSpectrum(bins: number, time: number): Uint8Array {
@@ -41,6 +61,7 @@ function syntheticSpectrum(bins: number, time: number): Uint8Array {
     showParticles: options.showParticles ?? true,
     showBars: options.showBars ?? true,
     showLogo: options.showLogo ?? true,
+    logoUrl: options.simulateLogo ? makeBrightLogoDataUrl() : null,
   })
 
   const bins = options.bins ?? 128
@@ -58,5 +79,10 @@ function syntheticSpectrum(bins: number, time: number): Uint8Array {
   // Two frames: the first settles the smoothing, the second is captured.
   engine.render({ ...frame, timeSec: (options.time ?? 3.2) - 0.05 })
   engine.render(frame)
+  if (options.themeAfter) {
+    engine.setOptions({ theme: options.themeAfter as never })
+    engine.render({ ...frame, timeSec: (options.time ?? 3.2) + 0.05 })
+    engine.render({ ...frame, timeSec: (options.time ?? 3.2) + 0.1 })
+  }
   return true
 }

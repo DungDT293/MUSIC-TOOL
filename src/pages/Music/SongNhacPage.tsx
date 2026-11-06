@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { audioFrameFromAnalyser, emptyAudioFrame } from '../../features/song-nhac/core/audioBands'
+import { audioFrameFromAnalyser, emptyAudioFrame, type SongNhacAudioFrame } from '../../features/song-nhac/core/audioBands'
 import { renderSongNhacFrame } from '../../features/song-nhac/core/renderSongNhacFrame'
 import { SONG_NHAC_STYLES, clampRenderConfig, type SongNhacStyle } from '../../features/song-nhac/core/types'
 import { AveeVisualizerEngine, AVEE_THEMES, type AveeColorTheme } from '../../features/song-nhac/three/AveeVisualizerEngine'
@@ -8,6 +8,27 @@ import type { SongNhacExportProgress } from '../../../shared/songNhacChannels'
 
 function localFileUrl(filePath: string): string {
   return `app://local-file/?path=${encodeURIComponent(filePath)}`
+}
+
+/** Gentle synthetic spectrum used before playback so the preview is never a black box. */
+function idleAudioFrame(timeSec: number): SongNhacAudioFrame {
+  const bins = 96
+  const data = new Uint8Array(bins)
+  for (let i = 0; i < bins; i += 1) {
+    const wave = 0.5 + 0.5 * Math.sin(timeSec * 1.7 + i * 0.32)
+    const falloff = Math.exp(-i / 42)
+    data[i] = Math.round((0.18 + 0.62 * wave) * falloff * 255)
+  }
+  return {
+    timeSec,
+    frequencyData: data,
+    waveformData: new Uint8Array(0),
+    bass: 0.28 + 0.08 * Math.sin(timeSec * 1.7),
+    mid: 0.2,
+    treble: 0.12,
+    rms: 0.2,
+    beat: 0,
+  }
 }
 
 export default function SongNhacPage() {
@@ -64,6 +85,9 @@ export default function SongNhacPage() {
       webglUnavailableRef.current = true
       aveeEngineRef.current = null
       console.warn('[SongNhac] Không tạo được WebGL, chuyển sang bộ dựng canvas 2D:', error)
+      // Surface the reason instead of silently degrading: without it the preview just
+      // looks wrong and there is no way to tell whether the engine failed.
+      setMessage(`Preview đang dùng chế độ 2D (WebGL lỗi: ${error instanceof Error ? error.message : String(error)})`)
       // Force a fresh 2D canvas element in case the failed WebGL init already bound a
       // context to the current one (a canvas cannot switch context types).
       setWebglFallback(true)
@@ -113,10 +137,9 @@ export default function SongNhacPage() {
   const draw = useCallback(() => {
     const analyser = analyserRef.current
     const audio = audioRef.current
-    if (!analyser || !audio) return
 
-    const frequencyData = new Uint8Array(analyser.frequencyBinCount)
-    const waveformData = new Uint8Array(analyser.fftSize)
+    const frequencyData = analyser ? new Uint8Array(analyser.frequencyBinCount) : null
+    const waveformData = analyser ? new Uint8Array(analyser.fftSize) : null
 
     const render = () => {
       // Re-read the element every frame: the canvas is remounted when the visualizer
@@ -126,10 +149,23 @@ export default function SongNhacPage() {
         rafRef.current = requestAnimationFrame(render)
         return
       }
-      analyser.getByteFrequencyData(frequencyData)
-      analyser.getByteTimeDomainData(waveformData)
-      const frame = audioFrameFromAnalyser(audio.currentTime, frequencyData, waveformData, previousBassRef.current)
-      previousBassRef.current = frame.bass
+      // Keep-alive pages stay mounted while hidden; skip the GPU work in that case.
+      if (!canvas.offsetParent) {
+        rafRef.current = requestAnimationFrame(render)
+        return
+      }
+
+      let frame: ReturnType<typeof emptyAudioFrame>
+      if (analyser && frequencyData && waveformData && audio && !audio.paused) {
+        analyser.getByteFrequencyData(frequencyData)
+        analyser.getByteTimeDomainData(waveformData)
+        frame = audioFrameFromAnalyser(audio.currentTime, frequencyData, waveformData, previousBassRef.current)
+        previousBassRef.current = frame.bass
+      } else {
+        // Idle animation: without it the preview is a black rectangle until the user
+        // presses play, which reads as "broken" rather than "waiting for audio".
+        frame = idleAudioFrame(performance.now() / 1000)
+      }
 
       if (style === 'avee-circle' && !webglUnavailableRef.current && !aveeEngineRef.current) {
         initAveeEngine()
@@ -155,6 +191,17 @@ export default function SongNhacPage() {
     if (rafRef.current !== null) cancelAnimationFrame(rafRef.current)
     render()
   }, [style, intensity, initAveeEngine])
+
+  // Idle animation runs from mount: the preview reacts (gently) before any audio is loaded.
+  useEffect(() => {
+    draw()
+    return () => {
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current)
+        rafRef.current = null
+      }
+    }
+  }, [draw])
 
   useEffect(() => () => {
     if (rafRef.current !== null) cancelAnimationFrame(rafRef.current)
@@ -335,8 +382,8 @@ export default function SongNhacPage() {
           <canvas
             key={style === 'avee-circle' && !webglFallback ? 'canvas-three' : 'canvas-2d'}
             ref={canvasRef}
-            width={960}
-            height={540}
+            width={1600}
+            height={900}
             style={{
               display: 'block',
               width: '100%',

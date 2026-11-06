@@ -95,11 +95,14 @@ export function renderSongNhacFrame(
     disc.addColorStop(0, 'rgba(18,30,58,0.96)')
     disc.addColorStop(0.75, 'rgba(6,10,22,0.92)')
     disc.addColorStop(1, 'rgba(2,4,10,0.88)')
+    // The shared glow shadow would turn this fill into a bright blob; fill the plate flat.
+    context.shadowBlur = 0
     context.globalAlpha = 1
     context.fillStyle = disc
     context.beginPath()
     context.arc(centerX, centerY, discRadius, 0, Math.PI * 2)
     context.fill()
+    context.shadowBlur = minSize / 64
 
     context.lineWidth = Math.max(1, (Math.PI * barBase) / bars * 0.62)
     for (let index = 0; index < half; index += 1) {

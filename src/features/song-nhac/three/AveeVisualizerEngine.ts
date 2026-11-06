@@ -288,6 +288,7 @@ export class AveeVisualizerEngine {
   private barCount = 0
 
   private logoMesh: THREE.Mesh
+  private logoBackdrop: THREE.Mesh
   private logoMaterial: THREE.MeshBasicMaterial
   private logoGlow: THREE.Sprite
   private innerRing: THREE.Mesh
@@ -306,6 +307,7 @@ export class AveeVisualizerEngine {
   private currentCameraZ = 7
   private lastTimeSec = -1
   private isDisposed = false
+  private logoLoadToken = 0
 
   constructor(canvas: HTMLCanvasElement, options: AveeVisualizerOptions = {}) {
     this.canvas = canvas
@@ -365,6 +367,16 @@ export class AveeVisualizerEngine {
     this.scene.add(this.backgroundMesh)
 
     // ── Logo disc ─────────────────────────────────────────────────────────────
+    // Opaque backing plate: the logo texture may still be loading (or may fail for a
+    // file the app:// protocol refuses). Without it the additive halo behind shows
+    // through and the whole disc reads as a washed-out glow blob.
+    this.logoBackdrop = new THREE.Mesh(
+      new THREE.CircleGeometry(DEFAULT_RADIUS, 96),
+      new THREE.MeshBasicMaterial({ color: 0x04060c, depthWrite: true }),
+    )
+    this.logoBackdrop.position.z = -0.02
+    this.scene.add(this.logoBackdrop)
+
     this.logoMaterial = new THREE.MeshBasicMaterial({
       map: this.defaultTexture,
       transparent: true,
@@ -517,7 +529,7 @@ export class AveeVisualizerEngine {
   }
 
   private applyTheme(theme: AveeColorTheme): void {
-    const palette = AVEE_THEMES[theme]
+    const palette = AVEE_THEMES[theme] ?? AVEE_THEMES.cyberpunk
     this.backgroundMaterial.uniforms.uInner.value.set(palette.background[0])
     this.backgroundMaterial.uniforms.uMid.value.set(palette.background[1])
     this.backgroundMaterial.uniforms.uOuter.value.set(palette.background[2])
@@ -557,6 +569,7 @@ export class AveeVisualizerEngine {
     this.barsMesh.visible = this.options.showBars
     this.barsInner.visible = this.options.showBars
     this.logoMesh.visible = this.options.showLogo
+    this.logoBackdrop.visible = this.options.showLogo
     this.logoGlow.visible = this.options.showLogo
     this.innerRing.visible = this.options.showLogo && this.options.showRing
     this.outerRing.visible = this.options.showLogo && this.options.showRing
@@ -583,11 +596,21 @@ export class AveeVisualizerEngine {
   }
 
   public loadLogo(url: string): void {
+    const token = ++this.logoLoadToken
+    // A texture that never resolves would leave the disc empty (the additive halo shows
+    // through). Fall back to the built-in logo if the image is not ready in time.
+    const timer = setTimeout(() => {
+      if (token === this.logoLoadToken && !this.isDisposed) this.resetDefaultLogo()
+    }, 2500)
     const loader = new THREE.TextureLoader()
     loader.load(
       url,
       (texture) => {
-        if (this.isDisposed) return
+        clearTimeout(timer)
+        if (this.isDisposed || token !== this.logoLoadToken) {
+          texture.dispose()
+          return
+        }
         texture.colorSpace = THREE.SRGBColorSpace
         this.customTexture = texture
         this.logoMaterial.map = texture
@@ -595,12 +618,15 @@ export class AveeVisualizerEngine {
       },
       undefined,
       () => {
+        clearTimeout(timer)
+        if (token !== this.logoLoadToken) return
         this.resetDefaultLogo()
       },
     )
   }
 
   public resetDefaultLogo(): void {
+    this.logoLoadToken += 1
     this.customTexture = null
     this.logoMaterial.map = this.defaultTexture
     this.logoMaterial.needsUpdate = true
@@ -687,6 +713,7 @@ export class AveeVisualizerEngine {
     const targetScale = 1 + (bass * 0.28 + beat * 0.14) * intensity
     this.currentLogoScale += (targetScale - this.currentLogoScale) * Math.min(1, dt * 14)
     this.logoMesh.scale.setScalar(this.currentLogoScale)
+    this.logoBackdrop.scale.setScalar(this.currentLogoScale)
     this.innerRing.scale.setScalar(this.currentLogoScale)
     this.logoGlow.scale.setScalar(DEFAULT_RADIUS * 2.6 * this.currentLogoScale)
     ;(this.logoGlow.material as THREE.SpriteMaterial).opacity = 0.16 + bass * 0.3
