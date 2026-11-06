@@ -34,6 +34,7 @@ Mục tiêu: clone toàn bộ chức năng editor Vizzy vào Sóng nhạc. Mỗi
 | zoom | ✅ |
 | track theo layer | ✅ |
 | kéo mép clip đổi thời gian | ✅ kéo mép trái/phải + kéo thân clip, có undo gesture, **snap + đường guide** |
+| chọn & kéo nhiều clip | ✅ Ctrl/Shift-click chọn nhiều, kéo thân là cả nhóm dời cùng delta |
 | keyframe trên track | ❌ |
 | ruler thời gian | ✅ mốc tự chọn theo độ dài |
 

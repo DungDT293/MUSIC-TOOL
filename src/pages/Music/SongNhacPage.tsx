@@ -288,6 +288,7 @@ export default function SongNhacPage() {
   const [leftTab, setLeftTab] = useState<'composition' | 'presets' | 'effects' | 'analyzer' | 'media' | 'lyrics' | 'project' | 'export'>('composition')
   const [mediaTab, setMediaTab] = useState<MediaKind>('image')
   const mediaLibrary = useMediaLibrary()
+  const selectedIds = useSongNhacLayerStore((state) => state.selectedIds)
   const [snapGuide, setSnapGuide] = useState<number | null>(null)
   const [lyricsText, setLyricsText] = useState('')
   const effects = useCompositionEffects()
@@ -632,10 +633,14 @@ export default function SongNhacPage() {
     const origEnd =
       layer.timeRange && Number.isFinite(layer.timeRange.endSec) ? Math.min(total, layer.timeRange.endSec) : total
     const store = useSongNhacLayerStore.getState()
+    // Dragging the body of a selected clip moves the whole selection.
+    const selection = store.selectedIds
+    const groupIds =
+      mode === 'move' && selection.length > 1 && selection.includes(layer.id) ? selection.slice() : [layer.id]
     // Snap marks: composition edges, the playhead and every other clip edge.
     const targets = [0, total, playhead]
     for (const item of store.layers) {
-      if (item.id === layer.id || item.type === 'group') continue
+      if (groupIds.includes(item.id) || item.type === 'group') continue
       if (item.timeRange) {
         targets.push(Math.max(0, item.timeRange.startSec))
         if (Number.isFinite(item.timeRange.endSec)) targets.push(Math.min(total, item.timeRange.endSec))
@@ -674,16 +679,40 @@ export default function SongNhacPage() {
         }
       }
       setSnapGuide(guide)
-      const current = useSongNhacLayerStore.getState().layers.find((item) => item.id === layer.id)
-      const previous = current && current.type !== 'group' ? current.timeRange : undefined
-      useSongNhacLayerStore.getState().updateLayer(layer.id, {
-        timeRange: {
-          startSec: Number(start.toFixed(3)),
-          endSec: Number(end.toFixed(3)),
-          fadeInSec: previous?.fadeInSec ?? 0,
-          fadeOutSec: previous?.fadeOutSec ?? 0,
-        },
-      })
+      const appliedDelta = start - origStart
+      const layersNow = useSongNhacLayerStore.getState().layers
+      if (mode !== 'move' || groupIds.length === 1) {
+        const current = layersNow.find((item) => item.id === layer.id)
+        const previous = current && current.type !== 'group' ? current.timeRange : undefined
+        useSongNhacLayerStore.getState().updateLayer(layer.id, {
+          timeRange: {
+            startSec: Number(start.toFixed(3)),
+            endSec: Number(end.toFixed(3)),
+            fadeInSec: previous?.fadeInSec ?? 0,
+            fadeOutSec: previous?.fadeOutSec ?? 0,
+          },
+        })
+      } else {
+        for (const id of groupIds) {
+          const target = layersNow.find((item) => item.id === id)
+          if (!target || target.type === 'group') continue
+          const baseStart = target.timeRange ? Math.max(0, target.timeRange.startSec) : 0
+          const baseEnd =
+            target.timeRange && Number.isFinite(target.timeRange.endSec)
+              ? Math.min(total, target.timeRange.endSec)
+              : total
+          const length = Math.max(0.2, baseEnd - baseStart)
+          const nextStart = Math.max(0, Math.min(total - length, baseStart + appliedDelta))
+          useSongNhacLayerStore.getState().updateLayer(id, {
+            timeRange: {
+              startSec: Number(nextStart.toFixed(3)),
+              endSec: Number((nextStart + length).toFixed(3)),
+              fadeInSec: target.timeRange?.fadeInSec ?? 0,
+              fadeOutSec: target.timeRange?.fadeOutSec ?? 0,
+            },
+          })
+        }
+      }
     }
     const onUp = () => {
       window.removeEventListener('pointermove', onMove)
@@ -2204,7 +2233,14 @@ export default function SongNhacPage() {
                   }}
                 >
                   <div
-                    onPointerDown={(event) => beginClipDrag(event, layer, 'move')}
+                    onPointerDown={(event) => {
+                      const store = useSongNhacLayerStore.getState()
+                      const already = store.selectedIds.includes(layer.id)
+                      if (!already) {
+                        store.setSelection(layer.id, { ctrlKey: event.ctrlKey || event.metaKey, shiftKey: event.shiftKey })
+                      }
+                      beginClipDrag(event, layer, 'move')
+                    }}
                     title={`${formatClock(start)} → ${formatClock(end)} (kéo để dời, kéo mép để đổi độ dài)`}
                     style={{
                       position: 'absolute',
@@ -2216,6 +2252,7 @@ export default function SongNhacPage() {
                       background: TRACK_COLORS[layer.type] ?? '#64748b',
                       opacity: layer.visible ? 0.85 : 0.3,
                       cursor: 'grab',
+                      boxShadow: selectedIds.includes(layer.id) ? '0 0 0 1px #38bdf8 inset' : undefined,
                     }}
                   />
                   <div
