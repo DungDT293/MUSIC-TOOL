@@ -6,6 +6,7 @@ import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPa
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
 import type { SongNhacAudioFrame } from '../core/types'
 import {
+  buildCssFilter,
   fitSize,
   getLayerTimeOpacity,
   type StudioAnyLayer,
@@ -800,10 +801,12 @@ export class AveeVisualizerEngine {
   }
 
   private layerKey(layer: Exclude<StudioLayer, { type: 'visualizer' }>): string {
+    // Colour filters are baked into the texture, so a change has to rebuild the node.
+    const filterKey = `${layer.filter.brightness}|${layer.filter.contrast}|${layer.filter.saturation}|${layer.filter.hue}|${layer.filter.grayscale}|${layer.filter.sepia}|${layer.filter.blur}`
     if (layer.type === 'text') {
-      return `text:${layer.text}|${layer.fontSize}|${layer.color}|${layer.strokeColor}|${layer.strokeWidth}|${layer.fontWeight}|${layer.italic}|${layer.fontFamily}|${layer.textShadowBlur}|${layer.textShadowColor}|${layer.textShadowOffsetX}|${layer.textShadowOffsetY}`
+      return `text:${layer.text}|${layer.fontSize}|${layer.color}|${layer.strokeColor}|${layer.strokeWidth}|${layer.fontWeight}|${layer.italic}|${layer.fontFamily}|${layer.textShadowBlur}|${layer.textShadowColor}|${layer.textShadowOffsetX}|${layer.textShadowOffsetY}|${filterKey}`
     }
-    return `${layer.type}:${layer.src}:${layer.fitMode}`
+    return `${layer.type}:${layer.src}:${layer.fitMode}|${filterKey}`
   }
 
   private applyVisualizerLayer(layer: StudioLayer, index: number): void {
@@ -904,7 +907,19 @@ export class AveeVisualizerEngine {
             bitmap.close()
             return
           }
-          const texture = new THREE.Texture(bitmap)
+          // Bake brightness/contrast/saturation/hue/grayscale/sepia/blur into the bitmap:
+          // MeshBasicMaterial has no CSS filter, and doing it here keeps the shader cheap.
+          const baked = document.createElement('canvas')
+          baked.width = bitmap.width
+          baked.height = bitmap.height
+          const bakedCtx = baked.getContext('2d')
+          let textureSource: HTMLCanvasElement | ImageBitmap = bitmap
+          if (bakedCtx) {
+            bakedCtx.filter = buildCssFilter(layer.filter)
+            bakedCtx.drawImage(bitmap, 0, 0)
+            textureSource = baked
+          }
+          const texture = new THREE.Texture(textureSource as unknown as HTMLCanvasElement)
           texture.colorSpace = THREE.SRGBColorSpace
           texture.needsUpdate = true
           material.map = texture
@@ -962,6 +977,7 @@ export class AveeVisualizerEngine {
       canvas.width = width
       canvas.height = height
       ctx.clearRect(0, 0, width, height)
+      ctx.filter = buildCssFilter(layer.filter)
       ctx.font = font
       ctx.textAlign = 'center'
       ctx.textBaseline = 'middle'
