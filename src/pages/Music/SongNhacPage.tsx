@@ -21,6 +21,17 @@ const TRACK_COLORS: Record<string, string> = {
   group: '#475569',
 }
 
+const transportStyle: React.CSSProperties = {
+  width: 28,
+  height: 22,
+  borderRadius: 6,
+  border: '1px solid #334155',
+  background: '#0f172a',
+  color: '#cbd5e1',
+  cursor: 'pointer',
+  fontSize: 10,
+}
+
 function formatClock(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds <= 0) return '0:00'
   const total = Math.floor(seconds)
@@ -245,6 +256,7 @@ export default function SongNhacPage() {
   }, [selectedLayerId])
   const [audioDuration, setAudioDuration] = useState(0)
   const [playhead, setPlayhead] = useState(0)
+  const [timelineZoom, setTimelineZoom] = useState(1)
   const [waveformUrl, setWaveformUrl] = useState('')
 
   // Waveform picture for the timeline, rendered once per audio file by ffmpeg.
@@ -519,6 +531,14 @@ export default function SongNhacPage() {
       }
     }
     setMessage('Đã thêm file kéo thả vào composition.')
+  }
+
+  const seekToTime = (seconds: number) => {
+    const audio = audioRef.current
+    if (!audio || !audioDuration) return
+    const next = Math.max(0, Math.min(audioDuration, seconds))
+    audio.currentTime = next
+    setPlayhead(next)
   }
 
   const seekTo = (event: React.MouseEvent<HTMLDivElement>) => {    const audio = audioRef.current
@@ -1051,37 +1071,27 @@ export default function SongNhacPage() {
 
           {rightTab === 'visualizer' ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 6 }}>
                 {WAVE_PRESETS.map((preset) => (
                   <button
                     key={preset.id}
                     type="button"
                     onClick={() => applyWavePreset(preset.id)}
-                    title={preset.description}
+                    title={`${preset.name} — ${preset.description}`}
                     style={{
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: 4,
-                      padding: 6,
+                      padding: 0,
+                      width: '100%',
+                      aspectRatio: '1 / 1',
                       borderRadius: 8,
                       border: '1px solid #1e293b',
-                      background: '#0f172a',
-                      color: '#cbd5e1',
-                      fontSize: 10,
-                      textAlign: 'left',
+                      background: `linear-gradient(135deg, ${preset.visualizer.color1 ?? '#22d3ee'}, ${preset.visualizer.color2 ?? '#f472b6'})`,
                       cursor: 'pointer',
                     }}
-                  >
-                    <span
-                      style={{
-                        height: 30,
-                        borderRadius: 5,
-                        background: `linear-gradient(135deg, ${preset.visualizer.color1 ?? '#22d3ee'}, ${preset.visualizer.color2 ?? '#f472b6'})`,
-                      }}
-                    />
-                    {preset.name}
-                  </button>
+                  />
                 ))}
+              </div>
+              <div style={{ fontSize: 11, color: '#64748b' }}>
+                {WAVE_PRESETS.length} preset · bấm để áp vào lớp sóng đang chọn
               </div>
               <InspectorPanel />
             </div>
@@ -1467,29 +1477,63 @@ export default function SongNhacPage() {
       {/* Timeline */}
       <div style={{ marginTop: 12, background: '#0b1220', border: '1px solid #1e293b', borderRadius: 10, padding: 10 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8, fontSize: 11, color: '#94a3b8' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, fontSize: 11, color: '#94a3b8' }}>
           <button
             type="button"
-            onClick={togglePlay}
-            disabled={!audioPath}
-            style={{
-              padding: '4px 12px',
-              borderRadius: 6,
-              border: '1px solid #334155',
-              background: isPlaying ? '#7f1d1d' : '#0c4a6e',
-              color: '#e2e8f0',
-              fontSize: 11,
-              cursor: audioPath ? 'pointer' : 'not-allowed',
-            }}
+            onClick={() => setTimelineZoom((value) => Math.max(0.5, Number((value - 0.25).toFixed(2))))}
+            title="Thu nhỏ timeline"
+            style={{ width: 24, height: 22, borderRadius: 6, border: '1px solid #334155', background: '#0f172a', color: '#cbd5e1', cursor: 'pointer' }}
           >
-            {isPlaying ? 'Tạm dừng' : 'Phát'}
+            -
           </button>
-          <span style={{ fontFamily: 'monospace' }}>{formatClock(playhead)} / {formatClock(audioDuration)}</span>
-          <span style={{ marginLeft: 'auto', maxWidth: 420, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          <span style={{ fontFamily: 'monospace', minWidth: 34 }}>{timelineZoom.toFixed(2)}x</span>
+          <button
+            type="button"
+            onClick={() => setTimelineZoom((value) => Math.min(8, Number((value + 0.25).toFixed(2))))}
+            title="Phóng to timeline"
+            style={{ width: 24, height: 22, borderRadius: 6, border: '1px solid #334155', background: '#0f172a', color: '#cbd5e1', cursor: 'pointer' }}
+          >
+            +
+          </button>
+          <span style={{ fontFamily: 'monospace', color: '#e2e8f0' }}>{formatClock(playhead)} / {formatClock(audioDuration)}</span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 4, margin: '0 auto' }}>
+            <button type="button" onClick={() => seekToTime(0)} disabled={!audioPath} style={transportStyle}>
+              |&lt;
+            </button>
+            <button type="button" onClick={() => seekToTime(playhead - 5)} disabled={!audioPath} style={transportStyle}>
+              &lt;&lt;
+            </button>
+            <button
+              type="button"
+              onClick={togglePlay}
+              disabled={!audioPath}
+              style={{
+                padding: '3px 14px',
+                borderRadius: 6,
+                border: '1px solid #334155',
+                background: isPlaying ? '#7f1d1d' : '#0c4a6e',
+                color: '#e2e8f0',
+                fontSize: 11,
+                cursor: audioPath ? 'pointer' : 'not-allowed',
+              }}
+            >
+              {isPlaying ? 'Tạm dừng' : 'Phát'}
+            </button>
+            <button type="button" onClick={() => seekToTime(playhead + 5)} disabled={!audioPath} style={transportStyle}>
+              &gt;&gt;
+            </button>
+            <button type="button" onClick={() => seekToTime(audioDuration)} disabled={!audioPath} style={transportStyle}>
+              &gt;|
+            </button>
+          </span>
+          <span style={{ maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {tracks.length} lớp · {audioPath ? audioPath.split(/[\\/]/).pop() : 'chưa chọn audio'}
           </span>
         </div>
+        </div>
 
-        <div style={{ position: 'relative', paddingLeft: 132 }}>
+        <div style={{ overflowX: 'auto' }}>
+        <div style={{ position: 'relative', paddingLeft: 132, width: `${timelineZoom * 100}%`, minWidth: '100%' }}>
           {waveformUrl && (
             <div
               onClick={seekTo}
@@ -1566,6 +1610,7 @@ export default function SongNhacPage() {
               </div>
             )
           })}
+        </div>
         </div>
       </div>
     </section>
