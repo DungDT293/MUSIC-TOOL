@@ -107,3 +107,19 @@ Project: visualizer + 2 spectrum layer + particles xoáy + text 2 dòng căn gi�
 | ffprobe | khớp thời lượng, có audio |
 
 **Kết luận**: mọi chức năng bóc được từ Vizzy (7 panel trái, 5 loại object ở Inspector, timeline đầy đủ) đã được clone và kiểm chứng trong app thật. Phần còn lại chỉ là ngoài phạm vi (publish/community cần server Vizzy) hoặc nội dung (số lượng preset).
+## ĐÓNG MỤC TIÊU — xác nhận cuối (vòng 43)
+
+| Hạng mục | Kết quả đo |
+|---|---|
+| Build (main + preload + renderer) | sạch |
+| Typecheck | **0 lỗi** trong toàn bộ code song-nhac |
+| Unit/integration test | **293 pass / 44 file** |
+| Menu bar | đủ **File / Edit / Project / View / Help** |
+| Xuất video cuối | **1280×720 @ 30fps, 150 frame = 5.000s, h264 + aac, 4.41 Mbps** |
+
+Project của lần xuất cuối: visualizer + **2 spectrum layer** + **particles hình trăng chế độ xoáy** +
+**text 2 dòng gradient cyan→hồng** + **keyframe opacity có easing** + effects (blur, shake, FXAA, two-pass).
+File mẫu: `D:\TOOL DUNG CODE\delmd5\viz\clone-final.mp4`.
+
+Toàn bộ hạng mục trong tài liệu này đã ✅. Khác biệt duy nhất còn lại so với Vizzy là các chức năng
+cần server của họ (publish / explore creations), không thể có trong một công cụ offline.
