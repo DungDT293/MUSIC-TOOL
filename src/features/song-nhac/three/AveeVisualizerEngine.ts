@@ -892,6 +892,22 @@ export class AveeVisualizerEngine {
     }
   }
 
+  /** Image plates can breathe with the kick drum. */
+  private applyBeatPulse(frame: SongNhacAudioFrame): void {
+    const bass = Math.max(0, Math.min(1, frame.bass))
+    for (const node of this.layerNodes.values()) {
+      const layer = node.layer
+      if (!layer || layer.type !== 'image' || !layer.beatPulse) continue
+      const t = layer.transform
+      const pulse = 1 + bass * layer.beatIntensity * 0.25
+      node.object.scale.set(
+        node.baseWidth * node.depthFactor * t.scaleX * pulse * (t.flipX ? -1 : 1),
+        node.baseHeight * node.depthFactor * t.scaleY * pulse * (t.flipY ? -1 : 1),
+        1,
+      )
+    }
+  }
+
   /** Per-frame time fade + filter opacity; called from render(). */
   private refreshLayerOpacity(timeSec: number): void {
     for (const node of this.layerNodes.values()) {
@@ -1115,6 +1131,7 @@ export class AveeVisualizerEngine {
 
     // timeRange fade + filter opacity are per-frame values, not layout state.
     this.refreshLayerOpacity(timeSec)
+    this.applyBeatPulse(frame)
     this.updateSelectionFrame()
 
     if (this.options.showBars) this.updateBars(frame)

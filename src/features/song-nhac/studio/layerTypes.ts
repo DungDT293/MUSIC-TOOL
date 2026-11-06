@@ -70,6 +70,9 @@ export interface ImageLayer extends StudioLayerBase {
   naturalHeight?: number
   fitMode: StudioFitMode
   waveAroundEnabled?: boolean
+  /** Scale the plate with the kick drum. */
+  beatPulse: boolean
+  beatIntensity: number
 }
 
 export interface VideoLayer extends StudioLayerBase {
@@ -257,6 +260,8 @@ export function createImageLayer(src = '', name = 'Ảnh'): ImageLayer {
     src,
     fitMode: 'contain',
     waveAroundEnabled: false,
+    beatPulse: true,
+    beatIntensity: 0.8,
   }
 }
 

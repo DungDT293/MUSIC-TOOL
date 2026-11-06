@@ -309,6 +309,21 @@ export function InspectorPanel() {
                 <option value="cover">Cover (tràn khung)</option>
               </select>
             </div>
+            {isImageLayer(layer) && (
+              <>
+                <CheckRow label="Ảnh đập theo beat" checked={layer.beatPulse} onChange={(beatPulse) => updateLayerWithHistory(layer.id, { beatPulse })} />
+                <SliderRow
+                  label="Cường độ đập"
+                  value={layer.beatIntensity}
+                  min={0}
+                  max={1.5}
+                  step={0.05}
+                  format={(value) => `${Math.round(value * 100)}%`}
+                  onChange={(beatIntensity) => updateLayer(layer.id, { beatIntensity })}
+                  onCommit={commit}
+                />
+              </>
+            )}
             {isVideoLayer(layer) && (
               <>
                 <CheckRow label="Tắt tiếng" checked={layer.muted} onChange={(muted) => updateLayer(layer.id, { muted })} />
