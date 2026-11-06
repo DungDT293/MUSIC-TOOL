@@ -300,10 +300,10 @@ export class AveeVisualizerEngine {
   private backgroundMesh: THREE.Mesh
   private backgroundMaterial: THREE.ShaderMaterial
 
-  private barsMesh: THREE.InstancedMesh
-  private barsInner: THREE.InstancedMesh
-  private barColors: Float32Array
-  private barHeights: Float32Array
+  private barsMesh!: THREE.InstancedMesh
+  private barsInner!: THREE.InstancedMesh
+  private barColors!: Float32Array
+  private barHeights!: Float32Array
   private barCount = 0
 
   private logoMesh: THREE.Mesh
@@ -331,6 +331,8 @@ export class AveeVisualizerEngine {
   private visualizerGroup = new THREE.Group()
   private layerNodes = new Map<string, LayerNode>()
   private currentVisualizerLayer: StudioLayer | null = null
+  private visualizerSensitivity = 1
+  private visualizerSpeed = 1
   private stageWidth = 10
   private stageHeight = 6
 
@@ -453,43 +455,7 @@ export class AveeVisualizerEngine {
 
     // Ã¢â€â‚¬Ã¢â€â‚¬ Spectrum bars Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
     const preset = QUALITY_PRESETS[this.options.quality]
-    this.barCount = preset.bars
-    // Rounded caps read as "designed" instead of "debug lines"; boxes with a 0.18 radius
-    // are cheap enough for a few hundred instances.
-    const barGeometry = new RoundedBoxGeometry(1, 1, 0.36, 2, 0.18)
-    barGeometry.translate(0, 0.5, 0)
-    this.barsMesh = new THREE.InstancedMesh(
-      barGeometry,
-      new THREE.MeshBasicMaterial({ vertexColors: false, toneMapped: false }),
-      this.barCount,
-    )
-    this.barsMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
-    this.barColors = new Float32Array(this.barCount * 3)
-    this.barHeights = new Float32Array(this.barCount).fill(0.06)
-    this.barsMesh.instanceColor = new THREE.InstancedBufferAttribute(this.barColors, 3)
-    this.barsMesh.instanceColor.setUsage(THREE.DynamicDrawUsage)
-    this.barsMesh.instanceMatrix.needsUpdate = true
-    this.visualizerGroup.add(this.barsMesh)
-
-    // Inner "echo" layer: shorter, additive bars offset by half a step. It reads as a
-    // soft secondary ring without doubling the draw cost.
-    const innerGeometry = new RoundedBoxGeometry(1, 1, 0.3, 2, 0.15)
-    innerGeometry.translate(0, 0.5, 0)
-    this.barsInner = new THREE.InstancedMesh(
-      innerGeometry,
-      new THREE.MeshBasicMaterial({
-        transparent: true,
-        opacity: 0.34,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-        toneMapped: false,
-      }),
-      this.barCount,
-    )
-    this.barsInner.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
-    this.barsInner.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(this.barCount * 3), 3)
-    this.barsInner.instanceColor.setUsage(THREE.DynamicDrawUsage)
-    this.visualizerGroup.add(this.barsInner)
+    this.buildBarMeshes(preset.bars)
 
     // Ã¢â€â‚¬Ã¢â€â‚¬ Particles Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
     const particleCount = preset.particles
@@ -713,7 +679,7 @@ export class AveeVisualizerEngine {
       const freqIndex = dataLength > 0 ? Math.min(dataLength - 1, Math.floor(normalized * dataLength)) : -1
       const raw = freqIndex >= 0 ? Math.min(1, ((data[freqIndex] ?? 0) * gain) / 255) : 0
       // gamma 0.65 lifts the quiet bins so the ring stays continuous
-      const target = 0.06 + Math.pow(raw, 0.65) * 1.15 * intensity
+      const target = 0.06 + Math.pow(raw, 0.65) * 1.15 * intensity * this.visualizerSensitivity
       this.barHeights[i] += (target - this.barHeights[i]) * 0.35
       const height = Math.max(0.02, this.barHeights[i])
 
@@ -740,6 +706,57 @@ export class AveeVisualizerEngine {
    * Render a single frame. Deterministic for a given frame payload, which is what
    * the export pipeline relies on to produce exactly what the preview shows.
    */
+  private buildBarMeshes(count: number): void {
+    this.barCount = count
+    // Rounded caps read as "designed" instead of "debug lines".
+    const barGeometry = new RoundedBoxGeometry(1, 1, 0.36, 2, 0.18)
+    barGeometry.translate(0, 0.5, 0)
+    this.barsMesh = new THREE.InstancedMesh(
+      barGeometry,
+      new THREE.MeshBasicMaterial({ vertexColors: false, toneMapped: false }),
+      count,
+    )
+    this.barsMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+    this.barColors = new Float32Array(count * 3)
+    this.barHeights = new Float32Array(count).fill(0.06)
+    this.barsMesh.instanceColor = new THREE.InstancedBufferAttribute(this.barColors, 3)
+    this.barsMesh.instanceColor.setUsage(THREE.DynamicDrawUsage)
+    this.barsMesh.instanceMatrix.needsUpdate = true
+    this.visualizerGroup.add(this.barsMesh)
+
+    // Inner "echo" layer: shorter, additive bars offset by half a step.
+    const innerGeometry = new RoundedBoxGeometry(1, 1, 0.3, 2, 0.15)
+    innerGeometry.translate(0, 0.5, 0)
+    this.barsInner = new THREE.InstancedMesh(
+      innerGeometry,
+      new THREE.MeshBasicMaterial({
+        transparent: true,
+        opacity: 0.34,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        toneMapped: false,
+      }),
+      count,
+    )
+    this.barsInner.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+    this.barsInner.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(count * 3), 3)
+    this.barsInner.instanceColor.setUsage(THREE.DynamicDrawUsage)
+    this.visualizerGroup.add(this.barsInner)
+
+    const palette = AVEE_THEMES[this.options.theme]
+    this.writeBarColors(palette.primary, palette.secondary, palette.accent)
+  }
+
+  private rebuildBars(count: number): void {
+    this.visualizerGroup.remove(this.barsMesh)
+    this.visualizerGroup.remove(this.barsInner)
+    this.barsMesh.geometry.dispose()
+    ;(this.barsMesh.material as THREE.Material).dispose()
+    this.barsInner.geometry.dispose()
+    ;(this.barsInner.material as THREE.Material).dispose()
+    this.buildBarMeshes(count)
+  }
+
   private updateStageSize(): void {
     // Stage is measured at the rest distance so breathing never changes layer sizes.
     const distance = 7
@@ -792,6 +809,18 @@ export class AveeVisualizerEngine {
   private applyVisualizerLayer(layer: StudioLayer, index: number): void {
     if (layer.type !== 'visualizer') return
     this.currentVisualizerLayer = layer
+    if (layer.barCount !== this.barCount) this.rebuildBars(layer.barCount)
+    this.visualizerSensitivity = layer.sensitivity
+    this.visualizerSpeed = layer.speed
+    this.bloomPass.strength = layer.glowEnabled ? 0.22 + layer.glowIntensity * 0.55 : 0.12
+    if (layer.colorMode === 'rainbow') {
+      const palette = AVEE_THEMES[this.options.theme]
+      this.writeBarColors(palette.primary, palette.secondary, palette.accent)
+    } else {
+      const primary = new THREE.Color(layer.color1).getHex()
+      const secondary = layer.colorMode === 'gradient' ? new THREE.Color(layer.color2).getHex() : primary
+      this.writeBarColors(primary, secondary, primary)
+    }
     const t = layer.transform
     const unit = this.unit
     this.visualizerGroup.position.set(t.x * unit, -t.y * unit, -2.2 + index * 0.02)
@@ -1029,7 +1058,7 @@ export class AveeVisualizerEngine {
     this.camera.position.z = this.currentCameraZ
     this.camera.rotation.z = Math.sin(timeSec * 9) * beat * 0.01 * intensity
 
-    this.outerRing.rotation.z = timeSec * 0.18
+    this.outerRing.rotation.z = timeSec * this.visualizerSpeed * 0.18
     this.backgroundMaterial.uniforms.uPulse.value = bass * intensity
 
     // timeRange fade + filter opacity are per-frame values, not layout state.
