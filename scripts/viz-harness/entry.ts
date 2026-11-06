@@ -75,10 +75,22 @@ function syntheticSpectrum(bins: number, time: number): Uint8Array {
   if (options.withLayers) {
     const imageLayer = createImageLayer(makeBrightLogoDataUrl(), 'Anh nen')
     imageLayer.fitMode = 'cover'
+    imageLayer.waveAroundEnabled = options.waveStyle === 'wavearound'
+    imageLayer.transform = { ...imageLayer.transform, scaleX: 0.6, scaleY: 0.6 }
     const vizLayer = createVisualizerLayer()
     vizLayer.waveStyle = options.waveStyle ?? 'circlebars'
     const textLayer = createTextLayer('Ten bai hat')
-    engine.setLayers([imageLayer, vizLayer, textLayer])
+    if (options.waveStyle === 'double') {
+      const second = createVisualizerLayer('Song 2')
+      second.waveStyle = 'dots'
+      second.transform = { ...second.transform, x: 620, y: -240, scaleX: 0.45, scaleY: 0.45 }
+      second.colorMode = 'solid'
+      second.color1 = '#facc15'
+      second.barCount = 64
+      engine.setLayers([imageLayer, vizLayer, second, textLayer])
+    } else {
+      engine.setLayers([imageLayer, vizLayer, textLayer])
+    }
     engine.setSelectedLayer(textLayer.id)
   }
   const spectrum = syntheticSpectrum(bins, options.time ?? 3.2)
@@ -98,10 +110,22 @@ function syntheticSpectrum(bins: number, time: number): Uint8Array {
   if (options.withLayers) {
     const imageLayer = createImageLayer(makeBrightLogoDataUrl(), 'Anh nen')
     imageLayer.fitMode = 'cover'
+    imageLayer.waveAroundEnabled = options.waveStyle === 'wavearound'
+    imageLayer.transform = { ...imageLayer.transform, scaleX: 0.6, scaleY: 0.6 }
     const vizLayer = createVisualizerLayer()
     vizLayer.waveStyle = options.waveStyle ?? 'circlebars'
     const textLayer = createTextLayer('Ten bai hat')
-    engine.setLayers([imageLayer, vizLayer, textLayer])
+    if (options.waveStyle === 'double') {
+      const second = createVisualizerLayer('Song 2')
+      second.waveStyle = 'dots'
+      second.transform = { ...second.transform, x: 620, y: -240, scaleX: 0.45, scaleY: 0.45 }
+      second.colorMode = 'solid'
+      second.color1 = '#facc15'
+      second.barCount = 64
+      engine.setLayers([imageLayer, vizLayer, second, textLayer])
+    } else {
+      engine.setLayers([imageLayer, vizLayer, textLayer])
+    }
     engine.setSelectedLayer(textLayer.id)
   }
   ;(window as unknown as Record<string, unknown>).__layerDebug = engine.debugLayers()

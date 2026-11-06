@@ -194,6 +194,19 @@ export function isTextLayer(layer: StudioAnyLayer): layer is TextLayer {
 }
 
 /** CSS filter string for canvas-2D drawing paths. */
+/** True when the filter would visibly change pixels (identity filters are skipped). */
+export function hasColorFilter(filter: StudioLayerFilter): boolean {
+  return (
+    Math.abs(filter.brightness - 1) > 0.001 ||
+    Math.abs(filter.contrast - 1) > 0.001 ||
+    Math.abs(filter.saturation - 1) > 0.001 ||
+    filter.hue !== 0 ||
+    filter.grayscale > 0.001 ||
+    filter.sepia > 0.001 ||
+    filter.blur > 0.01
+  )
+}
+
 export function buildCssFilter(filter: StudioLayerFilter): string {
   const parts = [
     `brightness(${filter.brightness})`,

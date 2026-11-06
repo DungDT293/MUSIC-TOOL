@@ -312,6 +312,11 @@ export function InspectorPanel() {
             {isImageLayer(layer) && (
               <>
                 <CheckRow label="Ảnh đập theo beat" checked={layer.beatPulse} onChange={(beatPulse) => updateLayerWithHistory(layer.id, { beatPulse })} />
+                <CheckRow
+                  label="Sóng quanh ảnh"
+                  checked={Boolean(layer.waveAroundEnabled)}
+                  onChange={(waveAroundEnabled) => updateLayerWithHistory(layer.id, { waveAroundEnabled })}
+                />
                 <SliderRow
                   label="Cường độ đập"
                   value={layer.beatIntensity}

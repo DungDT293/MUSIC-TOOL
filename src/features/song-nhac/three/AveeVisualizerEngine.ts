@@ -5,13 +5,16 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
 import type { SongNhacAudioFrame } from '../core/types'
+import { SpectrumRing } from './SpectrumRing'
 import {
   buildCssFilter,
+  hasColorFilter,
   fitSize,
   getLayerTimeOpacity,
   type StudioAnyLayer,
   type StudioLayer,
   type VisualizerLayer,
+  type ImageLayer,
 } from '../studio/layerTypes'
 
 interface LayerNode {
@@ -22,6 +25,8 @@ interface LayerNode {
   lastTransform?: StudioLayer['transform']
   depthFactor: number
   layer?: StudioLayer
+  /** Per-frame work (video filter baking). */
+  tick?: () => void
   dispose: () => void
 }
 
@@ -331,6 +336,8 @@ export class AveeVisualizerEngine {
 
   private visualizerGroup = new THREE.Group()
   private layerNodes = new Map<string, LayerNode>()
+  private extraVisualizers = new Map<string, { ring: SpectrumRing; layer: VisualizerLayer }>()
+  private waveRings = new Map<string, { ring: SpectrumRing; layer: ImageLayer }>()
   private currentVisualizerLayer: StudioLayer | null = null
   private selectionFrame!: THREE.LineLoop
   private selectedLayerId: string | null = null
@@ -818,10 +825,17 @@ export class AveeVisualizerEngine {
 
   public setLayers(layers: StudioAnyLayer[]): void {
     const seen = new Set<string>()
+    const seenVisualizers = new Set<string>()
     const renderable = layers.filter((layer): layer is StudioLayer => layer.type !== 'group')
+    let visualizerIndex = 0
     renderable.forEach((layer, index) => {
       if (layer.type === 'visualizer') {
-        this.applyVisualizerLayer(layer, index)
+        seenVisualizers.add(layer.id)
+        // The first visualizer owns the rich scene (logo, rings, particles); any
+        // additional ones get their own lightweight spectrum ring.
+        if (visualizerIndex === 0) this.applyVisualizerLayer(layer, index)
+        else this.applyExtraVisualizer(layer, index)
+        visualizerIndex += 1
         return
       }
       seen.add(layer.id)
@@ -838,11 +852,72 @@ export class AveeVisualizerEngine {
       }
       node.layer = layer
       this.applyLayerTransform(node, layer, index)
+      if (layer.type === 'image' && layer.waveAroundEnabled) this.ensureWaveRing(layer)
+      else this.disposeWaveRing(layer.id)
     })
     for (const id of Array.from(this.layerNodes.keys())) {
       if (!seen.has(id)) this.disposeLayer(id)
     }
+    for (const [id, entry] of Array.from(this.extraVisualizers.entries())) {
+      if (seenVisualizers.has(id)) continue
+      this.scene.remove(entry.ring.group)
+      entry.ring.dispose()
+      this.extraVisualizers.delete(id)
+    }
     this.refreshLayerOpacity(this.lastTimeSec < 0 ? 0 : this.lastTimeSec)
+  }
+
+  /** 'Wave around image': a spectrum ring hugging an image layer. */
+  private ensureWaveRing(layer: ImageLayer): void {
+    let entry = this.waveRings.get(layer.id)
+    if (!entry) {
+      const ring = new SpectrumRing({ count: 96, radius: 1, colorA: 0x00f2fe, colorB: 0xfe0979 })
+      entry = { ring, layer }
+      this.waveRings.set(layer.id, entry)
+      this.scene.add(ring.group)
+    }
+    entry.layer = layer
+    const t = layer.transform
+    const unit = this.unit
+    entry.ring.group.position.set(t.x * unit, -t.y * unit, -2.3)
+    entry.ring.group.rotation.z = (t.rotation * Math.PI) / 180
+    entry.ring.group.visible = layer.visible
+  }
+
+  private disposeWaveRing(id: string): void {
+    const entry = this.waveRings.get(id)
+    if (!entry) return
+    this.scene.remove(entry.ring.group)
+    entry.ring.dispose()
+    this.waveRings.delete(id)
+  }
+
+  private applyExtraVisualizer(layer: VisualizerLayer, index: number): void {
+    const hex = (value: string): number => new THREE.Color(value).getHex()
+    let entry = this.extraVisualizers.get(layer.id)
+    if (!entry || entry.ring.count !== layer.barCount) {
+      if (entry) {
+        this.scene.remove(entry.ring.group)
+        entry.ring.dispose()
+      }
+      const ring = new SpectrumRing({
+        count: layer.barCount,
+        radius: 1.15,
+        colorA: hex(layer.color1),
+        colorB: layer.colorMode === 'gradient' ? hex(layer.color2) : hex(layer.color1),
+      })
+      entry = { ring, layer }
+      this.extraVisualizers.set(layer.id, entry)
+      this.scene.add(ring.group)
+    }
+    entry.layer = layer
+    entry.ring.setColors(hex(layer.color1), layer.colorMode === 'gradient' ? hex(layer.color2) : hex(layer.color1))
+    const t = layer.transform
+    const unit = this.unit
+    entry.ring.group.position.set(t.x * unit, -t.y * unit, -2.2 + index * 0.02)
+    entry.ring.group.scale.set(t.scaleX * (t.flipX ? -1 : 1), t.scaleY * (t.flipY ? -1 : 1), 1)
+    entry.ring.group.rotation.z = (t.rotation * Math.PI) / 180
+    entry.ring.group.visible = layer.visible
   }
 
   private layerKey(layer: Exclude<StudioLayer, { type: 'visualizer' }>): string {
@@ -896,8 +971,9 @@ export class AveeVisualizerEngine {
     if (material) {
       material.opacity = layer.filter.opacity
       // Media plates sit under a global bloom pass; full brightness washes the frame out.
+      // Colour filters are baked into the texture already, so only dim here.
       const dim = layer.type === 'image' || layer.type === 'video' ? 0.65 : 1
-      material.color.setScalar(Math.max(0.05, dim * layer.filter.brightness))
+      material.color.setScalar(dim)
     }
   }
 
@@ -1067,6 +1143,38 @@ export class AveeVisualizerEngine {
       video.playsInline = true
       video.crossOrigin = 'anonymous'
       void video.play().catch(() => undefined)
+
+      if (hasColorFilter(layer.filter)) {
+        // MeshBasicMaterial has no CSS filter; draw the video through a filtered canvas
+        // once per frame. Capped at 1080p so a 4K source cannot stall the loop.
+        const bakeCanvas = document.createElement('canvas')
+        const bakeCtx = bakeCanvas.getContext('2d')
+        const bakeTexture = new THREE.Texture(bakeCanvas)
+        bakeTexture.colorSpace = THREE.SRGBColorSpace
+        material.map = bakeTexture
+        node.tick = () => {
+          if (!bakeCtx || video.readyState < 2) return
+          const width = Math.min(1920, video.videoWidth || 1920)
+          const height = Math.round((width / Math.max(1, video.videoWidth || 16)) * (video.videoHeight || 9))
+          if (bakeCanvas.width !== width || bakeCanvas.height !== height) {
+            bakeCanvas.width = width
+            bakeCanvas.height = height
+          }
+          bakeCtx.filter = buildCssFilter(layer.filter)
+          bakeCtx.drawImage(video, 0, 0, width, height)
+          bakeTexture.needsUpdate = true
+        }
+        const previousDispose = node.dispose
+        node.dispose = () => {
+          video.pause()
+          video.src = ''
+          bakeTexture.dispose()
+          previousDispose()
+        }
+        this.scene.add(mesh)
+        return node
+      }
+
       const texture = new THREE.VideoTexture(video)
       texture.colorSpace = THREE.SRGBColorSpace
       material.map = texture
@@ -1218,6 +1326,22 @@ export class AveeVisualizerEngine {
     this.applyBeatPulse(frame)
     this.updateSelectionFrame()
 
+    for (const node of this.layerNodes.values()) node.tick?.()
+    for (const entry of this.extraVisualizers.values()) {
+      if (entry.layer.visible) entry.ring.update(frame, entry.layer.sensitivity)
+    }
+    for (const [id, entry] of this.waveRings.entries()) {
+      const node = this.layerNodes.get(id)
+      const layer = node?.layer
+      if (!node || !layer || layer.type !== 'image') continue
+      const t = layer.transform
+      // Hug the *displayed* image size, not the raw fitted size.
+      const radius = Math.max(node.baseWidth * Math.abs(t.scaleX), node.baseHeight * Math.abs(t.scaleY)) * 0.55
+      entry.ring.setRadius(radius)
+      entry.ring.group.position.set(t.x * this.unit, -t.y * this.unit, node.object.position.z + 0.02)
+      entry.ring.group.rotation.z = (t.rotation * Math.PI) / 180
+      entry.ring.update(frame, 1)
+    }
     if (this.options.showBars) this.updateBars(frame)
     if (this.options.showParticles) this.positionParticles(timeSec)
 
@@ -1227,6 +1351,16 @@ export class AveeVisualizerEngine {
   public dispose(): void {
     this.isDisposed = true
     for (const id of Array.from(this.layerNodes.keys())) this.disposeLayer(id)
+    for (const entry of this.extraVisualizers.values()) {
+      this.scene.remove(entry.ring.group)
+      entry.ring.dispose()
+    }
+    this.extraVisualizers.clear()
+    for (const entry of this.waveRings.values()) {
+      this.scene.remove(entry.ring.group)
+      entry.ring.dispose()
+    }
+    this.waveRings.clear()
     this.scene.clear()
     this.composer.dispose()
     this.renderer.dispose()
