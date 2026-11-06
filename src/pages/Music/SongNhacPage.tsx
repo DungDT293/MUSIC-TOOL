@@ -309,10 +309,6 @@ export default function SongNhacPage() {
     }
   }
 
-  const cancelExport = async () => {
-    if (progress?.requestId) await window.api.songNhac.cancel(progress.requestId)
-  }
-
   return (
     <section style={{ minHeight: '100%', color: '#e5e7eb', fontFamily: 'Inter, system-ui, sans-serif' }}>
       <h1 style={{ marginTop: 0, marginBottom: 4, fontSize: 24, fontWeight: 700 }}>Sóng nhạc</h1>
