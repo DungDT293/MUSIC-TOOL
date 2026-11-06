@@ -3,240 +3,240 @@
     "style": "circlebars",
     "size": "1920x1080",
     "frames": 40,
-    "avgMs": 0.46,
-    "p95Ms": 0.8,
-    "minMs": 0.2,
-    "maxMs": 0.9,
-    "fps": 2162.2
+    "avgMs": 1.68,
+    "p95Ms": 2.2,
+    "minMs": 1.3,
+    "maxMs": 2.3,
+    "fps": 594.4
   },
   {
     "style": "bars",
     "size": "1920x1080",
     "frames": 40,
-    "avgMs": 0.4,
-    "p95Ms": 0.7,
-    "minMs": 0.2,
-    "maxMs": 0.7,
-    "fps": 2515.7
+    "avgMs": 1.5,
+    "p95Ms": 1.8,
+    "minMs": 1.3,
+    "maxMs": 2.2,
+    "fps": 668.9
   },
   {
     "style": "dots",
     "size": "1920x1080",
     "frames": 40,
-    "avgMs": 0.33,
-    "p95Ms": 0.6,
-    "minMs": 0.1,
-    "maxMs": 0.7,
-    "fps": 3007.5
+    "avgMs": 1.46,
+    "p95Ms": 1.8,
+    "minMs": 1.3,
+    "maxMs": 1.8,
+    "fps": 684.9
   },
   {
     "style": "waveform",
     "size": "1920x1080",
     "frames": 40,
-    "avgMs": 0.29,
-    "p95Ms": 0.5,
-    "minMs": 0.2,
-    "maxMs": 0.6,
-    "fps": 3389.8
+    "avgMs": 1.56,
+    "p95Ms": 2.2,
+    "minMs": 1.3,
+    "maxMs": 2.4,
+    "fps": 641
   },
   {
     "style": "mirror",
     "size": "1920x1080",
     "frames": 40,
-    "avgMs": 0.26,
-    "p95Ms": 0.4,
-    "minMs": 0.1,
-    "maxMs": 0.4,
-    "fps": 3773.6
+    "avgMs": 1.44,
+    "p95Ms": 1.9,
+    "minMs": 1.3,
+    "maxMs": 2.2,
+    "fps": 695.7
   },
   {
     "style": "tunnel",
     "size": "1920x1080",
     "frames": 40,
-    "avgMs": 0.39,
-    "p95Ms": 0.7,
-    "minMs": 0.2,
-    "maxMs": 1.3,
-    "fps": 2531.6
+    "avgMs": 1.49,
+    "p95Ms": 2,
+    "minMs": 1.2,
+    "maxMs": 2.1,
+    "fps": 668.9
   },
   {
     "style": "orbit",
     "size": "1920x1080",
     "frames": 40,
-    "avgMs": 0.22,
-    "p95Ms": 0.5,
-    "minMs": 0,
-    "maxMs": 0.5,
-    "fps": 4494.4
+    "avgMs": 1.41,
+    "p95Ms": 2.2,
+    "minMs": 1.2,
+    "maxMs": 2.8,
+    "fps": 708
   },
   {
     "style": "pulse",
     "size": "1920x1080",
     "frames": 40,
-    "avgMs": 0.29,
-    "p95Ms": 0.4,
-    "minMs": 0.1,
-    "maxMs": 0.4,
-    "fps": 3508.8
+    "avgMs": 1.34,
+    "p95Ms": 2,
+    "minMs": 1.1,
+    "maxMs": 2.3,
+    "fps": 749.1
   },
   {
     "style": "grid",
     "size": "1920x1080",
     "frames": 40,
-    "avgMs": 0.23,
-    "p95Ms": 0.4,
-    "minMs": 0.1,
-    "maxMs": 0.4,
-    "fps": 4347.8
+    "avgMs": 1.55,
+    "p95Ms": 2,
+    "minMs": 1.4,
+    "maxMs": 2,
+    "fps": 643.1
   },
   {
     "style": "polar",
     "size": "1920x1080",
     "frames": 40,
-    "avgMs": 0.27,
-    "p95Ms": 0.5,
-    "minMs": 0.1,
-    "maxMs": 0.5,
-    "fps": 3703.7
+    "avgMs": 1.73,
+    "p95Ms": 2.6,
+    "minMs": 1.3,
+    "maxMs": 5.2,
+    "fps": 578.9
   },
   {
     "style": "orb",
     "size": "1920x1080",
     "frames": 40,
-    "avgMs": 0.65,
-    "p95Ms": 1.1,
-    "minMs": 0.2,
-    "maxMs": 4.8,
-    "fps": 1532.6
+    "avgMs": 1.41,
+    "p95Ms": 2.7,
+    "minMs": 1.2,
+    "maxMs": 3.4,
+    "fps": 706.7
   },
   {
     "style": "warp",
     "size": "1920x1080",
     "frames": 40,
-    "avgMs": 0.34,
-    "p95Ms": 0.5,
-    "minMs": 0.2,
-    "maxMs": 0.5,
-    "fps": 2941.2
+    "avgMs": 1.35,
+    "p95Ms": 1.5,
+    "minMs": 1.2,
+    "maxMs": 1.5,
+    "fps": 743.5
   },
   {
     "style": "circlebars",
     "size": "3840x2160",
     "frames": 40,
-    "avgMs": 0.26,
-    "p95Ms": 0.4,
-    "minMs": 0.1,
-    "maxMs": 0.6,
-    "fps": 3883.5
+    "avgMs": 3.49,
+    "p95Ms": 3.6,
+    "minMs": 3.3,
+    "maxMs": 3.9,
+    "fps": 286.9
   },
   {
     "style": "bars",
     "size": "3840x2160",
     "frames": 40,
-    "avgMs": 0.23,
-    "p95Ms": 0.4,
-    "minMs": 0.1,
-    "maxMs": 0.4,
-    "fps": 4301.1
+    "avgMs": 3.14,
+    "p95Ms": 3.5,
+    "minMs": 2.9,
+    "maxMs": 3.5,
+    "fps": 318.5
   },
   {
     "style": "dots",
     "size": "3840x2160",
     "frames": 40,
-    "avgMs": 0.18,
-    "p95Ms": 0.3,
-    "minMs": 0,
-    "maxMs": 0.3,
-    "fps": 5633.8
+    "avgMs": 3.03,
+    "p95Ms": 3.3,
+    "minMs": 2.9,
+    "maxMs": 3.4,
+    "fps": 330.3
   },
   {
     "style": "waveform",
     "size": "3840x2160",
     "frames": 40,
-    "avgMs": 0.2,
-    "p95Ms": 0.3,
-    "minMs": 0.1,
-    "maxMs": 0.9,
-    "fps": 5063.3
+    "avgMs": 3.02,
+    "p95Ms": 3.2,
+    "minMs": 2.8,
+    "maxMs": 3.7,
+    "fps": 331.4
   },
   {
     "style": "mirror",
     "size": "3840x2160",
     "frames": 40,
-    "avgMs": 0.22,
-    "p95Ms": 0.4,
-    "minMs": 0.1,
-    "maxMs": 0.4,
-    "fps": 4651.2
+    "avgMs": 3.03,
+    "p95Ms": 3.2,
+    "minMs": 2.9,
+    "maxMs": 3.2,
+    "fps": 329.5
   },
   {
     "style": "tunnel",
     "size": "3840x2160",
     "frames": 40,
-    "avgMs": 0.18,
-    "p95Ms": 0.4,
-    "minMs": 0.1,
-    "maxMs": 0.6,
-    "fps": 5479.5
+    "avgMs": 3.05,
+    "p95Ms": 3.2,
+    "minMs": 2.8,
+    "maxMs": 3.6,
+    "fps": 327.6
   },
   {
     "style": "orbit",
     "size": "3840x2160",
     "frames": 40,
-    "avgMs": 0.25,
-    "p95Ms": 0.4,
-    "minMs": 0.1,
-    "maxMs": 0.4,
-    "fps": 4000
+    "avgMs": 3.17,
+    "p95Ms": 3.2,
+    "minMs": 2.9,
+    "maxMs": 9.2,
+    "fps": 315.2
   },
   {
     "style": "pulse",
     "size": "3840x2160",
     "frames": 40,
-    "avgMs": 0.15,
-    "p95Ms": 0.3,
-    "minMs": 0,
-    "maxMs": 0.4,
-    "fps": 6896.6
+    "avgMs": 3.09,
+    "p95Ms": 4.3,
+    "minMs": 2.8,
+    "maxMs": 4.4,
+    "fps": 323.6
   },
   {
     "style": "grid",
     "size": "3840x2160",
     "frames": 40,
-    "avgMs": 0.17,
-    "p95Ms": 0.3,
-    "minMs": 0,
-    "maxMs": 0.3,
-    "fps": 5882.4
+    "avgMs": 3.47,
+    "p95Ms": 3.8,
+    "minMs": 3.3,
+    "maxMs": 4,
+    "fps": 288
   },
   {
     "style": "polar",
     "size": "3840x2160",
     "frames": 40,
-    "avgMs": 0.17,
-    "p95Ms": 0.3,
-    "minMs": 0,
-    "maxMs": 0.4,
-    "fps": 5797.1
+    "avgMs": 3.33,
+    "p95Ms": 3.6,
+    "minMs": 3.2,
+    "maxMs": 3.7,
+    "fps": 300.3
   },
   {
     "style": "orb",
     "size": "3840x2160",
     "frames": 40,
-    "avgMs": 0.24,
-    "p95Ms": 0.4,
-    "minMs": 0.1,
-    "maxMs": 0.4,
-    "fps": 4255.3
+    "avgMs": 3.04,
+    "p95Ms": 3.2,
+    "minMs": 2.9,
+    "maxMs": 3.4,
+    "fps": 328.7
   },
   {
     "style": "warp",
     "size": "3840x2160",
     "frames": 40,
-    "avgMs": 0.15,
-    "p95Ms": 0.3,
-    "minMs": 0.1,
-    "maxMs": 0.3,
-    "fps": 6451.6
+    "avgMs": 3.53,
+    "p95Ms": 4.3,
+    "minMs": 3.1,
+    "maxMs": 5.1,
+    "fps": 283.7
   }
 ]

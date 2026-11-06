@@ -167,6 +167,7 @@ function syntheticSpectrum(bins: number, time: number): Uint8Array {
   engine.setLayers([viz, createTextLayer('Bench')])
 
   const context = (engine as unknown as { renderer?: { getContext?: () => WebGLRenderingContext } }).renderer?.getContext?.()
+  const pixel = new Uint8Array(4)
   const samples: number[] = []
   // Warm up: the first frames compile shaders and allocate bloom buffers, which would
   // otherwise dominate the average.
@@ -178,7 +179,7 @@ function syntheticSpectrum(bins: number, time: number): Uint8Array {
       bass: 0.5, mid: 0.4, treble: 0.3, rms: 0.4, beat: 0.4,
     })
   }
-  context?.finish()
+  context?.readPixels(0, 0, 1, 1, context.RGBA, context.UNSIGNED_BYTE, pixel)
   for (let i = 0; i < frames; i += 1) {
     const time = i / 30
     const frame = {
@@ -193,7 +194,9 @@ function syntheticSpectrum(bins: number, time: number): Uint8Array {
     }
     const start = performance.now()
     engine.render(frame)
-    context?.finish()
+    // readPixels forces the driver to finish the frame; gl.finish() is a no-op in Chromium
+    // and would report only command submission time.
+    context?.readPixels(0, 0, 1, 1, context.RGBA, context.UNSIGNED_BYTE, pixel)
     samples.push(performance.now() - start)
   }
   engine.dispose()

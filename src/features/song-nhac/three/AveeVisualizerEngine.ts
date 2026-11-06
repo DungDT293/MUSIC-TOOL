@@ -307,6 +307,8 @@ export class AveeVisualizerEngine {
   private camera: THREE.PerspectiveCamera
   private composer: EffectComposer
   private bloomPass: UnrealBloomPass
+  /** Bloom level from the theme/layer, modulated per frame by the beat. */
+  private baseBloom = 0.55
   private finishPass!: FinishPass
 
   private backgroundMesh: THREE.Mesh
@@ -575,7 +577,8 @@ export class AveeVisualizerEngine {
     ;(this.outerRing.material as THREE.LineBasicMaterial).color.setHex(palette.secondary)
     ;(this.particlePoints.material as THREE.ShaderMaterial).uniforms.uColor.value.setHex(palette.particles)
     ;(this.logoGlow.material as THREE.SpriteMaterial).color.setHex(palette.primary)
-    this.bloomPass.strength = palette.bloom * 0.55
+    this.baseBloom = palette.bloom * 0.55
+    this.bloomPass.strength = this.baseBloom
     // A layer with custom colours keeps them when the page theme changes.
     const viz = this.currentVisualizerLayer
     if (!viz || viz.type !== 'visualizer' || viz.colorMode === 'rainbow') {
@@ -986,7 +989,8 @@ export class AveeVisualizerEngine {
     if (layer.barCount !== this.barCount) this.rebuildBars(layer.barCount)
     this.visualizerSensitivity = layer.sensitivity
     this.visualizerSpeed = layer.speed
-    this.bloomPass.strength = layer.glowEnabled ? 0.22 + layer.glowIntensity * 0.55 : 0.12
+    this.baseBloom = layer.glowEnabled ? 0.22 + layer.glowIntensity * 0.55 : 0.12
+    this.bloomPass.strength = this.baseBloom
     let primaryColor = 0x00f2fe
     let secondaryColor = 0xfe0979
     if (layer.colorMode === 'rainbow') {
@@ -1443,6 +1447,11 @@ export class AveeVisualizerEngine {
 
     this.outerRing.rotation.z = timeSec * this.visualizerSpeed * 0.18
     this.backgroundMaterial.uniforms.uPulse.value = bass * intensity
+    // Beat grade: bloom swells on the kick, the outer ring nudges outward and the
+    // whole ring set gets a slow drift so a still frame never looks frozen.
+    this.bloomPass.strength = this.baseBloom * (1 + beat * 0.35 * intensity)
+    this.outerRing.scale.setScalar(1 + bass * 0.05 * intensity)
+    this.barsMesh.rotation.z = Math.sin(timeSec * 0.15) * 0.015 + beat * 0.008
     if (this.finishPass) {
       this.finishPass.time = timeSec
       // The grade breathes with the kick drum, just enough to feel alive.
