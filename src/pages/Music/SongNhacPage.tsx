@@ -12,6 +12,7 @@ import { useSongNhacLayerStore } from '../../features/song-nhac/studio/songNhacL
 import { WAVE_PRESETS } from '../../features/song-nhac/studio/builtInPresets'
 import { useCompositionEffects } from '../../features/song-nhac/studio/effectsStore'
 import { parseLyrics } from '../../features/song-nhac/studio/lyrics'
+import type { StudioLayer } from '../../features/song-nhac/studio/layerTypes'
 import type { SongNhacExportProgress } from '../../../shared/songNhacChannels'
 
 
@@ -305,7 +306,17 @@ export default function SongNhacPage() {
       cancelled = true
     }
   }, [audioPath])
-  const tracks = layers.filter((layer) => layer.type !== 'group')
+  const tracks = layers.filter((layer): layer is StudioLayer => layer.type !== 'group')
+  const tickStep = (() => {
+    for (const candidate of [5, 10, 15, 30, 60, 120, 300, 600]) {
+      if (audioDuration > 0 && audioDuration / candidate <= 12) return candidate
+    }
+    return 900
+  })()
+  const tickMarks =
+    audioDuration > 0
+      ? Array.from({ length: Math.floor(audioDuration / tickStep) + 1 }, (_, index) => index * tickStep)
+      : []
   const [isExporting, setIsExporting] = useState(false)
   const [exportWidth, setExportWidth] = useState(1920)
   const [exportHeight, setExportHeight] = useState(1080)
@@ -356,6 +367,7 @@ export default function SongNhacPage() {
       aveeEngineRef.current.setEffects(useCompositionEffects.getState())
       if (import.meta.env.DEV) {
         ;(window as unknown as Record<string, unknown>).__songNhacEngine = aveeEngineRef.current
+        ;(window as unknown as Record<string, unknown>).__songNhacStore = useSongNhacLayerStore
       }
       aveeEngineRef.current.setLayers(useSongNhacLayerStore.getState().layers)
       aveeEngineRef.current.setSelectedLayer(useSongNhacLayerStore.getState().selectedLayerId)
@@ -568,6 +580,57 @@ export default function SongNhacPage() {
     setMessage('Đã thêm file kéo thả vào composition.')
   }
 
+  /** Drag a clip edge (or its body) to retime a layer on the timeline. */
+  const beginClipDrag = (
+    event: React.PointerEvent<HTMLElement>,
+    layer: StudioLayer,
+    mode: 'start' | 'end' | 'move',
+  ) => {
+    const lane = (event.currentTarget as HTMLElement).closest('[data-lane]') as HTMLElement | null
+    if (!lane) return
+    event.preventDefault()
+    event.stopPropagation()
+    const rect = lane.getBoundingClientRect()
+    const total = audioDuration > 0 ? audioDuration : 1
+    const secPerPx = total / Math.max(1, rect.width)
+    const startX = event.clientX
+    const origStart = layer.timeRange ? Math.max(0, layer.timeRange.startSec) : 0
+    const origEnd =
+      layer.timeRange && Number.isFinite(layer.timeRange.endSec) ? Math.min(total, layer.timeRange.endSec) : total
+    const store = useSongNhacLayerStore.getState()
+    store.beginHistoryGesture()
+    const onMove = (moveEvent: PointerEvent) => {
+      const delta = (moveEvent.clientX - startX) * secPerPx
+      let start = origStart
+      let end = origEnd
+      if (mode === 'start') {
+        start = Math.max(0, Math.min(origEnd - 0.2, origStart + delta))
+      } else if (mode === 'end') {
+        end = Math.max(origStart + 0.2, Math.min(total, origEnd + delta))
+      } else {
+        const length = Math.max(0.2, origEnd - origStart)
+        start = Math.max(0, Math.min(total - length, origStart + delta))
+        end = start + length
+      }
+      const current = useSongNhacLayerStore.getState().layers.find((item) => item.id === layer.id)
+      const previous = current && current.type !== 'group' ? current.timeRange : undefined
+      useSongNhacLayerStore.getState().updateLayer(layer.id, {
+        timeRange: {
+          startSec: Number(start.toFixed(3)),
+          endSec: Number(end.toFixed(3)),
+          fadeInSec: previous?.fadeInSec ?? 0,
+          fadeOutSec: previous?.fadeOutSec ?? 0,
+        },
+      })
+    }
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      useSongNhacLayerStore.getState().endHistoryGesture()
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+  }
   const seekToTime = (seconds: number) => {
     const audio = audioRef.current
     if (!audio || !audioDuration) return
@@ -1013,7 +1076,30 @@ export default function SongNhacPage() {
                   </button>
                 )
               })}
-              {tracks.length === 0 && <div style={{ color: '#475569' }}>Chưa có lớp nào.</div>}
+              {tickMarks.length > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 2 }}>
+              <div style={{ width: 124, fontSize: 9, letterSpacing: 0.5, color: '#475569' }}>TIMELINE</div>
+              <div style={{ position: 'relative', flex: 1, height: 14 }}>
+                {tickMarks.map((tick) => (
+                  <div
+                    key={tick}
+                    style={{
+                      position: 'absolute',
+                      left: `${Math.min(100, (tick / audioDuration) * 100)}%`,
+                      top: 0,
+                      transform: 'translateX(-50%)',
+                      fontSize: 9,
+                      color: '#64748b',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {formatClock(tick)}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {tracks.length === 0 && <div style={{ color: '#475569' }}>Chưa có lớp nào.</div>}
             </div>
           )}
           {leftTab === 'effects' && (
@@ -1860,6 +1946,29 @@ export default function SongNhacPage() {
             />
           </div>
 
+          {tickMarks.length > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 2 }}>
+              <div style={{ width: 124, fontSize: 9, letterSpacing: 0.5, color: '#475569' }}>TIMELINE</div>
+              <div style={{ position: 'relative', flex: 1, height: 14 }}>
+                {tickMarks.map((tick) => (
+                  <div
+                    key={tick}
+                    style={{
+                      position: 'absolute',
+                      left: `${Math.min(100, (tick / audioDuration) * 100)}%`,
+                      top: 0,
+                      transform: 'translateX(-50%)',
+                      fontSize: 9,
+                      color: '#64748b',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {formatClock(tick)}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           {tracks.length === 0 && <div style={{ fontSize: 11, color: '#475569' }}>Chưa có lớp nào để hiển thị trên timeline.</div>}
 
           {tracks.map((layer) => {
@@ -1885,8 +1994,20 @@ export default function SongNhacPage() {
                 >
                   {layer.name}
                 </div>
-                <div style={{ position: 'relative', flex: 1, height: 18, background: '#0f172a', borderRadius: 4, border: '1px solid #1e293b' }}>
+                <div
+                  data-lane
+                  style={{
+                    position: 'relative',
+                    flex: 1,
+                    height: 18,
+                    background: '#0f172a',
+                    borderRadius: 4,
+                    border: '1px solid #1e293b',
+                  }}
+                >
                   <div
+                    onPointerDown={(event) => beginClipDrag(event, layer, 'move')}
+                    title={`${formatClock(start)} → ${formatClock(end)} (kéo để dời, kéo mép để đổi độ dài)`}
                     style={{
                       position: 'absolute',
                       left: `${left}%`,
@@ -1896,6 +2017,33 @@ export default function SongNhacPage() {
                       borderRadius: 4,
                       background: TRACK_COLORS[layer.type] ?? '#64748b',
                       opacity: layer.visible ? 0.85 : 0.3,
+                      cursor: 'grab',
+                    }}
+                  />
+                  <div
+                    onPointerDown={(event) => beginClipDrag(event, layer, 'start')}
+                    style={{
+                      position: 'absolute',
+                      left: `calc(${left}% - 3px)`,
+                      width: 7,
+                      top: 0,
+                      bottom: 0,
+                      cursor: 'ew-resize',
+                      borderRadius: 3,
+                      background: 'rgba(226, 232, 240, 0.55)',
+                    }}
+                  />
+                  <div
+                    onPointerDown={(event) => beginClipDrag(event, layer, 'end')}
+                    style={{
+                      position: 'absolute',
+                      left: `calc(${left + width}% - 4px)`,
+                      width: 7,
+                      top: 0,
+                      bottom: 0,
+                      cursor: 'ew-resize',
+                      borderRadius: 3,
+                      background: 'rgba(226, 232, 240, 0.55)',
                     }}
                   />
                   {(layer.automations ?? []).flatMap((automation) =>
