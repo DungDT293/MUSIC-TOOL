@@ -349,7 +349,15 @@ export function fitSize(
   fit: StudioFitMode,
 ): { width: number; height: number } {
   if (mediaWidth <= 0 || mediaHeight <= 0) return { width: stageWidth, height: stageHeight }
-  if (fit === 'free') return { width: mediaWidth, height: mediaHeight }
+  if (fit === 'free') {
+    // Native size, but never larger than the stage: a 4000px photo would otherwise
+    // flood the whole frame the moment you switch to "Tự do".
+    if (mediaWidth <= stageWidth && mediaHeight <= stageHeight) {
+      return { width: mediaWidth, height: mediaHeight }
+    }
+    const scale = Math.min(stageWidth / mediaWidth, stageHeight / mediaHeight)
+    return { width: mediaWidth * scale, height: mediaHeight * scale }
+  }
   const scaleX = stageWidth / mediaWidth
   const scaleY = stageHeight / mediaHeight
   const scale = fit === 'cover' ? Math.max(scaleX, scaleY) : Math.min(scaleX, scaleY)

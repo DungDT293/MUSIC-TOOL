@@ -338,6 +338,7 @@ export function InspectorPanel() {
           </Section>
         )}
 
+        {!isVisualizerLayer(layer) && (
         <Section title="Hiệu ứng hình ảnh" defaultOpen={false}>
           <SliderRow
             label="Độ mờ"
@@ -414,6 +415,7 @@ export function InspectorPanel() {
             Đặt lại hiệu ứng
           </button>
         </Section>
+        )}
 
         {isVisualizerLayer(layer) && (
           <>
@@ -491,6 +493,16 @@ export function InspectorPanel() {
               />
               <CheckRow label="Glow" checked={layer.glowEnabled} onChange={(glowEnabled) => updateLayerWithHistory(layer.id, { glowEnabled })} />
               <CheckRow label="Đối xứng" checked={layer.mirror} onChange={(mirror) => updateLayerWithHistory(layer.id, { mirror })} />
+              <SliderRow
+                label="Độ mờ sóng"
+                value={layer.opacity}
+                min={0}
+                max={1}
+                step={0.01}
+                format={(value) => `${Math.round(value * 100)}%`}
+                onChange={(opacity) => updateLayer(layer.id, { opacity })}
+                onCommit={commit}
+              />
             </Section>
           </>
         )}
