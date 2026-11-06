@@ -76,6 +76,8 @@ export interface LayerStoreState {
   copyLayer: (id: string) => void
   copySelectedLayers: () => void
   pasteLayers: () => void
+  /** Pastes the clipboard so its clips start at `timeSec` (no position offset). */
+  pasteLayersAt: (timeSec: number) => void
 
   reorderLayer: (from: number, to: number) => void
   moveLayerUp: (id: string) => void
@@ -363,6 +365,39 @@ export const useSongNhacLayerStore = create<LayerStoreState>((set, get) => ({
     })
   },
 
+  pasteLayersAt: (timeSec) => {
+    const state = get()
+    if (!state.clipboard.length) return
+    state.pushHistorySnapshot(state.layers)
+    const at = Math.max(0, timeSec)
+    const pasted = cloneLayers(state.clipboard).map((layer) => {
+      const copy = {
+        ...layer,
+        id: `${layer.type}-${Date.now().toString(36)}-p${Math.random().toString(36).slice(2, 5)}`,
+      } as StudioAnyLayer
+      if (isGroupLayer(copy)) {
+        copy.children = []
+      } else if (copy.timeRange) {
+        const length = Number.isFinite(copy.timeRange.endSec)
+          ? Math.max(0.2, copy.timeRange.endSec - copy.timeRange.startSec)
+          : undefined
+        copy.timeRange = {
+          ...copy.timeRange,
+          startSec: at,
+          endSec: length === undefined ? Number.POSITIVE_INFINITY : at + length,
+        }
+      } else if ("transform" in copy) {
+        // Untimed layers still get a visible offset so the copy is not hidden behind the original.
+        copy.transform = { ...copy.transform, x: copy.transform.x + PASTE_OFFSET, y: copy.transform.y + PASTE_OFFSET }
+      }
+      return copy
+    })
+    set({
+      layers: [...state.layers, ...pasted],
+      selectedLayerId: pasted[pasted.length - 1]?.id ?? null,
+      selectedIds: pasted.map((layer) => layer.id),
+    })
+  },
   reorderLayer: (from, to) => {
     const state = get()
     if (from === to || from < 0 || to < 0 || from >= state.layers.length || to >= state.layers.length) return

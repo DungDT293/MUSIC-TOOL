@@ -1227,55 +1227,6 @@ export default function SongNhacPage() {
     aveeEngineRef.current?.setSelectedLayer(selectedLayerId)
   }, [layers, selectedLayerId, webglFallback])
 
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      // Keep-alive router keeps this page mounted while hidden; only react on its route.
-      if (!window.location.hash.includes('/music/song-nhac')) return
-      const target = event.target as HTMLElement | null
-      if (
-        target &&
-        (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable)
-      ) {
-        return
-      }
-      const state = useSongNhacLayerStore.getState()
-      const modifier = event.ctrlKey || event.metaKey
-      const key = event.key.toLowerCase()
-      if (modifier && key === 'z') {
-        event.preventDefault()
-        if (event.shiftKey) state.redo()
-        else state.undo()
-        return
-      }
-      if (modifier && key === 'y') {
-        event.preventDefault()
-        state.redo()
-        return
-      }
-      if (modifier && key === 'c') {
-        state.copySelectedLayers()
-        return
-      }
-      if (modifier && key === 'v') {
-        state.pasteLayers()
-        return
-      }
-      if (modifier && key === 'd') {
-        event.preventDefault()
-        state.duplicateSelectedLayers()
-        return
-      }
-      if (event.key === 'Delete' || event.key === 'Backspace') {
-        state.removeSelectedLayers()
-        return
-      }
-      if (event.key === 'Escape') {
-        state.setSelection(null)
-      }
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [])
 
   const startExport = async () => {
     if (!audioPath || !outputPath || isExporting) return
@@ -1499,6 +1450,8 @@ export default function SongNhacPage() {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null
+      // The keep-alive router keeps this page mounted while hidden.
+      if (!window.location.hash.includes('/music/song-nhac')) return
       const tag = target?.tagName?.toLowerCase()
       if (tag === 'input' || tag === 'textarea' || tag === 'select' || target?.isContentEditable) return
       const mod = event.ctrlKey || event.metaKey
@@ -1522,7 +1475,15 @@ export default function SongNhacPage() {
         setMessage(`Đã sao chép ${store.selectedIds.length} lớp.`)
         return
       }
+      if (mod && event.shiftKey && event.key.toLowerCase() === 'v') {
+        ;(window as unknown as Record<string, unknown>).__branch = 'shift-v'
+        event.preventDefault()
+        store.pasteLayersAt(store.currentTimeSec)
+        setMessage(`Đã dán tại ${store.currentTimeSec.toFixed(2)}s.`)
+        return
+      }
       if (mod && event.key.toLowerCase() === 'v') {
+        ;(window as unknown as Record<string, unknown>).__branch = 'plain-v'
         event.preventDefault()
         store.pasteLayers()
         setMessage('Đã dán lớp.')
@@ -1536,6 +1497,10 @@ export default function SongNhacPage() {
       if (mod && event.key.toLowerCase() === 's') {
         event.preventDefault()
         void saveProject()
+        return
+      }
+      if (event.key === 'Escape') {
+        store.setSelection(null)
         return
       }
       if (event.key === 'Delete' || event.key === 'Backspace') {

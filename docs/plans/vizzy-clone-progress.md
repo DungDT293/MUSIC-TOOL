@@ -47,6 +47,7 @@ Mục tiêu: clone toàn bộ chức năng editor Vizzy vào Sóng nhạc. Mỗi
 | Thumbnail render thật cho preset tự tạo | ✅ |
 | Phím tắt editor (Space, ←/→, Ctrl+D, Delete, Ctrl+Z/Y, S, Ctrl+S, **Ctrl+C/V**) | ✅ |
 | Sao chép / dán lớp (giữ timeRange, offset 30px) | ✅ |
+| Dán tại playhead (Ctrl+Shift+V) | ✅ |
 
 ## Ngoài phạm vi Vizzy (làm cho quy trình số lượng lớn)
 
