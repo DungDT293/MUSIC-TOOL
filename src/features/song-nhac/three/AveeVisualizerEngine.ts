@@ -360,6 +360,7 @@ export class AveeVisualizerEngine {
   private visualizerGroup = new THREE.Group()
   private layerNodes = new Map<string, LayerNode>()
   private extraVisualizers = new Map<string, { ring: SpectrumRing; layer: VisualizerLayer }>()
+  private spectrumRings = new Map<string, { ring: SpectrumRing; config: string }>()
   private waveRings = new Map<string, { ring: SpectrumRing; layer: ImageLayer }>()
   private fxStyle: WaveStyleObject | null = null
   private fxStyleKey = ''
@@ -1084,6 +1085,53 @@ export class AveeVisualizerEngine {
     this.visualizerGroup.scale.set(t.scaleX * (t.flipX ? -1 : 1), t.scaleY * (t.flipY ? -1 : 1), 1)
     this.visualizerGroup.rotation.z = (t.rotation * Math.PI) / 180
     this.visualizerGroup.visible = layer.visible
+    this.syncSpectrumRings(layer)
+  }
+
+  /** Creates/disposes the extra spectrum rings requested by the visualizer layer. */
+  private syncSpectrumRings(layer: VisualizerLayer): void {
+    const wanted = layer.spectrumLayers ?? []
+    const seen = new Set<string>()
+    for (const config of wanted) {
+      const key = `${layer.id}:${config.id}`
+      seen.add(key)
+      const signature = `${config.bandStart}|${config.bandEnd}|${config.color1}|${config.color2}|${config.radius}|${config.barCount}`
+      const existing = this.spectrumRings.get(key)
+      if (existing && existing.config === signature) continue
+      if (existing) {
+        this.scene.remove(existing.ring.group)
+        existing.ring.dispose()
+        this.spectrumRings.delete(key)
+      }
+      const ring = new SpectrumRing({
+        count: config.barCount,
+        radius: Math.max(0.2, config.radius),
+        colorA: new THREE.Color(config.color1).getHex(),
+        colorB: new THREE.Color(config.color2).getHex(),
+      })
+      ring.group.position.set(0, 0, -1.6)
+      this.scene.add(ring.group)
+      this.spectrumRings.set(key, { ring, config: signature })
+    }
+    for (const [key, entry] of Array.from(this.spectrumRings.entries())) {
+      if (seen.has(key)) continue
+      this.scene.remove(entry.ring.group)
+      entry.ring.dispose()
+      this.spectrumRings.delete(key)
+    }
+  }
+
+  private updateSpectrumRings(layer: VisualizerLayer, frame: SongNhacAudioFrame): void {
+    for (const config of layer.spectrumLayers ?? []) {
+      const entry = this.spectrumRings.get(`${layer.id}:${config.id}`)
+      if (!entry) continue
+      // Each ring listens to its own slice of the spectrum.
+      const data = frame.frequencyData
+      const start = Math.max(0, Math.min(data.length - 1, Math.floor(config.bandStart * data.length)))
+      const end = Math.max(start + 1, Math.min(data.length, Math.ceil(config.bandEnd * data.length)))
+      const band = data.subarray(start, end)
+      entry.ring.update({ ...frame, frequencyData: band }, config.sensitivity)
+    }
   }
 
   /** Full-frame shader scenes (grid / polar) drawn behind every layer. */
@@ -1929,6 +1977,7 @@ export class AveeVisualizerEngine {
       )
     } else if (this.options.showBars) {
       this.updateBars(frame)
+    if (this.currentVisualizerLayer?.type === 'visualizer') this.updateSpectrumRings(this.currentVisualizerLayer, frame)
     }
     if (this.options.showParticles) this.positionParticles(timeSec)
 

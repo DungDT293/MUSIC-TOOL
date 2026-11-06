@@ -193,6 +193,35 @@ export interface TextLayer extends StudioLayerBase {
   letterSpacing: number
 }
 
+/** One extra spectrum ring drawn on top of the main visualizer. */
+export interface SpectrumLayer {
+  id: string
+  name: string
+  /** 0..1 of the spectrum. */
+  bandStart: number
+  bandEnd: number
+  color1: string
+  color2: string
+  /** Ring radius in stage units. */
+  radius: number
+  barCount: number
+  sensitivity: number
+}
+
+export function createSpectrumLayer(index = 1): SpectrumLayer {
+  return {
+    id: `spec-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`,
+    name: `Dải ${index}`,
+    bandStart: 0,
+    bandEnd: 0.5,
+    color1: '#22d3ee',
+    color2: '#f472b6',
+    radius: 1.6,
+    barCount: 96,
+    sensitivity: 1,
+  }
+}
+
 export interface VisualizerLayer extends StudioLayerBase {
   type: 'visualizer'
   waveStyle: string
@@ -207,6 +236,8 @@ export interface VisualizerLayer extends StudioLayerBase {
   glowIntensity: number
   mirror: boolean
   sensitivity: number
+  /** Extra rings, each listening to its own frequency band. */
+  spectrumLayers?: SpectrumLayer[]
 }
 
 export interface LyricLine {

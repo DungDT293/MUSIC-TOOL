@@ -19,7 +19,7 @@ Mục tiêu: clone toàn bộ chức năng editor Vizzy vào Sóng nhạc. Mỗi
 
 | Object | Vizzy | Trạng thái |
 |---|---|---|
-| **Visualizer** | preset, spectrum layers, general, position, basics | 🟡 ~12 tham số (preset, màu, sóng, glow, thời gian) |
+| **Visualizer** | preset, spectrum layers, general, position, basics | ✅ preset, màu, sóng, glow, thời gian + **Spectrum layers** (nhiều vòng phổ, mỗi vòng một dải tần/màu/bán kính) |
 | **Particles** | shape 5 kiểu, color, mirror, constant size, front/back limit + time, alpha, amount, opacity range, size range, fade in/out, random, behaviour, origin, transform | 🟡 15 tham số: shape 3 kiểu, màu, amount, size/opacity range, speed, spread, gravity, beat, mirror, **origin X/Y, mờ dần vào/ra, cỡ cố định** (thiếu front/back limit, random, behaviour) |
 | **Image** | appearance, blending, flatten, transform | ✅ thêm blend, anchor, bo góc, viền, bóng đổ |
 | **Video** | như image | ✅ cùng bộ với image |

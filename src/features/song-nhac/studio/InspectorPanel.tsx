@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import {
   FONT_FAMILIES,
+  createSpectrumLayer,
   buildCssFilter,
   DEFAULT_FILTER,
   isGroupLayer,
@@ -524,6 +525,95 @@ export function InspectorPanel() {
             )
           })()}
         </Section>
+
+        {isVisualizerLayer(layer) && (
+          <Section title="Spectrum layers" defaultOpen={false}>
+            {(() => {
+              const spectrum = layer.spectrumLayers ?? []
+              const patch = (id: string, next: Record<string, unknown>) =>
+                updateLayerWithHistory(layer.id, {
+                  spectrumLayers: spectrum.map((item) => (item.id === id ? { ...item, ...next } : item)),
+                } as never)
+              return (
+                <>
+                  {spectrum.map((item) => (
+                    <div key={item.id} style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: '6px 0', borderTop: '1px solid #1e293b' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <span style={{ flex: 1, fontSize: 11, color: '#cbd5e1' }}>{item.name}</span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            updateLayerWithHistory(layer.id, {
+                              spectrumLayers: spectrum.filter((entry) => entry.id !== item.id),
+                            } as never)
+                          }
+                          style={{ ...miniButtonStyle, color: '#fca5a5' }}
+                        >
+                          x
+                        </button>
+                      </div>
+                      <SliderRow
+                        label="Bắt đầu"
+                        value={item.bandStart}
+                        min={0}
+                        max={0.95}
+                        step={0.01}
+                        format={(value) => `${Math.round(value * 100)}%`}
+                        onChange={(bandStart) => patch(item.id, { bandStart: Math.min(bandStart, item.bandEnd - 0.02) })}
+                        onCommit={commit}
+                      />
+                      <SliderRow
+                        label="Kết thúc"
+                        value={item.bandEnd}
+                        min={0.05}
+                        max={1}
+                        step={0.01}
+                        format={(value) => `${Math.round(value * 100)}%`}
+                        onChange={(bandEnd) => patch(item.id, { bandEnd: Math.max(bandEnd, item.bandStart + 0.02) })}
+                        onCommit={commit}
+                      />
+                      <SliderRow
+                        label="Bán kính"
+                        value={item.radius}
+                        min={0.4}
+                        max={4}
+                        step={0.05}
+                        format={(value) => value.toFixed(2)}
+                        onChange={(radius) => patch(item.id, { radius })}
+                        onCommit={commit}
+                      />
+                      <div style={{ display: 'flex', gap: 6 }}>
+                        <input
+                          type="color"
+                          value={item.color1}
+                          onChange={(event) => patch(item.id, { color1: event.target.value })}
+                          style={{ flex: 1, height: 22, background: 'transparent', border: '1px solid #334155', borderRadius: 4 }}
+                        />
+                        <input
+                          type="color"
+                          value={item.color2}
+                          onChange={(event) => patch(item.id, { color2: event.target.value })}
+                          style={{ flex: 1, height: 22, background: 'transparent', border: '1px solid #334155', borderRadius: 4 }}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      updateLayerWithHistory(layer.id, {
+                        spectrumLayers: [...spectrum, createSpectrumLayer(spectrum.length + 1)],
+                      } as never)
+                    }
+                    style={buttonStyle}
+                  >
+                    Thêm dải phổ
+                  </button>
+                </>
+              )
+            })()}
+          </Section>
+        )}
 
         <Section title="Analyzer (dải tần)" defaultOpen={false}>
           {(() => {
