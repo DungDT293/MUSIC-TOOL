@@ -67,3 +67,21 @@ Mục tiêu: clone toàn bộ chức năng editor Vizzy vào Sóng nhạc. Mỗi
 - Ảnh/video: bo góc, viền, bóng đổ được **bake vào texture** (canvas 2D) nên không tốn shader.
 - Blend mode áp lên `MeshBasicMaterial.blending`; screen dùng custom blend.
 - Effects chạy trong `finishPass` (1 pass duy nhất trước OutputPass) và đi theo cả đường xuất video.
+
+## Kiểm chứng cuối (smoke test end-to-end)
+
+Dựng một project đầy đủ qua store (visualizer + 2 spectrum layer + particles chế độ xoáy + text 2 dòng
+căn giữa giãn chữ + effects blur 15%) rồi xuất 3 giây qua hàng đợi:
+
+- File: `smoke-*.mp4`, 0.72 MB
+- **640×360, 45 frame** (3.000s @ 15fps), **h264 + aac**, 2023 kbps
+- ffprobe xác nhận đúng thời lượng và có audio
+
+## Còn thiếu (ghi nhận trung thực)
+
+| Mục | Ghi chú |
+|---|---|
+| Group layer áp transform cho con | Nhóm đang chỉ là tổ chức cây, engine chưa nhân transform của nhóm vào con |
+| Keyframe easing (bezier) | Hiện chỉ nội suy tuyến tính |
+| Vizzy "Explore creations" / publish | Không thuộc phạm vi app offline |
+| 48 preset built-in của Vizzy | Mình có 15 preset + preset tự tạo |
