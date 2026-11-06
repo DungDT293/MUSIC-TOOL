@@ -125,6 +125,9 @@ function muxFrames(session: FrameSession): Promise<void> {
     ...(request.durationSec && request.durationSec > 0 ? ['-t', String(request.durationSec)] : []),
     '-map', '0:v:0', '-map', '1:a:0',
     '-c:v', 'copy',
+    // Tag the colour space explicitly: WebCodecs writes yuv420p but no colr box, and
+    // players then guess (usually bt709, but not always).
+    '-color_primaries', 'bt709', '-color_trc', 'bt709', '-colorspace', 'bt709',
     '-c:a', 'aac', '-b:a', '192k', '-ar', '48000',
     '-movflags', '+faststart',
     request.outputPath,
@@ -138,10 +141,38 @@ function muxFrames(session: FrameSession): Promise<void> {
     child.once('error', reject)
     child.once('close', (code) => {
       if (session.cancelled) return reject(new Error('Đã hủy xuất video.'))
-      if (code === 0) resolve()
-      else reject(new Error(stderr.trim().slice(-800) || `FFmpeg mux lỗi (code ${code}).`))
+      if (code === 0) return resolve()
+      reject(new Error(stderr.trim().slice(-800) || `FFmpeg mux lỗi (code ${code}).`))
     })
   })
+}
+
+/** Fails loudly when the muxed file has no audio track: a silent export is worse than an error. */
+async function assertMuxedAudio(outputPath: string): Promise<void> {
+  const { ffprobe } = getFfmpegPaths()
+  const streams = await new Promise<string>((resolve, reject) => {
+    const child = spawn(
+      ffprobe,
+      ['-v', 'error', '-select_streams', 'a', '-show_entries', 'stream=index', '-of', 'csv=p=0', outputPath],
+      { windowsHide: true },
+    )
+    let out = ''
+    let err = ''
+    child.stdout.on('data', (chunk: Buffer) => {
+      out += chunk.toString('utf8')
+    })
+    child.stderr.on('data', (chunk: Buffer) => {
+      err += chunk.toString('utf8')
+    })
+    child.once('error', reject)
+    child.once('close', (code) => {
+      if (code === 0) resolve(out.trim())
+      else reject(new Error(err.trim().slice(-400) || `FFprobe lỗi (code ${code}).`))
+    })
+  })
+  if (!streams) {
+    throw new Error('Video xuất ra không có âm thanh. Hãy thử lại; nếu vẫn lỗi, kiểm tra file audio nguồn.')
+  }
 }
 
 function cleanupSession(requestId: string): void {
@@ -207,6 +238,7 @@ function registerFrameHandlers(): void {
       await new Promise<void>((resolve) => session.stream.end(resolve))
       if (session.receivedBytes === 0) throw new Error('Không nhận được frame nào từ renderer.')
       await muxFrames(session)
+      await assertMuxedAudio(session.request.outputPath)
       return { success: true, requestId: id, outputPath: session.request.outputPath }
     } catch (error) {
       return { success: false, requestId: id, error: error instanceof Error ? error.message : String(error) }

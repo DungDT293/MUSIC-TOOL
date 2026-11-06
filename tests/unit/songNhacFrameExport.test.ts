@@ -82,12 +82,15 @@ describe('Song Nhạc frame export IPC', () => {
 
     const probe = spawnSync(
       FFPROBE,
-      ['-v', 'error', '-show_entries', 'format=duration:stream=codec_name,width,height', '-of', 'json', outputPath],
+      ['-v', 'error', '-show_entries', 'format=duration:stream=codec_name,width,height,color_space,color_transfer,color_primaries', '-of', 'json', outputPath],
       { encoding: 'utf8' },
     )
     const parsed = JSON.parse(probe.stdout) as { streams: Array<{ codec_name: string; width?: number; height?: number }>; format: { duration: string } }
     expect(parsed.streams.some((item) => item.codec_name === 'h264')).toBe(true)
     expect(parsed.streams.some((item) => item.codec_name === 'aac')).toBe(true)
+    const video = parsed.streams.find((item) => item.codec_name === 'h264')
+    expect(video?.color_space).toBe('bt709')
+    expect(video?.color_primaries).toBe('bt709')
     expect(Number(parsed.format.duration)).toBeGreaterThan(0.8)
   }, 120000)
 
