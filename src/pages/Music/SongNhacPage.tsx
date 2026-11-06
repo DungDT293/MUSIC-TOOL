@@ -396,6 +396,7 @@ export default function SongNhacPage() {
         ;(window as unknown as Record<string, unknown>).__songNhacStore = useSongNhacLayerStore
         ;(window as unknown as Record<string, unknown>).__songNhacMedia = useMediaLibrary
         ;(window as unknown as Record<string, unknown>).__songNhacQueue = useExportQueue
+        ;(window as unknown as Record<string, unknown>).__songNhacBatch = enqueueBatchFiles
         ;(window as unknown as Record<string, unknown>).__songNhacHistory = useProjectHistory
       }
       aveeEngineRef.current.setLayers(useSongNhacLayerStore.getState().layers)
@@ -1179,6 +1180,31 @@ export default function SongNhacPage() {
     }
   }
 
+  const buildJobSnapshot = () => ({
+    width: exportWidth,
+    height: exportHeight,
+    fps: exportFps,
+    codec: exportCodec,
+    bitrateTier,
+    theme,
+    intensity,
+    layers: layers.map((layer) => JSON.parse(JSON.stringify(layer)) as (typeof layers)[number]),
+    effects: {
+      blur: effects.blur,
+      alpha: effects.alpha,
+      tint: effects.tint,
+      tintStrength: effects.tintStrength,
+      shake: effects.shake,
+      mirror: effects.mirror,
+      zoom: effects.zoom,
+      fxaa: effects.fxaa,
+      blurMode: effects.blurMode,
+    },
+    // Batch/jobs inherit the export range so a section can be rendered too.
+    rangeStartSec: typeof rangeStart === 'number' ? rangeStart : undefined,
+    rangeEndSec: typeof rangeEnd === 'number' ? rangeEnd : undefined,
+  })
+
   const enqueueCurrentJob = async () => {
     if (!audioPath) {
       setMessage('Chưa chọn file nhạc để xếp hàng đợi.')
@@ -1192,33 +1218,35 @@ export default function SongNhacPage() {
       setOutputPath(target)
     }
     const name = target.split(/[\\/]/).pop() || 'Video'
-    useExportQueue.getState().enqueue({
-      name,
-      audioPath,
-      outputPath: target,
-      snapshot: {
-        width: exportWidth,
-        height: exportHeight,
-        fps: exportFps,
-        codec: exportCodec,
-        bitrateTier,
-        theme,
-        intensity,
-        layers: layers.map((layer) => JSON.parse(JSON.stringify(layer)) as typeof layer),
-        effects: {
-          blur: effects.blur,
-          alpha: effects.alpha,
-          tint: effects.tint,
-          tintStrength: effects.tintStrength,
-          shake: effects.shake,
-          mirror: effects.mirror,
-          zoom: effects.zoom,
-          fxaa: effects.fxaa,
-          blurMode: effects.blurMode,
-        },
-      },
-    })
+    useExportQueue.getState().enqueue({ name, audioPath, outputPath: target, snapshot: buildJobSnapshot() })
     setMessage(`Đã thêm vào hàng đợi: ${name}`)
+  }
+
+  /**
+   * Batch export: pick any number of tracks and one output folder, then queue one job per
+   * track using the current project as the template.
+   */
+  /** Queues one job per track, using the current project as the template. */
+  const enqueueBatchFiles = (files: string[], folder: string) => {
+    const snapshot = buildJobSnapshot()
+    const separator = folder.includes('\\') ? '\\' : '/'
+    let added = 0
+    for (const file of files) {
+      const base = (file.split(/[\\/]/).pop() || 'track').replace(/\.[^.]+$/, '')
+      const outputPath = `${folder}${folder.endsWith(separator) ? '' : separator}${base}.mp4`
+      useExportQueue.getState().enqueue({ name: `${base}.mp4`, audioPath: file, outputPath, snapshot })
+      added += 1
+    }
+    setMessage(`Đã thêm ${added} bài vào hàng đợi (thư mục: ${folder}).`)
+    return added
+  }
+
+  const enqueueBatch = async () => {
+    const files = await window.api.selectAudioFilesMulti()
+    if (!files?.length) return
+    const folder = await window.api.selectFolder()
+    if (!folder) return
+    enqueueBatchFiles(files, folder)
   }
 
   const runQueuedJob = async (job: ExportJob) => {
@@ -1738,6 +1766,9 @@ export default function SongNhacPage() {
               </div>
               <button type="button" onClick={enqueueCurrentJob} style={projectButtonStyle}>
                 Thêm vào hàng đợi
+              </button>
+              <button type="button" onClick={enqueueBatch} style={projectButtonStyle}>
+                Xuất hàng loạt (nhiều bài)…
               </button>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 {queueJobs.map((job) => (

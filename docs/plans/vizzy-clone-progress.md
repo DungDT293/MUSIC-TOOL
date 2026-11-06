@@ -50,6 +50,7 @@ Mục tiêu: clone toàn bộ chức năng editor Vizzy vào Sóng nhạc. Mỗi
 |---|---|
 | Hàng đợi export (nhiều video, xuất lần lượt, tiến độ từng cái, huỷ) | ✅ |
 | Xuất theo khoảng thời gian trong hàng đợi | ✅ |
+| Xuất hàng loạt: chọn nhiều bài + 1 thư mục, mỗi bài 1 job | ✅ |
 
 ## Ghi chú kỹ thuật
 
