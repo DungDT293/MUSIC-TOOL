@@ -482,6 +482,16 @@ export default function SongNhacPage() {
     }
   }, [])
 
+  const seekTo = (event: React.MouseEvent<HTMLDivElement>) => {
+    const audio = audioRef.current
+    if (!audio || !audioDuration) return
+    const rect = event.currentTarget.getBoundingClientRect()
+    const ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / Math.max(1, rect.width)))
+    const next = ratio * audioDuration
+    audio.currentTime = next
+    setPlayhead(next)
+  }
+
   const applyWavePreset = (presetId: string) => {
     const preset = WAVE_PRESETS.find((item) => item.id === presetId)
     if (!preset) return
@@ -1436,6 +1446,7 @@ export default function SongNhacPage() {
         <div style={{ position: 'relative', paddingLeft: 132 }}>
           {waveformUrl && (
             <div
+              onClick={seekTo}
               style={{
                 height: 54,
                 marginBottom: 6,
@@ -1443,6 +1454,7 @@ export default function SongNhacPage() {
                 border: '1px solid #1e293b',
                 borderRadius: 6,
                 overflow: 'hidden',
+                cursor: audioDuration > 0 ? 'pointer' : 'default',
               }}
             >
               <img
