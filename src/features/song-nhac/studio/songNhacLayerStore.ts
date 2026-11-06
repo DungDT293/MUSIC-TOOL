@@ -8,6 +8,7 @@ import {
   createTextLayer,
   createVideoLayer,
   createVisualizerLayer,
+  createParticlesLayer,
   isGroupLayer,
   type StudioAnyLayer,
 } from './layerTypes'
@@ -54,6 +55,7 @@ export interface LayerStoreState {
   addLogoLayer: (src?: string) => string
   addIntroLayer: (durationSec?: number) => string
   addOutroLayer: (totalSec: number, durationSec?: number) => string
+  addParticlesLayer: (name?: string) => string
   addGroup: () => string
 
   removeLayer: (id: string) => void
@@ -192,6 +194,14 @@ export const useSongNhacLayerStore = create<LayerStoreState>((set, get) => ({
 
   addOutroLayer: (totalSec, durationSec = 5) => {
     const layer = createOutroLayer(totalSec, durationSec)
+    const state = get()
+    state.pushHistorySnapshot(state.layers)
+    set({ layers: [...state.layers, layer], selectedLayerId: layer.id, selectedIds: [layer.id] })
+    return layer.id
+  },
+
+  addParticlesLayer: (name) => {
+    const layer = createParticlesLayer(name || 'Hạt')
     const state = get()
     state.pushHistorySnapshot(state.layers)
     set({ layers: [...state.layers, layer], selectedLayerId: layer.id, selectedIds: [layer.id] })

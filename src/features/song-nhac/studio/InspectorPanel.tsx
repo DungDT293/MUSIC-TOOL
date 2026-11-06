@@ -353,6 +353,124 @@ export function InspectorPanel() {
           </Section>
         )}
 
+        {layer.type === 'particles' && (
+          <Section title="Hạt (Particles)">
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={labelStyle}>Hình</span>
+              <select
+                style={inputStyle}
+                value={layer.shape}
+                onChange={(event) => updateLayerWithHistory(layer.id, { shape: event.target.value as 'dot' | 'square' | 'star' })}
+              >
+                <option value="dot">Tròn mềm</option>
+                <option value="square">Vuông</option>
+                <option value="star">Sao</option>
+              </select>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={labelStyle}>Màu</span>
+              <input
+                type="color"
+                value={layer.color}
+                onChange={(event) => updateLayer(layer.id, { color: event.target.value })}
+                onBlur={commit}
+                style={{ flex: 1, height: 26, background: 'transparent', border: '1px solid #334155', borderRadius: 6 }}
+              />
+            </div>
+            <SliderRow
+              label="Số lượng"
+              value={layer.amount}
+              min={20}
+              max={4000}
+              step={20}
+              format={(value) => `${Math.round(value)}`}
+              onChange={(amount) => updateLayer(layer.id, { amount })}
+              onCommit={commit}
+            />
+            <SliderRow
+              label="Cỡ nhỏ nhất"
+              value={layer.sizeMin}
+              min={0.1}
+              max={6}
+              step={0.1}
+              format={(value) => value.toFixed(1)}
+              onChange={(sizeMin) => updateLayer(layer.id, { sizeMin })}
+              onCommit={commit}
+            />
+            <SliderRow
+              label="Cỡ lớn nhất"
+              value={layer.sizeMax}
+              min={0.2}
+              max={10}
+              step={0.1}
+              format={(value) => value.toFixed(1)}
+              onChange={(sizeMax) => updateLayer(layer.id, { sizeMax })}
+              onCommit={commit}
+            />
+            <SliderRow
+              label="Mờ tối thiểu"
+              value={layer.opacityMin}
+              min={0}
+              max={1}
+              step={0.01}
+              format={(value) => `${Math.round(value * 100)}%`}
+              onChange={(opacityMin) => updateLayer(layer.id, { opacityMin })}
+              onCommit={commit}
+            />
+            <SliderRow
+              label="Mờ tối đa"
+              value={layer.opacityMax}
+              min={0}
+              max={1}
+              step={0.01}
+              format={(value) => `${Math.round(value * 100)}%`}
+              onChange={(opacityMax) => updateLayer(layer.id, { opacityMax })}
+              onCommit={commit}
+            />
+            <SliderRow
+              label="Tốc độ trôi"
+              value={layer.speed}
+              min={-1}
+              max={2}
+              step={0.05}
+              format={(value) => value.toFixed(2)}
+              onChange={(speed) => updateLayer(layer.id, { speed })}
+              onCommit={commit}
+            />
+            <SliderRow
+              label="Độ trải ngang"
+              value={layer.spread}
+              min={1}
+              max={12}
+              step={0.2}
+              format={(value) => value.toFixed(1)}
+              onChange={(spread) => updateLayer(layer.id, { spread })}
+              onCommit={commit}
+            />
+            <SliderRow
+              label="Trọng lực"
+              value={layer.gravity}
+              min={-0.5}
+              max={0.5}
+              step={0.01}
+              format={(value) => value.toFixed(2)}
+              onChange={(gravity) => updateLayer(layer.id, { gravity })}
+              onCommit={commit}
+            />
+            <SliderRow
+              label="Nở theo beat"
+              value={layer.beatBoost}
+              min={0}
+              max={2}
+              step={0.05}
+              format={(value) => `${Math.round(value * 100)}%`}
+              onChange={(beatBoost) => updateLayer(layer.id, { beatBoost })}
+              onCommit={commit}
+            />
+            <CheckRow label="Đối xứng" checked={layer.mirror} onChange={(mirror) => updateLayerWithHistory(layer.id, { mirror })} />
+          </Section>
+        )}
+
         {!isVisualizerLayer(layer) && (
         <Section title="Hiệu ứng hình ảnh" defaultOpen={false}>
           <SliderRow

@@ -6,7 +6,7 @@
  * so a layout keeps its proportions at any resolution.
  */
 
-export type StudioLayerType = 'image' | 'text' | 'visualizer' | 'video' | 'group'
+export type StudioLayerType = 'image' | 'text' | 'visualizer' | 'video' | 'group' | 'particles'
 export type StudioFitMode = 'free' | 'contain' | 'cover'
 export type StudioLayerRole = 'normal' | 'watermark'
 export type StudioColorMode = 'rainbow' | 'solid' | 'gradient'
@@ -125,7 +125,7 @@ export interface GroupLayer {
   children: string[]
 }
 
-export type StudioLayer = ImageLayer | VideoLayer | TextLayer | VisualizerLayer
+export type StudioLayer = ImageLayer | VideoLayer | TextLayer | VisualizerLayer | ParticlesLayer
 export type StudioAnyLayer = StudioLayer | GroupLayer
 
 export const DEFAULT_TRANSFORM: StudioTransform = {
@@ -307,6 +307,47 @@ export function createTextLayer(text = 'Tên bài hát'): TextLayer {
     textShadowBlur: 0,
     textShadowOffsetX: 0,
     textShadowOffsetY: 2,
+  }
+}
+
+export interface ParticlesLayer extends StudioLayerBase {
+  type: 'particles'
+  /** Dot / square / star drawn by the point sprite. */
+  shape: 'dot' | 'square' | 'star'
+  color: string
+  /** Number of points. */
+  amount: number
+  sizeMin: number
+  sizeMax: number
+  opacityMin: number
+  opacityMax: number
+  /** Vertical drift per second (world units). */
+  speed: number
+  /** Horizontal spread of the field. */
+  spread: number
+  /** Pulls particles down; negative floats up. */
+  gravity: number
+  /** Extra size on the kick drum, 0 = none. */
+  beatBoost: number
+  mirror: boolean
+}
+
+export function createParticlesLayer(name = 'Hạt'): ParticlesLayer {
+  return {
+    ...createBase('particles', name),
+    type: 'particles',
+    shape: 'dot',
+    color: '#a5f3fc',
+    amount: 600,
+    sizeMin: 0.6,
+    sizeMax: 2.6,
+    opacityMin: 0.35,
+    opacityMax: 0.9,
+    speed: 0.35,
+    spread: 5.2,
+    gravity: 0.02,
+    beatBoost: 0.6,
+    mirror: true,
   }
 }
 

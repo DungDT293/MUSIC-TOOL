@@ -18,6 +18,7 @@ import {
   type StudioLayer,
   type VisualizerLayer,
   type ImageLayer,
+  type ParticlesLayer,
 } from '../studio/layerTypes'
 
 interface LayerNode {
@@ -356,6 +357,8 @@ export class AveeVisualizerEngine {
   private selectionFrame!: THREE.LineLoop
   private selectedLayerId: string | null = null
   private contextLost = false
+  private lastFrame: SongNhacAudioFrame | null = null
+  private lastDelta = 1 / 60
   private visualizerSensitivity = 1
   private visualizerSpeed = 1
   private stageWidth = 10
@@ -977,6 +980,9 @@ export class AveeVisualizerEngine {
   private layerKey(layer: Exclude<StudioLayer, { type: 'visualizer' }>): string {
     // Colour filters are baked into the texture, so a change has to rebuild the node.
     const filterKey = `${layer.filter.brightness}|${layer.filter.contrast}|${layer.filter.saturation}|${layer.filter.hue}|${layer.filter.grayscale}|${layer.filter.sepia}|${layer.filter.blur}`
+    if (layer.type === 'particles') {
+      return `particles:${layer.amount}:${layer.shape}:${layer.color}:${layer.sizeMin}:${layer.sizeMax}`
+    }
     if (layer.type === 'text') {
       return `text:${layer.text}|${layer.fontSize}|${layer.color}|${layer.strokeColor}|${layer.strokeWidth}|${layer.fontWeight}|${layer.italic}|${layer.fontFamily}|${layer.textShadowBlur}|${layer.textShadowColor}|${layer.textShadowOffsetX}|${layer.textShadowOffsetY}|${filterKey}`
     }
@@ -1092,13 +1098,16 @@ export class AveeVisualizerEngine {
     )
     node.object.rotation.z = (t.rotation * Math.PI) / 180
     node.object.visible = layer.visible
-    const material = (node.object as THREE.Mesh).material as THREE.MeshBasicMaterial | undefined
+    // Particles use a ShaderMaterial without a `color` uniform exposed as Material.color,
+    // so only tint materials that actually have one.
+    const material = (node.object as THREE.Mesh).material as THREE.MeshBasicMaterial | THREE.ShaderMaterial | undefined
     if (material) {
       material.opacity = layer.filter.opacity
       // Media plates sit under a global bloom pass; full brightness washes the frame out.
       // Colour filters are baked into the texture already, so only dim here.
       const dim = layer.type === 'image' || layer.type === 'video' ? 0.65 : 1
-      material.color.setScalar(dim)
+      const color = (material as THREE.MeshBasicMaterial).color
+      if (color && typeof color.setScalar === 'function') color.setScalar(dim)
     }
   }
 
@@ -1199,6 +1208,7 @@ export class AveeVisualizerEngine {
 
   private createLayerNode(layer: Exclude<StudioLayer, { type: 'visualizer' }>): LayerNode | null {
     if (layer.type === 'text') return this.createTextNode(layer)
+    if (layer.type === 'particles') return this.createParticlesNode(layer)
 
     const material = new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false })
     const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), material)
@@ -1315,6 +1325,112 @@ export class AveeVisualizerEngine {
     return node
   }
 
+  /**
+   * Particle field owned by a layer: the panel exposes amount, shape, size/opacity
+   * ranges, drift, spread and a kick-drum boost, so it behaves like the reference
+   * editor's Particles object instead of a fixed background effect.
+   */
+  private createParticlesNode(layer: ParticlesLayer): LayerNode {
+    const amount = Math.max(20, Math.min(4000, Math.round(layer.amount)))
+    const positions = new Float32Array(amount * 3)
+    const seeds = new Float32Array(amount)
+    const sizes = new Float32Array(amount)
+    const alphas = new Float32Array(amount)
+    const spread = Math.max(0.5, layer.spread)
+    for (let i = 0; i < amount; i += 1) {
+      positions[i * 3] = (Math.random() - 0.5) * spread
+      positions[i * 3 + 1] = (Math.random() - 0.5) * 3.2
+      positions[i * 3 + 2] = (Math.random() - 0.5) * 1.2
+      seeds[i] = Math.random() * Math.PI * 2
+      sizes[i] = layer.sizeMin + Math.random() * Math.max(0, layer.sizeMax - layer.sizeMin)
+      alphas[i] = layer.opacityMin + Math.random() * Math.max(0, layer.opacityMax - layer.opacityMin)
+    }
+    const geometry = new THREE.BufferGeometry()
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
+    geometry.setAttribute('aSize', new THREE.BufferAttribute(sizes, 1))
+    geometry.setAttribute('aAlpha', new THREE.BufferAttribute(alphas, 1))
+
+    const material = new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      uniforms: {
+        uColor: { value: new THREE.Color(layer.color) },
+        uPixelRatio: { value: Math.min(2, window.devicePixelRatio || 1) },
+        uShape: { value: layer.shape === 'square' ? 1 : layer.shape === 'star' ? 2 : 0 },
+        uMirror: { value: layer.mirror ? 1 : 0 },
+      },
+      vertexShader: /* glsl */ `
+        attribute float aSize;
+        attribute float aAlpha;
+        uniform float uPixelRatio;
+        varying float vAlpha;
+        void main() {
+          vAlpha = aAlpha;
+          vec4 mv = modelViewMatrix * vec4(position, 1.0);
+          gl_PointSize = min(26.0, aSize * uPixelRatio * (60.0 / max(1.0, -mv.z)));
+          gl_Position = projectionMatrix * mv;
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        precision highp float;
+        uniform vec3 uColor;
+        uniform float uShape;
+        uniform float uMirror;
+        varying float vAlpha;
+        void main() {
+          vec2 coord = gl_PointCoord - 0.5;
+          float dist = length(coord);
+          float mask = smoothstep(0.5, 0.1, dist);
+          if (uShape > 1.5) {
+            // star: four soft spikes
+            float star = max(0.0, 1.0 - min(abs(coord.x) * 6.0, abs(coord.y) * 6.0));
+            mask = max(mask * 0.35, star * 0.9);
+          } else if (uShape > 0.5) {
+            mask = step(max(abs(coord.x), abs(coord.y)), 0.35);
+          }
+          if (mask <= 0.001) discard;
+          gl_FragColor = vec4(uColor, mask * vAlpha);
+        }
+      `,
+    })
+
+    const points = new THREE.Points(geometry, material)
+    points.frustumCulled = false
+    const node: LayerNode = {
+      object: points,
+      key: `particles:${amount}:${layer.shape}:${layer.color}`,
+      baseWidth: spread,
+      baseHeight: 3.2,
+      depthFactor: 1,
+      layer,
+      tick: () => {
+        const frame = this.lastFrame
+        const beat = frame ? Math.max(0, Math.min(1, frame.beat)) : 0
+        const dt = this.lastDelta
+        const position = geometry.getAttribute('position') as THREE.BufferAttribute
+        const data = position.array as Float32Array
+        const drift = layer.speed * dt
+        for (let i = 0; i < amount; i += 1) {
+          const yIndex = i * 3 + 1
+          data[yIndex] -= drift + layer.gravity * dt
+          data[i * 3] += Math.sin(seeds[i] + this.lastTimeSec * 0.8) * 0.0025
+          if (data[yIndex] < -1.9) data[yIndex] = 1.9
+          if (data[yIndex] > 1.9) data[yIndex] = -1.9
+        }
+        position.needsUpdate = true
+        material.uniforms.uMirror.value = layer.mirror ? 1 : 0
+        const boost = 1 + beat * layer.beatBoost
+        material.uniforms.uPixelRatio.value = Math.min(2, window.devicePixelRatio || 1) * boost
+      },
+      dispose: () => {
+        geometry.dispose()
+        material.dispose()
+      },
+    }
+    return node
+  }
+
   private createTextNode(layer: Extract<StudioLayer, { type: 'text' }>): LayerNode {
     const canvas = document.createElement('canvas')
     const ctx = canvas.getContext('2d')
@@ -1422,9 +1538,11 @@ export class AveeVisualizerEngine {
     if (this.isDisposed) return
     // Drawing into a lost context only spams GL errors; wait for `webglcontextrestored`.
     if (this.contextLost) return
+    this.lastFrame = frame
     const timeSec = Number.isFinite(frame.timeSec) ? frame.timeSec : 0
     const dt = this.lastTimeSec < 0 ? 1 / 60 : Math.max(0, Math.min(0.25, timeSec - this.lastTimeSec))
     this.lastTimeSec = timeSec
+    this.lastDelta = dt
 
     const intensity = this.options.intensity
     const bass = Math.max(0, Math.min(1, frame.bass))

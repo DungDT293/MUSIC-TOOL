@@ -69,6 +69,7 @@ export function LayersPanel() {
   const addLogoLayer = useSongNhacLayerStore((state) => state.addLogoLayer)
   const addIntroLayer = useSongNhacLayerStore((state) => state.addIntroLayer)
   const addGroup = useSongNhacLayerStore((state) => state.addGroup)
+  const addParticlesLayer = useSongNhacLayerStore((state) => state.addParticlesLayer)
   const moveLayerUp = useSongNhacLayerStore((state) => state.moveLayerUp)
   const moveLayerDown = useSongNhacLayerStore((state) => state.moveLayerDown)
   const removeLayer = useSongNhacLayerStore((state) => state.removeLayer)
@@ -234,6 +235,7 @@ export function LayersPanel() {
           }}>Video</button>
           <button type="button" style={buttonStyle} onClick={() => addTextLayer()}>Chữ</button>
           <button type="button" style={buttonStyle} onClick={() => addVisualizerLayer()}>Sóng</button>
+          <button type="button" style={buttonStyle} onClick={() => addParticlesLayer()}>Hạt</button>
           <button type="button" style={buttonStyle} onClick={async () => {
             const media = await pickMedia('image')
             if (media) addLogoLayer(media.path)
