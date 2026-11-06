@@ -9,6 +9,7 @@ import {
   createVideoLayer,
   createVisualizerLayer,
   createParticlesLayer,
+  type StudioAutomationProperty,
   isGroupLayer,
   type StudioAnyLayer,
 } from './layerTypes'
@@ -56,6 +57,11 @@ export interface LayerStoreState {
   addIntroLayer: (durationSec?: number) => string
   addOutroLayer: (totalSec: number, durationSec?: number) => string
   addParticlesLayer: (name?: string) => string
+  /** Time used when inserting keyframes from the inspector. */
+  currentTimeSec: number
+  setCurrentTime: (timeSec: number) => void
+  addKeyframe: (layerId: string, property: StudioAutomationProperty, value: number, timeSec?: number) => void
+  clearAutomation: (layerId: string, property: StudioAutomationProperty) => void
   addGroup: () => string
 
   removeLayer: (id: string) => void
@@ -198,6 +204,40 @@ export const useSongNhacLayerStore = create<LayerStoreState>((set, get) => ({
     state.pushHistorySnapshot(state.layers)
     set({ layers: [...state.layers, layer], selectedLayerId: layer.id, selectedIds: [layer.id] })
     return layer.id
+  },
+
+  currentTimeSec: 0,
+  setCurrentTime: (timeSec) => set({ currentTimeSec: Math.max(0, timeSec) }),
+  addKeyframe: (layerId, property, value, timeSec) => {
+    const state = get()
+    const at = timeSec ?? state.currentTimeSec
+    state.pushHistorySnapshot(state.layers)
+    const layers = state.layers.map((layer) => {
+      if (layer.id !== layerId || layer.type === 'group') return layer
+      const automations = [...(layer.automations ?? [])]
+      const index = automations.findIndex((item) => item.property === property)
+      const keyframe = { timeSec: Number(at.toFixed(3)), value }
+      if (index >= 0) {
+        const keys = automations[index].keyframes.filter((item) => Math.abs(item.timeSec - keyframe.timeSec) > 0.001)
+        keys.push(keyframe)
+        keys.sort((a, b) => a.timeSec - b.timeSec)
+        automations[index] = { property, keyframes: keys }
+      } else {
+        automations.push({ property, keyframes: [keyframe] })
+      }
+      return { ...layer, automations } as typeof layer
+    })
+    set({ layers })
+  },
+  clearAutomation: (layerId, property) => {
+    const state = get()
+    state.pushHistorySnapshot(state.layers)
+    const layers = state.layers.map((layer) =>
+      layer.id === layerId && layer.type !== 'group'
+        ? ({ ...layer, automations: (layer.automations ?? []).filter((item) => item.property !== property) } as typeof layer)
+        : layer,
+    )
+    set({ layers })
   },
 
   addParticlesLayer: (name) => {

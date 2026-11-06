@@ -147,6 +147,7 @@ function syntheticSpectrum(bins: number, time: number): Uint8Array {
 
   ;(window as unknown as Record<string, unknown>).__layerDebug = engine.debugLayers()
   ;(window as unknown as Record<string, unknown>).__engine = engine
+  ;(window as unknown as Record<string, unknown>).__createTextLayer = createTextLayer
   return true
 }
 

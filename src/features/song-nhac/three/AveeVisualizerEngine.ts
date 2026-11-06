@@ -22,6 +22,7 @@ import {
   type ParticlesLayer,
   type StudioAnalyzer,
   DEFAULT_ANALYZER,
+  evaluateAutomation,
 } from '../studio/layerTypes'
 
 interface LayerNode {
@@ -1231,6 +1232,43 @@ export class AveeVisualizerEngine {
     }
   }
 
+  /** Keyframe automations override transform/opacity for the current time. */
+  private applyAutomations(timeSec: number): void {
+    for (const node of this.layerNodes.values()) {
+      const layer = node.layer
+      const automations = layer?.automations
+      if (!layer || !automations || !automations.length) continue
+      const value = (property: string): number | null => {
+        const automation = automations.find((item) => item.property === property)
+        return automation ? evaluateAutomation(automation, timeSec) : null
+      }
+      const scaleX = value('scaleX')
+      const scaleY = value('scaleY')
+      const posX = value('x')
+      const posY = value('y')
+      const rotation = value('rotation')
+      const t = layer.transform
+      const unit = this.unit
+      if (posX !== null || posY !== null) {
+        node.object.position.x = (posX !== null ? posX : t.x) * unit
+        node.object.position.y = -(posY !== null ? posY : t.y) * unit
+      }
+      if (scaleX !== null || scaleY !== null) {
+        node.object.scale.set(
+          node.baseWidth * node.depthFactor * (scaleX !== null ? scaleX : t.scaleX) * (t.flipX ? -1 : 1),
+          node.baseHeight * node.depthFactor * (scaleY !== null ? scaleY : t.scaleY) * (t.flipY ? -1 : 1),
+          1,
+        )
+      }
+      if (rotation !== null) node.object.rotation.z = (rotation * Math.PI) / 180
+      const opacity = value('opacity')
+      if (opacity !== null) {
+        const material = (node.object as THREE.Mesh).material as THREE.Material | undefined
+        // refreshLayerOpacity already set the base value for this frame, so scale it.
+        if (material) material.opacity *= Math.max(0, Math.min(1, opacity))
+      }
+    }
+  }
   /** Per-frame time fade + filter opacity; called from render(). */
   private refreshLayerOpacity(timeSec: number): void {
     for (const node of this.layerNodes.values()) {
@@ -1678,6 +1716,7 @@ export class AveeVisualizerEngine {
 
     // timeRange fade + filter opacity are per-frame values, not layout state.
     this.refreshLayerOpacity(timeSec)
+    this.applyAutomations(timeSec)
     this.applyBeatPulse(frame)
     this.updateSelectionFrame()
 

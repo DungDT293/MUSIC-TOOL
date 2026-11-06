@@ -9,6 +9,7 @@ import {
   isVideoLayer,
   isVisualizerLayer,
   type StudioLayerFilter,
+  type StudioAutomationProperty,
 } from './layerTypes'
 import { useSongNhacLayerStore } from './songNhacLayerStore'
 
@@ -49,6 +50,14 @@ const headerStyle: React.CSSProperties = {
 }
 const bodyStyle: React.CSSProperties = { padding: 12, display: 'flex', flexDirection: 'column', gap: 10 }
 const labelStyle: React.CSSProperties = { fontSize: 11, color: '#94a3b8', minWidth: 84 }
+const miniButtonStyle: React.CSSProperties = {
+  padding: '2px 6px',
+  borderRadius: 5,
+  border: '1px solid #334155',
+  background: '#0f172a',
+  fontSize: 10,
+  cursor: 'pointer',
+}
 const valueStyle: React.CSSProperties = { fontSize: 11, color: '#e2e8f0', minWidth: 48, textAlign: 'right' }
 const inputStyle: React.CSSProperties = {
   width: '100%',
@@ -352,6 +361,54 @@ export function InspectorPanel() {
             )}
           </Section>
         )}
+
+        <Section title="Automation (keyframe)" defaultOpen={false}>
+          {(() => {
+            const store = useSongNhacLayerStore.getState()
+            const at = store.currentTimeSec
+            const rows: Array<{ property: StudioAutomationProperty; label: string; value: number }> = [
+              { property: 'opacity', label: 'Độ mờ', value: layer.filter.opacity },
+              { property: 'scaleX', label: 'Scale X', value: layer.transform.scaleX },
+              { property: 'scaleY', label: 'Scale Y', value: layer.transform.scaleY },
+              { property: 'x', label: 'Vị trí X', value: layer.transform.x },
+              { property: 'y', label: 'Vị trí Y', value: layer.transform.y },
+              { property: 'rotation', label: 'Xoay', value: layer.transform.rotation },
+            ]
+            return (
+              <>
+                <div style={{ fontSize: 10, color: '#64748b', marginBottom: 4 }}>
+                  Đặt key tại giây hiện tại: <strong style={{ color: '#e2e8f0' }}>{at.toFixed(2)}s</strong> (bấm ▶ hoặc seek trên timeline)
+                </div>
+                {rows.map((row) => {
+                  const automation = (layer.automations ?? []).find((item) => item.property === row.property)
+                  const count = automation?.keyframes.length ?? 0
+                  return (
+                    <div key={row.property} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
+                      <span style={{ flex: 1, color: '#cbd5e1' }}>{row.label}</span>
+                      <span style={{ color: '#64748b', minWidth: 26 }}>{count} key</span>
+                      <button
+                        type="button"
+                        onClick={() => store.addKeyframe(layer.id, row.property, row.value)}
+                        style={{ ...miniButtonStyle, color: '#67e8f9' }}
+                        title="Thêm keyframe tại thời điểm hiện tại"
+                      >
+                        +K
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => store.clearAutomation(layer.id, row.property)}
+                        style={{ ...miniButtonStyle, color: '#fca5a5' }}
+                        title="Xoá toàn bộ key của thuộc tính này"
+                      >
+                        x
+                      </button>
+                    </div>
+                  )
+                })}
+              </>
+            )
+          })()}
+        </Section>
 
         <Section title="Analyzer (dải tần)" defaultOpen={false}>
           {(() => {

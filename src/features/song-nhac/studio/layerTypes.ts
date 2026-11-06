@@ -69,6 +69,37 @@ export const DEFAULT_ANALYZER: StudioAnalyzer = {
   smoothing: 0.35,
 }
 
+/** Animatable properties for automations. */
+export type StudioAutomationProperty = 'opacity' | 'scaleX' | 'scaleY' | 'x' | 'y' | 'rotation'
+
+export interface StudioKeyframe {
+  timeSec: number
+  value: number
+}
+
+export interface StudioAutomation {
+  property: StudioAutomationProperty
+  keyframes: StudioKeyframe[]
+}
+
+export function evaluateAutomation(automation: StudioAutomation, timeSec: number): number | null {
+  const keys = automation.keyframes
+  if (!keys.length) return null
+  if (timeSec <= keys[0].timeSec) return keys[0].value
+  const last = keys[keys.length - 1]
+  if (timeSec >= last.timeSec) return last.value
+  for (let i = 1; i < keys.length; i += 1) {
+    const previous = keys[i - 1]
+    const next = keys[i]
+    if (timeSec <= next.timeSec) {
+      const span = Math.max(1e-6, next.timeSec - previous.timeSec)
+      const t = (timeSec - previous.timeSec) / span
+      return previous.value + (next.value - previous.value) * t
+    }
+  }
+  return last.value
+}
+
 export interface StudioLayerBase {
   id: string
   name: string
@@ -81,6 +112,7 @@ export interface StudioLayerBase {
   role: StudioLayerRole
   parentId?: string
   analyzer?: StudioAnalyzer
+  automations?: StudioAutomation[]
 }
 
 export type StudioBlendMode = 'normal' | 'additive' | 'multiply' | 'screen'

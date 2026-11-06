@@ -548,6 +548,7 @@ export default function SongNhacPage() {
     const next = Math.max(0, Math.min(audioDuration, seconds))
     audio.currentTime = next
     setPlayhead(next)
+    useSongNhacLayerStore.getState().setCurrentTime(next)
   }
 
   const seekTo = (event: React.MouseEvent<HTMLDivElement>) => {    const audio = audioRef.current
@@ -1065,7 +1066,11 @@ export default function SongNhacPage() {
               draw()
             }}
             onPause={() => setIsPlaying(false)}
-            onTimeUpdate={(event) => setPlayhead(event.currentTarget.currentTime)}
+            onTimeUpdate={(event) => {
+              const time = event.currentTarget.currentTime
+              setPlayhead(time)
+              useSongNhacLayerStore.getState().setCurrentTime(time)
+            }}
             onLoadedMetadata={(event) => {
               const value = event.currentTarget.duration
               setAudioDuration(Number.isFinite(value) ? value : 0)
@@ -1720,6 +1725,24 @@ export default function SongNhacPage() {
                       opacity: layer.visible ? 0.85 : 0.3,
                     }}
                   />
+                  {(layer.automations ?? []).flatMap((automation) =>
+                    automation.keyframes.map((keyframe) => (
+                      <div
+                        key={`${layer.id}-${automation.property}-${keyframe.timeSec}`}
+                        title={`${automation.property} = ${keyframe.value} @ ${keyframe.timeSec}s`}
+                        style={{
+                          position: 'absolute',
+                          left: `calc(${Math.max(0, Math.min(100, (keyframe.timeSec / Math.max(0.001, audioDuration || 1)) * 100))}% - 4px)`,
+                          top: 1,
+                          width: 8,
+                          height: 8,
+                          background: '#fbbf24',
+                          transform: 'rotate(45deg)',
+                          borderRadius: 1,
+                        }}
+                      />
+                    )),
+                  )}
                 </div>
               </div>
             )
