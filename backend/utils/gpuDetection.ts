@@ -488,12 +488,150 @@ export async function getGpuInfo(
   return gpuInfo
 }
 
+export type VideoEncodeQuality = 'fast' | 'medium' | 'slow'
+
+interface EncoderTuning {
+  /** NVENC preset: p1 = fastest, p7 = highest quality */
+  nvencPreset: string
+  /** NVENC constant-quality target (lower = better) */
+  nvencCq: string
+  /** libx264 speed preset */
+  x264Preset: string
+  /** libx264 constant rate factor (lower = better) */
+  x264Crf: string
+  /** Peak bitrate ceiling for a 1080p upload master */
+  maxrate: string
+  /** VBV buffer, normally 2x maxrate */
+  bufsize: string
+  amfQuality: string
+  amfQmin: string
+  amfQmax: string
+  vtBitrate: string
+}
+
+// Upload-grade tuning.
+//
+// YouTube re-encodes every upload, so the master we hand over has to survive a
+// second generation. The old defaults (NVENC p1, CQ 23, no VBV) produced a
+// 1-3 Mbps master whose gradients banded after YouTube's re-encode. These tiers
+// keep the master clean: CQ/CRF <= 20 plus a generous VBV ceiling.
+const ENCODE_TUNING: Record<VideoEncodeQuality, EncoderTuning> = {
+  fast: {
+    nvencPreset: 'p5',
+    nvencCq: '20',
+    x264Preset: 'veryfast',
+    x264Crf: '19',
+    maxrate: '20M',
+    bufsize: '40M',
+    amfQuality: 'balanced',
+    amfQmin: '16',
+    amfQmax: '22',
+    vtBitrate: '16M',
+  },
+  medium: {
+    nvencPreset: 'p6',
+    nvencCq: '19',
+    x264Preset: 'medium',
+    x264Crf: '18',
+    maxrate: '24M',
+    bufsize: '48M',
+    amfQuality: 'quality',
+    amfQmin: '14',
+    amfQmax: '20',
+    vtBitrate: '20M',
+  },
+  slow: {
+    nvencPreset: 'p7',
+    nvencCq: '17',
+    x264Preset: 'slow',
+    x264Crf: '16',
+    maxrate: '30M',
+    bufsize: '60M',
+    amfQuality: 'quality',
+    amfQmin: '12',
+    amfQmax: '18',
+    vtBitrate: '24M',
+  },
+}
+
+function resolveQuality(quality: VideoEncodeQuality): VideoEncodeQuality {
+  return quality === 'medium' || quality === 'slow' ? quality : 'fast'
+}
+
+/**
+ * NVENC args for an upload-grade H.264 master (High profile, yuv420p, VBV capped).
+ * `-tune` is deliberately omitted: it only exists on newer NVENC builds and this
+ * helper must also work with the packaged legacy FFmpeg used for old drivers.
+ */
+export function buildNvencEncodeArgs(quality: VideoEncodeQuality): string[] {
+  const t = ENCODE_TUNING[resolveQuality(quality)]
+  return [
+    '-c:v', 'h264_nvenc',
+    '-preset', t.nvencPreset,
+    '-rc', 'vbr',
+    '-cq', t.nvencCq,
+    '-b:v', '0',
+    '-maxrate', t.maxrate,
+    '-bufsize', t.bufsize,
+    '-spatial-aq', '1',
+    '-temporal-aq', '1',
+    '-aq-strength', '8',
+    '-profile:v', 'high',
+    '-pix_fmt', 'yuv420p',
+    '-vsync', '2',
+  ]
+}
+
+/**
+ * libx264 args for an upload-grade H.264 master. CRF + VBV: constant quality with
+ * a hard ceiling so a long static mix cannot balloon the file size.
+ */
+export function buildX264EncodeArgs(quality: VideoEncodeQuality): string[] {
+  const t = ENCODE_TUNING[resolveQuality(quality)]
+  return [
+    '-c:v', 'libx264',
+    '-preset', t.x264Preset,
+    '-crf', t.x264Crf,
+    '-maxrate', t.maxrate,
+    '-bufsize', t.bufsize,
+    '-profile:v', 'high',
+    '-pix_fmt', 'yuv420p',
+    '-vsync', '2',
+  ]
+}
+
+export function buildAmfEncodeArgs(quality: VideoEncodeQuality): string[] {
+  const t = ENCODE_TUNING[resolveQuality(quality)]
+  return [
+    '-c:v', 'h264_amf',
+    '-quality', t.amfQuality,
+    '-rc', 'vbr_peak',
+    '-qmin', t.amfQmin,
+    '-qmax', t.amfQmax,
+    '-pix_fmt', 'yuv420p',
+    '-vsync', '2',
+  ]
+}
+
+export function buildVideoToolboxEncodeArgs(quality: VideoEncodeQuality): string[] {
+  const t = ENCODE_TUNING[resolveQuality(quality)]
+  // VideoToolbox rejects VBV options (`-maxrate`/`-bufsize`) on some macOS builds,
+  // so it is driven by average bitrate only.
+  return [
+    '-c:v', 'h264_videotoolbox',
+    '-b:v', t.vtBitrate,
+    '-profile:v', 'high',
+    '-pix_fmt', 'yuv420p',
+    '-vsync', '2',
+  ]
+}
+
 /**
  * Build FFmpeg video encoder args based on GPU availability
  */
 export async function buildVideoEncoderArgs(
   needsReencode: boolean,
-  quality: 'fast' | 'medium' | 'slow' = 'fast'
+  quality: VideoEncodeQuality = 'fast'
 ): Promise<string[]> {
   if (!needsReencode) {
     return ['-c:v', 'copy']
@@ -502,66 +640,18 @@ export async function buildVideoEncoderArgs(
   const gpuInfo = await getGpuInfo()
 
   if (gpuInfo.encoder === 'nvenc' && gpuInfo.available) {
-    // NVIDIA NVENC - very fast, good quality
-    const preset = quality === 'fast' ? 'p1' : quality === 'medium' ? 'p4' : 'p6' // p1 = fastest, p7 = slowest
-    const crf = quality === 'fast' ? '23' : quality === 'medium' ? '21' : '19' // Lower = better quality
-    return [
-      '-c:v',
-      'h264_nvenc',
-      '-preset',
-      preset,
-      '-rc',
-      'vbr',
-      '-cq',
-      crf,
-      '-b:v',
-      '0', // Let CQ control bitrate
-      '-pix_fmt',
-      'yuv420p',
-      '-vsync',
-      '2',
-    ]
+    return buildNvencEncodeArgs(quality)
   }
 
   if (gpuInfo.encoder === 'amf' && gpuInfo.available) {
-    // AMD AMF - fast, good quality
-    const qualityPreset = quality === 'fast' ? 'speed' : quality === 'medium' ? 'balanced' : 'quality'
-    return [
-      '-c:v',
-      'h264_amf',
-      '-quality',
-      qualityPreset,
-      '-rc',
-      'vbr_peak',
-      '-qmin',
-      '18',
-      '-qmax',
-      '28',
-      '-pix_fmt',
-      'yuv420p',
-      '-vsync',
-      '2',
-    ]
+    return buildAmfEncodeArgs(quality)
   }
 
   if (gpuInfo.encoder === 'videotoolbox' && gpuInfo.available) {
-    // Apple VideoToolbox - fast on macOS
-    return [
-      '-c:v',
-      'h264_videotoolbox',
-      '-b:v',
-      quality === 'fast' ? '8M' : quality === 'medium' ? '12M' : '16M',
-      '-pix_fmt',
-      'yuv420p',
-      '-vsync',
-      '2',
-    ]
+    return buildVideoToolboxEncodeArgs(quality)
   }
 
-  // Fallback to CPU (libx264)
-  const preset = quality === 'fast' ? 'veryfast' : quality === 'medium' ? 'medium' : 'slow'
-  const crf = quality === 'fast' ? '23' : quality === 'medium' ? '21' : '19'
-  return ['-c:v', 'libx264', '-preset', preset, '-crf', crf, '-pix_fmt', 'yuv420p', '-vsync', '2']
+  return buildX264EncodeArgs(quality)
 }
 
 /**
@@ -574,7 +664,7 @@ export async function buildVideoEncoderArgs(
 export async function buildVideoEncoderArgsWithChoice(
   needsReencode: boolean,
   userChoice: 'gpu' | 'cpu' | 'auto' = 'auto',
-  quality: 'fast' | 'medium' | 'slow' = 'fast',
+  quality: VideoEncodeQuality = 'fast',
   gpuFfmpegProfile: GpuFfmpegProfile = getPreferredGpuFfmpegProfile(),
 ): Promise<{ args: string[], usedEncoder: 'gpu' | 'cpu', gpuInfo?: GpuInfo }> {
   if (!needsReencode) {
@@ -583,12 +673,7 @@ export async function buildVideoEncoderArgsWithChoice(
 
   // If user explicitly wants CPU, use CPU
   if (userChoice === 'cpu') {
-    const preset = quality === 'fast' ? 'veryfast' : quality === 'medium' ? 'medium' : 'slow'
-    const crf = quality === 'fast' ? '23' : quality === 'medium' ? '21' : '19'
-    return {
-      args: ['-c:v', 'libx264', '-preset', preset, '-crf', crf, '-pix_fmt', 'yuv420p', '-vsync', '2'],
-      usedEncoder: 'cpu',
-    }
+    return { args: buildX264EncodeArgs(quality), usedEncoder: 'cpu' }
   }
 
   // Get GPU info
@@ -603,92 +688,33 @@ export async function buildVideoEncoderArgsWithChoice(
 
   // If user wants GPU but GPU not available, fallback to CPU with warning
   if (userChoice === 'gpu' && !gpuInfo.available) {
-    console.warn(`[GPU Detection] ⚠️ User requested GPU encoding but GPU not available (${gpuInfo.reason}), falling back to CPU`)
-    const preset = quality === 'fast' ? 'veryfast' : quality === 'medium' ? 'medium' : 'slow'
-    const crf = quality === 'fast' ? '23' : quality === 'medium' ? '21' : '19'
-    return {
-      args: ['-c:v', 'libx264', '-preset', preset, '-crf', crf, '-pix_fmt', 'yuv420p', '-vsync', '2'],
-      usedEncoder: 'cpu',
-    }
+    console.warn(`[GPU Detection] User requested GPU encoding but GPU not available (${gpuInfo.reason}), falling back to CPU`)
+    return { args: buildX264EncodeArgs(quality), usedEncoder: 'cpu' }
   }
 
   // Use GPU if available (either user requested GPU or auto-detect found GPU)
   if (gpuInfo.available && (userChoice === 'gpu' || userChoice === 'auto')) {
     if (gpuInfo.encoder === 'nvenc') {
-      // NVIDIA NVENC - Add hardware acceleration for input decoding (NVDEC)
-      const preset = quality === 'fast' ? 'p1' : quality === 'medium' ? 'p4' : 'p6'
-      const crf = quality === 'fast' ? '23' : quality === 'medium' ? '21' : '19'
+      // NVDEC input decoding + NVENC encode. Callers that mux through the concat
+      // demuxer strip `-hwaccel` again (see finalExport), so keep it in one place.
       return {
-        args: [
-          // Hardware acceleration for input decoding (NVDEC)
-          // Use 'nvdec' or 'cuda' - both work, but 'nvdec' is more explicit
-          '-hwaccel',
-          'nvdec',
-          // GPU encoder (NVENC)
-          '-c:v',
-          'h264_nvenc',
-          '-preset',
-          preset,
-          '-rc',
-          'vbr',
-          '-cq',
-          crf,
-          '-b:v',
-          '0',
-          '-gpu',
-          '0', // Use first GPU (0 = first GPU, 1 = second GPU, etc.)
-          '-pix_fmt',
-          'yuv420p',
-          '-vsync',
-          '2',
-        ],
+        args: ['-hwaccel', 'nvdec', ...buildNvencEncodeArgs(quality), '-gpu', '0'],
         usedEncoder: 'gpu',
         gpuInfo,
       }
     }
 
     if (gpuInfo.encoder === 'amf') {
-      // AMD AMF - Add hardware acceleration for input decoding
-      const qualityPreset = quality === 'fast' ? 'speed' : quality === 'medium' ? 'balanced' : 'quality'
       return {
-        args: [
-          // Hardware acceleration for input decoding (AMD)
-          '-hwaccel',
-          'd3d11va',
-          // GPU encoder (AMF)
-          '-c:v',
-          'h264_amf',
-          '-quality',
-          qualityPreset,
-          '-rc',
-          'vbr_peak',
-          '-qmin',
-          '18',
-          '-qmax',
-          '28',
-          '-pix_fmt',
-          'yuv420p',
-          '-vsync',
-          '2',
-        ],
+        args: ['-hwaccel', 'd3d11va', ...buildAmfEncodeArgs(quality)],
         usedEncoder: 'gpu',
         gpuInfo,
       }
     }
 
     if (gpuInfo.encoder === 'videotoolbox') {
-      // Apple VideoToolbox
       return {
-        args: [
-          '-c:v',
-          'h264_videotoolbox',
-          '-b:v',
-          quality === 'fast' ? '8M' : quality === 'medium' ? '12M' : '16M',
-          '-pix_fmt',
-          'yuv420p',
-          '-vsync',
-          '2',
-        ],
+        args: buildVideoToolboxEncodeArgs(quality),
         usedEncoder: 'gpu',
         gpuInfo,
       }
@@ -696,12 +722,7 @@ export async function buildVideoEncoderArgsWithChoice(
   }
 
   // Fallback to CPU (either no GPU available or auto-detect didn't find GPU)
-  const preset = quality === 'fast' ? 'veryfast' : quality === 'medium' ? 'medium' : 'slow'
-  const crf = quality === 'fast' ? '23' : quality === 'medium' ? '21' : '19'
-  return {
-    args: ['-c:v', 'libx264', '-preset', preset, '-crf', crf, '-pix_fmt', 'yuv420p', '-vsync', '2'],
-    usedEncoder: 'cpu',
-  }
+  return { args: buildX264EncodeArgs(quality), usedEncoder: 'cpu' }
 }
 
 /**

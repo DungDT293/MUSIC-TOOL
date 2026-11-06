@@ -17,7 +17,13 @@ vi.mock('../../../backend/ffmpeg/config', () => ({
 
 import { spawn } from 'child_process'
 import fs from 'node:fs'
-import { buildVideoEncoderArgsWithChoice, clearGpuCache, getGpuInfo } from '../../../backend/utils/gpuDetection'
+import {
+  buildNvencEncodeArgs,
+  buildVideoEncoderArgsWithChoice,
+  buildX264EncodeArgs,
+  clearGpuCache,
+  getGpuInfo,
+} from '../../../backend/utils/gpuDetection'
 
 const OLD_DRIVER_STDERR =
   '[h264_nvenc] Driver does not support the required nvenc API version. Required: 13.0 Found: 12.2\n' +
@@ -252,4 +258,47 @@ describe('gpuDetection', () => {
     expect(info.normalizeCudaAvailable).toBe(false)
     expect(info.normalizeCudaReason).toContain('hybrid normalize smoke test failed')
   })
+
+  it('escalates NVENC quality tier from fast to slow', () => {
+    const fast = buildNvencEncodeArgs('fast').join(' ')
+    const slow = buildNvencEncodeArgs('slow').join(' ')
+
+    expect(fast).toContain('-preset p5')
+    expect(fast).toContain('-cq 20')
+    expect(slow).toContain('-preset p7')
+    expect(slow).toContain('-cq 17')
+    // Both tiers must keep lookahead AQ and a High-profile 4:2:0 output.
+    expect(fast).toContain('-spatial-aq 1')
+    expect(fast).toContain('-temporal-aq 1')
+    expect(fast).toContain('-profile:v high')
+    expect(fast).toContain('-pix_fmt yuv420p')
+  })
+
+  it('produces an upload-grade x264 master with VBV and High profile', () => {
+    const args = buildX264EncodeArgs('fast').join(' ')
+
+    expect(args).toContain('-c:v libx264')
+    expect(args).toContain('-crf 19')
+    expect(args).toContain('-maxrate 20M')
+    expect(args).toContain('-bufsize 40M')
+    expect(args).toContain('-profile:v high')
+  })
+
+  it('buildVideoEncoderArgsWithChoice uses upload-grade CPU args on fallback', async () => {
+    vi.mocked(spawn)
+      .mockImplementationOnce(() =>
+        makeFakeChild(0, { stdout: ' V..... h264_nvenc           NVIDIA NVENC H.264 encoder\n' }) as any,
+      )
+      .mockImplementationOnce(() => makeFakeChild(1, { stderr: OLD_DRIVER_STDERR }) as any)
+
+    const result = await buildVideoEncoderArgsWithChoice(true, 'auto', 'fast')
+    const joined = result.args.join(' ')
+
+    expect(result.usedEncoder).toBe('cpu')
+    expect(joined).toContain('-c:v libx264')
+    expect(joined).toContain('-crf 19')
+    expect(joined).toContain('-maxrate')
+    expect(joined).toContain('-vsync')
+  })
 })
+

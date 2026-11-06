@@ -4074,7 +4074,7 @@ async function runFinalCommand_SingleStep(opts: RunFinalCommandSingleStepOptions
       // Chroma key / Bars Spectrum dùng filter_complex → buộc video re-encode.
       // Phòng trường hợp gọi trực tiếp với copy args, fall back về libx264.
       const filteredVideoCodecArgs = videoCodecArgs.includes('copy')
-        ? ['-c:v', 'libx264', '-preset', 'fast', '-crf', '22', '-pix_fmt', 'yuv420p']
+        ? ['-c:v', 'libx264', '-preset', 'fast', '-crf', '19', '-pix_fmt', 'yuv420p']
         : videoCodecArgs
       args.push(
         ...filteredVideoCodecArgs,

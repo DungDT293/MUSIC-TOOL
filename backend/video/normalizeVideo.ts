@@ -382,8 +382,11 @@ function runFfmpegEncode(
 
     const encoderArgs =
       mode === 'gpu'
-        ? ['-c:v', 'h264_nvenc', '-preset', 'p4', '-cq', '23', '-pix_fmt', 'yuv420p']
-        : ['-c:v', 'libx264', '-preset', 'fast', '-crf', '23', '-pix_fmt', 'yuv420p']
+        // These clips are concatenated with -c:v copy in pass 2, so this encode is
+        // the only video generation the final file ever sees. CQ/CRF 23 here used
+        // to soften the whole export; keep it at upload grade.
+        ? ['-c:v', 'h264_nvenc', '-preset', 'p5', '-cq', '19', '-pix_fmt', 'yuv420p']
+        : ['-c:v', 'libx264', '-preset', 'fast', '-crf', '19', '-pix_fmt', 'yuv420p']
     const encoderName = detectEncoderFromArgs(encoderArgs)
     const concatSafeOutputArgs = options.concatSafe
       ? buildConcatSafeOutputArgs(encoderName, options.targetFps)
