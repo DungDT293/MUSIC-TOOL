@@ -84,11 +84,15 @@ export async function exportSongNhacFrames(options: ExportSongNhacFramesOptions)
     const canvas = document.createElement('canvas')
     canvas.width = options.width
     canvas.height = options.height
+    let gpuContextLost = false
     const engine = new AveeVisualizerEngine(canvas, {
       theme: options.theme,
       intensity: options.intensity,
       quality: options.quality,
       seed: options.seed ?? 93,
+      onContextLost: () => {
+        gpuContextLost = true
+      },
     })
     if (options.layers?.length) {
       engine.setLayers(options.layers)
@@ -120,6 +124,7 @@ export async function exportSongNhacFrames(options: ExportSongNhacFramesOptions)
         },
       })
       await flushQueue()
+      if (gpuContextLost) throw new Error('GPU bị treo giữa lúc xuất (WebGL context lost). Khởi động lại app rồi xuất lại.')
     } finally {
       engine.dispose()
     }

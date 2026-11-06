@@ -44,6 +44,8 @@ export interface AveeVisualizerOptions {
   quality?: AveeQuality
   /** Seed for every pseudo-random element so exports are reproducible. */
   seed?: number
+  /** Called when the GPU drops the WebGL context (driver reset, out of memory). */
+  onContextLost?: () => void
 }
 
 interface ThemePalette {
@@ -341,6 +343,7 @@ export class AveeVisualizerEngine {
   private currentVisualizerLayer: StudioLayer | null = null
   private selectionFrame!: THREE.LineLoop
   private selectedLayerId: string | null = null
+  private contextLost = false
   private visualizerSensitivity = 1
   private visualizerSpeed = 1
   private stageWidth = 10
@@ -357,7 +360,23 @@ export class AveeVisualizerEngine {
       showRing: options.showRing ?? true,
       quality: options.quality ?? 'balanced',
       seed: options.seed ?? 93,
+      onContextLost: options.onContextLost ?? (() => undefined),
     }
+
+    // A lost GPU context freezes the canvas and kills WebCodecs hardware encoding, so
+    // surface it instead of letting the next export fail with a vague encoder error.
+    canvas.addEventListener(
+      'webglcontextlost',
+      (event) => {
+        event.preventDefault()
+        this.contextLost = true
+        this.options.onContextLost?.()
+      },
+      false,
+    )
+    canvas.addEventListener('webglcontextrestored', () => {
+      this.contextLost = false
+    })
 
     const width = canvas.width || 1280
     const height = canvas.height || 720
@@ -1312,6 +1331,8 @@ export class AveeVisualizerEngine {
 
   public render(frame: SongNhacAudioFrame): void {
     if (this.isDisposed) return
+    // Drawing into a lost context only spams GL errors; wait for `webglcontextrestored`.
+    if (this.contextLost) return
     const timeSec = Number.isFinite(frame.timeSec) ? frame.timeSec : 0
     const dt = this.lastTimeSec < 0 ? 1 / 60 : Math.max(0, Math.min(0.25, timeSec - this.lastTimeSec))
     this.lastTimeSec = timeSec

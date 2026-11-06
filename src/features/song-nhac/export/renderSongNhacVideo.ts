@@ -35,7 +35,10 @@ export async function renderSongNhacVideo(options: RenderVideoOptions): Promise<
   const encoder = new FrameEncoder({ width: canvas.width, height: canvas.height, fps, bitrate, codec, onChunk })
   const ready = await encoder.init()
   if (!ready) {
-    throw new Error(`Thiết bị không hỗ trợ WebCodecs ${codec === 'hevc' ? 'HEVC (H.265)' : 'H.264'}, không thể xuất video.`)
+    console.error('[SongNhac export] encoder init failed:', encoder.diagnostics)
+    throw new Error(
+      `Thiết bị không hỗ trợ WebCodecs ${codec === 'hevc' ? 'HEVC (H.265)' : 'H.264'}, không thể xuất video. ${encoder.diagnostics}`,
+    )
   }
 
   try {

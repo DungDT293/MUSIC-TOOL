@@ -114,20 +114,29 @@ export default function SongNhacPage() {
     useSongNhacLayerStore.getState().endHistoryGesture()
   }
 
-  const onCanvasWheel = (event: React.WheelEvent<HTMLCanvasElement>) => {
-    const state = useSongNhacLayerStore.getState()
-    const layer = state.layers.find((item) => item.id === state.selectedLayerId)
-    if (!layer || layer.type === 'group' || layer.locked) return
-    event.preventDefault()
-    const factor = event.deltaY < 0 ? 1.05 : 0.95
-    state.updateLayerWithHistory(layer.id, {
-      transform: {
-        ...layer.transform,
-        scaleX: Math.max(0.05, layer.transform.scaleX * factor),
-        scaleY: Math.max(0.05, layer.transform.scaleY * factor),
-      },
-    })
-  }
+  // React attaches wheel listeners as passive, so preventDefault() there only logs
+  // "Unable to preventDefault inside passive event listener". Bind it natively instead:
+  // without that the page scrolls while the user is trying to zoom the layer.
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const onWheel = (event: WheelEvent) => {
+      const state = useSongNhacLayerStore.getState()
+      const layer = state.layers.find((item) => item.id === state.selectedLayerId)
+      if (!layer || layer.type === 'group' || layer.locked) return
+      event.preventDefault()
+      const factor = event.deltaY < 0 ? 1.05 : 0.95
+      state.updateLayerWithHistory(layer.id, {
+        transform: {
+          ...layer.transform,
+          scaleX: Math.max(0.05, layer.transform.scaleX * factor),
+          scaleY: Math.max(0.05, layer.transform.scaleY * factor),
+        },
+      })
+    }
+    canvas.addEventListener('wheel', onWheel, { passive: false })
+    return () => canvas.removeEventListener('wheel', onWheel)
+  }, [style, webglFallback])
 
   const onCanvasDoubleClick = () => {
     const state = useSongNhacLayerStore.getState()
@@ -239,6 +248,9 @@ export default function SongNhacPage() {
         intensity: settings.intensity,
         showParticles: settings.showParticles,
         showLogo: settings.showLogo,
+        onContextLost: () => {
+          setMessage('GPU bị treo (WebGL context lost). Hãy khởi động lại app trước khi xuất video.')
+        },
       })
       aveeEngineRef.current.setLayers(useSongNhacLayerStore.getState().layers)
       aveeEngineRef.current.setSelectedLayer(useSongNhacLayerStore.getState().selectedLayerId)
@@ -614,7 +626,6 @@ export default function SongNhacPage() {
             onPointerMove={onCanvasPointerMove}
             onPointerUp={onCanvasPointerUp}
             onPointerCancel={onCanvasPointerUp}
-            onWheel={onCanvasWheel}
             onDoubleClick={onCanvasDoubleClick}
             style={{
               display: 'block',
