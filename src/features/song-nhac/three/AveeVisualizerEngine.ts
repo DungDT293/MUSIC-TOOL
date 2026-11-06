@@ -332,6 +332,8 @@ export class AveeVisualizerEngine {
   private visualizerGroup = new THREE.Group()
   private layerNodes = new Map<string, LayerNode>()
   private currentVisualizerLayer: StudioLayer | null = null
+  private selectionFrame!: THREE.LineLoop
+  private selectedLayerId: string | null = null
   private visualizerSensitivity = 1
   private visualizerSpeed = 1
   private stageWidth = 10
@@ -502,6 +504,7 @@ export class AveeVisualizerEngine {
     this.composer.addPass(this.bloomPass)
     this.composer.addPass(new OutputPass())
 
+    this.buildSelectionFrame()
     this.applyTheme(this.options.theme)
     this.applyVisibility()
     this.positionParticles(0)
@@ -756,6 +759,39 @@ export class AveeVisualizerEngine {
     this.barsInner.geometry.dispose()
     ;(this.barsInner.material as THREE.Material).dispose()
     this.buildBarMeshes(count)
+  }
+
+  /** Outline drawn around the selected layer (CapCut-style selection). */
+  private buildSelectionFrame(): void {
+    const points = [new THREE.Vector3(-0.5, -0.5, 0), new THREE.Vector3(0.5, -0.5, 0), new THREE.Vector3(0.5, 0.5, 0), new THREE.Vector3(-0.5, 0.5, 0)]
+    this.selectionFrame = new THREE.LineLoop(
+      new THREE.BufferGeometry().setFromPoints(points),
+      new THREE.LineBasicMaterial({ color: 0x60a5fa, transparent: true, opacity: 0.95, depthTest: false, depthWrite: false }),
+    )
+    this.selectionFrame.visible = false
+    this.selectionFrame.renderOrder = 999
+    this.visualizerGroup.parent?.add(this.selectionFrame)
+  }
+
+  public setSelectedLayer(id: string | null): void {
+    this.selectedLayerId = id
+    this.updateSelectionFrame()
+  }
+
+  private updateSelectionFrame(): void {
+    if (!this.selectionFrame) return
+    const id = this.selectedLayerId
+    const node = id ? this.layerNodes.get(id) : null
+    const layer = node?.layer
+    if (!node || !layer || layer.type === 'visualizer') {
+      this.selectionFrame.visible = false
+      return
+    }
+    const t = layer.transform
+    this.selectionFrame.visible = true
+    this.selectionFrame.position.set(t.x * this.unit, -t.y * this.unit, node.object.position.z + 0.01)
+    this.selectionFrame.scale.set(node.baseWidth * node.depthFactor * Math.abs(t.scaleX), node.baseHeight * node.depthFactor * Math.abs(t.scaleY), 1)
+    this.selectionFrame.rotation.z = (t.rotation * Math.PI) / 180
   }
 
   private updateStageSize(): void {
@@ -1079,6 +1115,7 @@ export class AveeVisualizerEngine {
 
     // timeRange fade + filter opacity are per-frame values, not layout state.
     this.refreshLayerOpacity(timeSec)
+    this.updateSelectionFrame()
 
     if (this.options.showBars) this.updateBars(frame)
     if (this.options.showParticles) this.positionParticles(timeSec)

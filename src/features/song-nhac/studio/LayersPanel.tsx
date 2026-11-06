@@ -1,5 +1,13 @@
+import { useState } from 'react'
 import { isGroupLayer, isVisualizerLayer, type StudioAnyLayer } from './layerTypes'
 import { useSongNhacLayerStore } from './songNhacLayerStore'
+import { WAVE_PRESETS } from './builtInPresets'
+import {
+  deleteTemplate,
+  listTemplates,
+  loadTemplate,
+  saveTemplate,
+} from './songNhacTemplateStore'
 
 function localFileUrl(filePath: string): string {
   return `app://local-file/?path=${encodeURIComponent(filePath)}`
@@ -72,14 +80,41 @@ export function LayersPanel() {
   const setEditingGroupId = useSongNhacLayerStore((state) => state.setEditingGroupId)
   const moveLayerInGroup = useSongNhacLayerStore((state) => state.moveLayerInGroup)
 
-  const pickMedia = async (kind: 'image' | 'video') => {
-    const filters = kind === 'image'
+  const pickMedia = async (kind: 'image' | 'video') => {    const filters = kind === 'image'
       ? [{ name: 'Ảnh', extensions: ['jpg', 'jpeg', 'png', 'webp'] }]
       : [{ name: 'Video', extensions: ['mp4', 'mov', 'mkv', 'webm'] }]
     const picked = await window.api.dialog.openFile({ properties: ['openFile'], filters })
     const filePath = picked?.filePaths?.[0]
     if (!filePath) return null
     return { path: localFileUrl(filePath), name: filePath.split(/[\\/]/).pop() || 'Media' }
+  }
+
+  const [templates, setTemplates] = useState(() => listTemplates())
+
+  const applyPreset = (presetId: string) => {
+    const preset = WAVE_PRESETS.find((item) => item.id === presetId)
+    if (!preset) return
+    const state = useSongNhacLayerStore.getState()
+    const existing = state.layers.find((layer) => layer.type === 'visualizer')
+    if (existing) {
+      state.updateLayerWithHistory(existing.id, preset.visualizer as Partial<StudioAnyLayer>)
+      state.setSelection(existing.id)
+      return
+    }
+    const id = state.addVisualizerLayer('Sóng nhạc', preset.visualizer.waveStyle)
+    state.updateLayerWithHistory(id, preset.visualizer as Partial<StudioAnyLayer>)
+  }
+
+  const saveCurrentTemplate = () => {
+    const name = window.prompt('Tên template')
+    if (!name) return
+    saveTemplate(name, useSongNhacLayerStore.getState().layers)
+    setTemplates(listTemplates())
+  }
+
+  const applyTemplate = (templateId: string) => {
+    const nextLayers = loadTemplate(templateId)
+    if (nextLayers) useSongNhacLayerStore.getState().applyTemplateLayers(nextLayers)
   }
 
   const roots = layers.filter((layer) => !isGroupLayer(layer) && !layer.parentId) as StudioAnyLayer[]
@@ -206,6 +241,50 @@ export function LayersPanel() {
           <button type="button" style={buttonStyle} onClick={() => addIntroLayer(5)}>Intro</button>
           <button type="button" style={buttonStyle} onClick={() => addGroup()}>Nhóm</button>
         </div>
+
+        <div style={{ display: 'flex', gap: 4 }}>
+          <select
+            value=""
+            onChange={(event) => applyPreset(event.target.value)}
+            style={{ flex: 1, background: '#0f172a', border: '1px solid #334155', borderRadius: 6, color: '#e2e8f0', fontSize: 11, padding: '4px 6px' }}
+          >
+            <option value="">Preset sóng…</option>
+            {WAVE_PRESETS.map((preset) => (
+              <option key={preset.id} value={preset.id}>{preset.name}</option>
+            ))}
+          </select>
+          <button type="button" style={buttonStyle} onClick={saveCurrentTemplate} title="Lưu template">Lưu</button>
+        </div>
+
+        {templates.length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <div style={{ fontSize: 10, color: '#64748b' }}>Template đã lưu</div>
+            {templates.map((template) => (
+              <div key={template.id} style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                <button
+                  type="button"
+                  style={{ ...buttonStyle, flex: 1, textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                  onClick={() => applyTemplate(template.id)}
+                  title={`${template.layers.length} lớp`}
+                >
+                  {template.name}
+                </button>
+                <button
+                  type="button"
+                  style={{ ...miniButtonStyle, color: '#fca5a5' }}
+                  onClick={() => {
+                    deleteTemplate(template.id)
+                    setTemplates(listTemplates())
+                  }}
+                  title="Xoá template"
+                >
+                  x
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           {displayOrder.length === 0 ? (
             <div style={{ fontSize: 11, color: '#475569', padding: 8 }}>Chưa có lớp. Thêm Ảnh, Chữ hoặc Sóng để bắt đầu.</div>

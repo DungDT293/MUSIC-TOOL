@@ -62,6 +62,7 @@ export default function SongNhacPage() {
   const [isPlaying, setIsPlaying] = useState(false)
   const [webglFallback, setWebglFallback] = useState(false)
   const layers = useSongNhacLayerStore((state) => state.layers)
+  const selectedLayerId = useSongNhacLayerStore((state) => state.selectedLayerId)
   const layersRef = useRef(layers)
   const dragRef = useRef<null | {
     startX: number
@@ -158,6 +159,7 @@ export default function SongNhacPage() {
         showLogo,
       })
       aveeEngineRef.current.setLayers(useSongNhacLayerStore.getState().layers)
+      aveeEngineRef.current.setSelectedLayer(useSongNhacLayerStore.getState().selectedLayerId)
     } catch (error) {
       // No usable WebGL context (VM, old driver, blocked GPU). Remember the failure so the
       // animation loop does not retry every frame, and let the caller draw the 2D fallback.
@@ -370,7 +372,8 @@ export default function SongNhacPage() {
   useEffect(() => {
     layersRef.current = layers
     aveeEngineRef.current?.setLayers(layers)
-  }, [layers, webglFallback])
+    aveeEngineRef.current?.setSelectedLayer(selectedLayerId)
+  }, [layers, selectedLayerId, webglFallback])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {

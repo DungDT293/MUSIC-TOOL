@@ -1,0 +1,179 @@
+import type { StudioColorMode, VisualizerLayer } from './layerTypes'
+
+export interface WavePreset {
+  id: string
+  name: string
+  category: 'neon' | 'minimal' | 'retro' | 'artistic' | 'classic'
+  description: string
+  /** Values applied to the visualizer layer. */
+  visualizer: Partial<Pick<
+    VisualizerLayer,
+    'waveStyle' | 'colorMode' | 'color1' | 'color2' | 'barCount' | 'barWidth' | 'speed' | 'opacity' | 'glowEnabled' | 'glowIntensity' | 'mirror' | 'sensitivity'
+  >>
+}
+
+export const WAVE_PRESETS: WavePreset[] = [
+  {
+    id: 'neon-circle',
+    name: 'Neon Circle',
+    category: 'neon',
+    description: 'Vòng tròn cyan-hồng, glow mạnh',
+    visualizer: {
+      waveStyle: 'circlebars',
+      colorMode: 'gradient',
+      color1: '#00f2fe',
+      color2: '#fe0979',
+      barCount: 160,
+      speed: 1,
+      sensitivity: 1.1,
+      glowEnabled: true,
+      glowIntensity: 0.9,
+      mirror: true,
+    },
+  },
+  {
+    id: 'fire-bars',
+    name: 'Fire Bars',
+    category: 'neon',
+    description: 'Cột lửa cam-đỏ',
+    visualizer: {
+      waveStyle: 'bars',
+      colorMode: 'gradient',
+      color1: '#ffd200',
+      color2: '#ff3d00',
+      barCount: 96,
+      sensitivity: 1.4,
+      glowEnabled: true,
+      glowIntensity: 1.1,
+    },
+  },
+  {
+    id: 'minimal-line',
+    name: 'Minimal Line',
+    category: 'minimal',
+    description: 'Một đường mảnh, ít hiệu ứng',
+    visualizer: {
+      waveStyle: 'line',
+      colorMode: 'solid',
+      color1: '#e5e7eb',
+      barCount: 64,
+      sensitivity: 0.8,
+      glowEnabled: false,
+      glowIntensity: 0.2,
+    },
+  },
+  {
+    id: 'retro-bars',
+    name: 'Retro Bars',
+    category: 'retro',
+    description: 'Cột 8-bit tím-xanh',
+    visualizer: {
+      waveStyle: 'bars',
+      colorMode: 'gradient',
+      color1: '#a855f7',
+      color2: '#22d3ee',
+      barCount: 64,
+      sensitivity: 1.2,
+      glowEnabled: true,
+      glowIntensity: 0.6,
+    },
+  },
+  {
+    id: 'galaxy',
+    name: 'Galaxy Spin',
+    category: 'artistic',
+    description: 'Vòng hạt xoay chậm',
+    visualizer: {
+      waveStyle: 'particles',
+      colorMode: 'gradient',
+      color1: '#7c3aed',
+      color2: '#38bdf8',
+      barCount: 128,
+      speed: 0.6,
+      sensitivity: 0.9,
+      glowEnabled: true,
+      glowIntensity: 0.8,
+    },
+  },
+  {
+    id: 'plasma-ring',
+    name: 'Plasma Ring',
+    category: 'artistic',
+    description: 'Vành plasma đổi màu',
+    visualizer: {
+      waveStyle: 'ring',
+      colorMode: 'rainbow',
+      barCount: 192,
+      speed: 1.4,
+      sensitivity: 1,
+      glowEnabled: true,
+      glowIntensity: 1,
+    },
+  },
+  {
+    id: 'cyan-wave',
+    name: 'Cyan Waveform',
+    category: 'minimal',
+    description: 'Sóng âm xanh nhạt',
+    visualizer: {
+      waveStyle: 'waveform',
+      colorMode: 'solid',
+      color1: '#22d3ee',
+      barCount: 128,
+      sensitivity: 1,
+      glowEnabled: true,
+      glowIntensity: 0.4,
+    },
+  },
+  {
+    id: 'electric-dots',
+    name: 'Electric Dots',
+    category: 'neon',
+    description: 'Điểm sáng nhảy theo nhịp',
+    visualizer: {
+      waveStyle: 'dots',
+      colorMode: 'gradient',
+      color1: '#facc15',
+      color2: '#22d3ee',
+      barCount: 96,
+      sensitivity: 1.5,
+      glowEnabled: true,
+      glowIntensity: 0.7,
+    },
+  },
+  {
+    id: 'avee-classic',
+    name: 'Avee Classic',
+    category: 'classic',
+    description: 'Bố cục quen thuộc của Avee Player',
+    visualizer: {
+      waveStyle: 'circlebars',
+      colorMode: 'gradient',
+      color1: '#00ccff',
+      color2: '#ff0066',
+      barCount: 128,
+      speed: 1,
+      sensitivity: 1,
+      glowEnabled: true,
+      glowIntensity: 0.5,
+      mirror: true,
+    },
+  },
+  {
+    id: 'mono-spike',
+    name: 'Mono Spike',
+    category: 'minimal',
+    description: 'Trắng đen, tương phản cao',
+    visualizer: {
+      waveStyle: 'circlebars',
+      colorMode: 'solid',
+      color1: '#ffffff',
+      barCount: 224,
+      sensitivity: 1.6,
+      glowEnabled: false,
+      glowIntensity: 0.1,
+    },
+  },
+]
+
+export const COLOR_MODES: StudioColorMode[] = ['rainbow', 'solid', 'gradient']
