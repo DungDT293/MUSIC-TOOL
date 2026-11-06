@@ -58,6 +58,7 @@ Mục tiêu: clone toàn bộ chức năng editor Vizzy vào Sóng nhạc. Mỗi
 | Xuất theo khoảng thời gian trong hàng đợi | ✅ |
 | Xuất hàng loạt: chọn nhiều bài + 1 thư mục, mỗi bài 1 job | ✅ |
 | Hàng đợi lưu qua lần mở app; job đang chạy tự resume thành chờ | ✅ |
+| Mẫu xuất (1080p30/60, 4K, Shorts 9:16, vuông, 720p) + tự lưu mẫu riêng | ✅ |
 | Hoàn tác / làm lại thao tác hàng đợi (thêm, xoá, dọn) | ✅ |
 
 ## Ghi chú kỹ thuật

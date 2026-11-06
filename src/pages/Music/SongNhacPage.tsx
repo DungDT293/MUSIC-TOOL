@@ -17,6 +17,7 @@ import { useMediaLibrary, type MediaKind } from '../../features/song-nhac/studio
 import { useExportQueue, type ExportJob } from '../../features/song-nhac/studio/exportQueueStore'
 import { useUserPresets } from '../../features/song-nhac/studio/userPresetsStore'
 import { STOCK_ITEMS } from '../../features/song-nhac/studio/stockMedia'
+import { useExportTemplates, listTemplates } from '../../features/song-nhac/studio/exportTemplates'
 import { useProjectHistory } from '../../features/song-nhac/studio/projectHistoryStore'
 import {
   renderPresetThumbnails,
@@ -303,8 +304,10 @@ export default function SongNhacPage() {
   const queueJobs = useExportQueue((state) => state.jobs)
   const projectHistory = useProjectHistory()
   const userPresets = useUserPresets()
+  const exportTemplates = useExportTemplates()
   const [presetName, setPresetName] = useState('')
   const [lyricQuery, setLyricQuery] = useState('')
+  const [exportTemplateName, setExportTemplateName] = useState('')
   const [lyricHits, setLyricHits] = useState<LyricSearchHit[]>([])
   const [lyricBusy, setLyricBusy] = useState(false)
   const [lyricError, setLyricError] = useState('')
@@ -1354,6 +1357,31 @@ export default function SongNhacPage() {
     return added
   }
 
+  const applyExportTemplate = (template: { width: number; height: number; fps: number; codec: string; bitrateTier: string }) => {
+    setExportWidth(template.width)
+    setExportHeight(template.height)
+    setExportFps(template.fps)
+    if (template.codec === 'h264' || template.codec === 'hevc') setExportCodec(template.codec)
+    if (template.bitrateTier === 'high' || template.bitrateTier === 'balanced' || template.bitrateTier === 'light') {
+      setBitrateTier(template.bitrateTier)
+    }
+    setMessage(`Đã áp mẫu xuất ${template.width}×${template.height} @ ${template.fps}fps.`)
+  }
+
+  const saveExportTemplate = () => {
+    const name = exportTemplateName.trim() || `${exportWidth}×${exportHeight} @ ${exportFps}fps`
+    if (!name) return
+    useExportTemplates.getState().save({
+      name,
+      width: exportWidth,
+      height: exportHeight,
+      fps: exportFps,
+      codec: exportCodec,
+      bitrateTier,
+    })
+    setExportTemplateName('')
+    setMessage(`Đã lưu mẫu xuất: ${name}`)
+  }
   const enqueueBatch = async () => {
     const files = await window.api.selectAudioFilesMulti()
     if (!files?.length) return
@@ -2050,6 +2078,48 @@ export default function SongNhacPage() {
               <div>
                 Cài đặt xuất nằm ở cột bên phải: độ phân giải, FPS, codec, chất lượng và khoảng thời gian.
               </div>
+              <div style={{ fontSize: 10, letterSpacing: 0.5, color: '#475569' }}>MẪU XUẤT</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                {listTemplates(exportTemplates.templates).map((template) => {
+                  const active = exportWidth === template.width && exportHeight === template.height && exportFps === template.fps
+                  return (
+                    <span key={template.id} style={{ display: 'inline-flex' }}>
+                      <button
+                        type="button"
+                        onClick={() => applyExportTemplate(template)}
+                        title={`${template.width}×${template.height} @ ${template.fps}fps · ${template.codec}`}
+                        style={{
+                          padding: '3px 7px',
+                          borderRadius: 6,
+                          border: `1px solid ${active ? '#0ea5e9' : '#1e293b'}`,
+                          background: active ? '#0c4a6e' : '#0f172a',
+                          color: active ? '#e0f2fe' : '#94a3b8',
+                          fontSize: 10,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        {template.name}
+                      </button>
+                    </span>
+                  )
+                })}
+              </div>
+              <input
+                value={exportTemplateName}
+                onChange={(event) => setExportTemplateName(event.target.value)}
+                placeholder={`Tên mẫu (${exportWidth}×${exportHeight} @ ${exportFps}fps)`}
+                style={{
+                  padding: '6px 8px',
+                  borderRadius: 6,
+                  border: '1px solid #334155',
+                  background: '#0f172a',
+                  color: '#e2e8f0',
+                  fontSize: 11,
+                }}
+              />
+              <button type="button" onClick={saveExportTemplate} style={projectButtonStyle}>
+                Lưu cài đặt hiện tại thành mẫu
+              </button>
               <button type="button" onClick={enqueueCurrentJob} style={projectButtonStyle}>
                 Thêm vào hàng đợi
               </button>
