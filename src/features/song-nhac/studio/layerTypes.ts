@@ -1,8 +1,8 @@
 /**
- * Song Nhạc studio layer model.
+ * Song Nháº¡c studio layer model.
  *
  * Units: transform x/y are pixels relative to the centre of a 1080p-high stage
- * (y grows downwards, like the old studio). The engine converts px → world units,
+ * (y grows downwards, like the old studio). The engine converts px â†’ world units,
  * so a layout keeps its proportions at any resolution.
  */
 
@@ -58,7 +58,7 @@ export interface StudioAnalyzer {
   bandEnd: number
   /** Multiplier applied to the band energy. */
   sensitivity: number
-  /** 0..0.95 — higher means smoother motion. */
+  /** 0..0.95 â€” higher means smoother motion. */
   smoothing: number
 }
 
@@ -206,6 +206,9 @@ export interface TextLayer extends StudioLayerBase {
   lineHeight: number
   /** Extra pixels between characters. */
   letterSpacing: number
+  /** Fill the text with a horizontal gradient instead of a solid colour. */
+  gradientEnabled: boolean
+  gradientColor: string
 }
 
 /** One extra spectrum ring drawn on top of the main visualizer. */
@@ -226,7 +229,7 @@ export interface SpectrumLayer {
 export function createSpectrumLayer(index = 1): SpectrumLayer {
   return {
     id: `spec-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`,
-    name: `Dải ${index}`,
+    name: `Dáº£i ${index}`,
     bandStart: 0,
     bandEnd: 0.5,
     color1: '#22d3ee',
@@ -401,7 +404,7 @@ function createBase(type: StudioLayerType, name: string): StudioLayerBase {
   }
 }
 
-export function createVisualizerLayer(name = 'Sóng nhạc'): VisualizerLayer {
+export function createVisualizerLayer(name = 'SÃ³ng nháº¡c'): VisualizerLayer {
   return {
     ...createBase('visualizer', name),
     type: 'visualizer',
@@ -420,7 +423,7 @@ export function createVisualizerLayer(name = 'Sóng nhạc'): VisualizerLayer {
   }
 }
 
-export function createImageLayer(src = '', name = 'Ảnh'): ImageLayer {
+export function createImageLayer(src = '', name = 'áº¢nh'): ImageLayer {
   return {
     ...createBase('image', name),
     type: 'image',
@@ -446,9 +449,9 @@ export function createVideoLayer(src = '', name = 'Video'): VideoLayer {
   }
 }
 
-export function createTextLayer(text = 'Tên bài hát'): TextLayer {
+export function createTextLayer(text = 'TÃªn bÃ i hÃ¡t'): TextLayer {
   return {
-    ...createBase('text', text.slice(0, 24) || 'Văn bản'),
+    ...createBase('text', text.slice(0, 24) || 'VÄƒn báº£n'),
     type: 'text',
     transform: { ...DEFAULT_TRANSFORM, y: 320 },
     text,
@@ -466,13 +469,15 @@ export function createTextLayer(text = 'Tên bài hát'): TextLayer {
     align: 'center',
     lineHeight: 1.2,
     letterSpacing: 0,
+    gradientEnabled: false,
+    gradientColor: '#f472b6',
   }
 }
 
 export interface ParticlesLayer extends StudioLayerBase {
   type: 'particles'
   /** Dot / square / star drawn by the point sprite. */
-  shape: 'dot' | 'square' | 'star'
+  shape: 'dot' | 'square' | 'star' | 'cloud' | 'moon'
   color: string
   /** Number of points. */
   amount: number
@@ -493,7 +498,7 @@ export interface ParticlesLayer extends StudioLayerBase {
   constantSize: boolean
   /** Motion pattern: drift upwards, swirl around the origin or burst outwards. */
   behaviour: 'drift' | 'swirl' | 'explode'
-  /** 0..1 — how differently each particle moves (0 = identical). */
+  /** 0..1 â€” how differently each particle moves (0 = identical). */
   randomness: number
   /** Depth spread towards the camera / away from it, 0..1. */
   frontLimit: number
@@ -506,7 +511,7 @@ export interface ParticlesLayer extends StudioLayerBase {
   mirror: boolean
 }
 
-export function createParticlesLayer(name = 'Hạt'): ParticlesLayer {
+export function createParticlesLayer(name = 'Háº¡t'): ParticlesLayer {
   return {
     ...createBase('particles', name),
     type: 'particles',
@@ -586,7 +591,7 @@ export function fitSize(
   if (mediaWidth <= 0 || mediaHeight <= 0) return { width: stageWidth, height: stageHeight }
   if (fit === 'free') {
     // Native size, but never larger than the stage: a 4000px photo would otherwise
-    // flood the whole frame the moment you switch to "Tự do".
+    // flood the whole frame the moment you switch to "Tá»± do".
     if (mediaWidth <= stageWidth && mediaHeight <= stageHeight) {
       return { width: mediaWidth, height: mediaHeight }
     }

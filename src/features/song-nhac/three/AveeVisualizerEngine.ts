@@ -1048,7 +1048,7 @@ export class AveeVisualizerEngine {
       return `particles:${layer.amount}:${layer.shape}:${layer.color}:${layer.sizeMin}:${layer.sizeMax}`
     }
     if (layer.type === 'text') {
-      return `text:${layer.text}|${layer.fontSize}|${layer.color}|${layer.strokeColor}|${layer.strokeWidth}|${layer.fontWeight}|${layer.italic}|${layer.fontFamily}|${layer.textShadowBlur}|${layer.textShadowColor}|${layer.textShadowOffsetX}|${layer.textShadowOffsetY}|${layer.align}|${layer.lineHeight}|${layer.letterSpacing}|${filterKey}`
+      return `text:${layer.text}|${layer.fontSize}|${layer.color}|${layer.strokeColor}|${layer.strokeWidth}|${layer.fontWeight}|${layer.italic}|${layer.fontFamily}|${layer.textShadowBlur}|${layer.textShadowColor}|${layer.textShadowOffsetX}|${layer.textShadowOffsetY}|${layer.align}|${layer.lineHeight}|${layer.letterSpacing}|${layer.gradientEnabled}|${layer.gradientColor}|${filterKey}`
     }
     if (layer.type === 'lyrics') {
       return `lyrics:${layer.fontSize}:${layer.color}:${layer.showNeighbours}:${layer.lines.map((line) => `${line.timeSec}|${line.text}`).join('~')}`
@@ -1675,7 +1675,7 @@ export class AveeVisualizerEngine {
       uniforms: {
         uColor: { value: new THREE.Color(layer.color) },
         uPixelRatio: { value: Math.min(2, window.devicePixelRatio || 1) },
-        uShape: { value: layer.shape === 'square' ? 1 : layer.shape === 'star' ? 2 : 0 },
+        uShape: { value: ({ dot: 0, square: 1, star: 2, cloud: 3, moon: 4 } as Record<string, number>)[layer.shape] ?? 0 },
         uMirror: { value: layer.mirror ? 1 : 0 },
         uFade: { value: 1 },
       },
@@ -1844,7 +1844,14 @@ export class AveeVisualizerEngine {
           ctx.strokeStyle = layer.strokeColor
           ctx.strokeText(line, anchorX, y)
         }
-        ctx.fillStyle = layer.color
+        if (layer.gradientEnabled) {
+          const gradient = ctx.createLinearGradient(0, 0, width, 0)
+          gradient.addColorStop(0, layer.color)
+          gradient.addColorStop(1, layer.gradientColor)
+          ctx.fillStyle = gradient
+        } else {
+          ctx.fillStyle = layer.color
+        }
         ctx.fillText(line, anchorX, y)
       })
     }

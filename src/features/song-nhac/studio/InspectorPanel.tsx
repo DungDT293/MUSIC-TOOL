@@ -308,6 +308,18 @@ export function InspectorPanel() {
               />
               <NumRow label="Cỡ chữ" value={layer.fontSize} min={6} max={500} onChange={(fontSize) => updateLayer(layer.id, { fontSize })} />
               <ColorRow label="Màu chữ" value={layer.color} onChange={(color) => updateLayer(layer.id, { color })} />
+              <CheckRow
+                label="Chữ gradient"
+                checked={layer.gradientEnabled}
+                onChange={(gradientEnabled) => updateLayerWithHistory(layer.id, { gradientEnabled })}
+              />
+              {layer.gradientEnabled && (
+                <ColorRow
+                  label="Màu cuối"
+                  value={layer.gradientColor}
+                  onChange={(gradientColor) => updateLayer(layer.id, { gradientColor })}
+                />
+              )}
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <span style={labelStyle}>Font</span>
                 <select style={inputStyle} value={layer.fontFamily} onChange={(event) => updateLayer(layer.id, { fontFamily: event.target.value })}>
@@ -850,6 +862,8 @@ export function InspectorPanel() {
                 <option value="dot">Tròn mềm</option>
                 <option value="square">Vuông</option>
                 <option value="star">Sao</option>
+                <option value="cloud">Mây</option>
+                <option value="moon">Trăng</option>
               </select>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
