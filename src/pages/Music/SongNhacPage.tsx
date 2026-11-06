@@ -2004,6 +2004,24 @@ export default function SongNhacPage() {
                 ))}
                 {queueJobs.length === 0 && <div style={{ fontSize: 11, color: '#475569' }}>Hàng đợi trống.</div>}
               </div>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button
+                  type="button"
+                  onClick={() => useExportQueue.getState().undo()}
+                  disabled={!useExportQueue.getState().canUndo()}
+                  style={{ ...projectButtonStyle, flex: 1, opacity: useExportQueue.getState().canUndo() ? 1 : 0.45 }}
+                >
+                  Hoàn tác
+                </button>
+                <button
+                  type="button"
+                  onClick={() => useExportQueue.getState().redo()}
+                  disabled={!useExportQueue.getState().canRedo()}
+                  style={{ ...projectButtonStyle, flex: 1, opacity: useExportQueue.getState().canRedo() ? 1 : 0.45 }}
+                >
+                  Làm lại
+                </button>
+              </div>
               {queueJobs.some((job) => job.status === 'done' || job.status === 'error') && (
                 <button
                   type="button"

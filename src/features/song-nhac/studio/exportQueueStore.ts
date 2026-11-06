@@ -61,31 +61,69 @@ function persist(jobs: ExportJob[]) {
 
 interface ExportQueueStore {
   jobs: ExportJob[]
+  /** Structural history (add / remove / clear). Progress ticks are not recorded. */
+  past: ExportJob[][]
+  future: ExportJob[][]
   enqueue: (input: Omit<ExportJob, 'id' | 'status' | 'progress' | 'createdAt'>) => string
   update: (id: string, patch: Partial<ExportJob>) => void
   remove: (id: string) => void
   clearFinished: () => void
   nextPending: () => ExportJob | undefined
+  undo: () => void
+  redo: () => void
+  canUndo: () => boolean
+  canRedo: () => boolean
 }
 
+const HISTORY_LIMIT = 30
+
 export const useExportQueue = create<ExportQueueStore>((set, get) => {
+  /** Persists without touching history (progress ticks). */
   const commit = (jobs: ExportJob[]) => {
     persist(jobs)
     set({ jobs })
   }
+  /** Persists and records an undo step (add / remove / clear). */
+  const commitWithHistory = (jobs: ExportJob[]) => {
+    persist(jobs)
+    set({
+      jobs,
+      past: [...get().past, get().jobs].slice(-HISTORY_LIMIT),
+      future: [],
+    })
+  }
   return {
     jobs: loadJobs(),
+    past: [],
+    future: [],
     enqueue: (input) => {
       const id = `job-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
       const job: ExportJob = { ...input, id, status: 'pending', progress: 0, createdAt: Date.now() }
-      commit([...get().jobs, job])
+      commitWithHistory([...get().jobs, job])
       return id
     },
     update: (id, patch) => {
       commit(get().jobs.map((job) => (job.id === id ? { ...job, ...patch } : job)))
     },
-    remove: (id) => commit(get().jobs.filter((job) => job.id !== id)),
-    clearFinished: () => commit(get().jobs.filter((job) => job.status === 'pending' || job.status === 'running')),
+    remove: (id) => commitWithHistory(get().jobs.filter((job) => job.id !== id)),
+    clearFinished: () =>
+      commitWithHistory(get().jobs.filter((job) => job.status === 'pending' || job.status === 'running')),
     nextPending: () => get().jobs.find((job) => job.status === 'pending'),
+    undo: () => {
+      const past = get().past
+      if (!past.length) return
+      const previous = past[past.length - 1]
+      persist(previous)
+      set({ jobs: previous, past: past.slice(0, -1), future: [get().jobs, ...get().future].slice(0, HISTORY_LIMIT) })
+    },
+    redo: () => {
+      const future = get().future
+      if (!future.length) return
+      const next = future[0]
+      persist(next)
+      set({ jobs: next, past: [...get().past, get().jobs].slice(-HISTORY_LIMIT), future: future.slice(1) })
+    },
+    canUndo: () => get().past.length > 0,
+    canRedo: () => get().future.length > 0,
   }
 })
