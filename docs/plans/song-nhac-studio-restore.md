@@ -16,10 +16,11 @@ Tài liệu tham chiếu: `legacy-song-nhac/` (106 file, ~20.158 dòng — chỉ
 | P5 | ✅ | Filter bake (ảnh/chữ), tham số sóng theo lớp, beat pulse, **3 kiểu sóng** (vòng tròn / cột dưới / điểm) |
 | P6 | ✅ | Độ phân giải, FPS, khoảng thời gian khi xuất |
 
-Giới hạn đã biết:
-- Nhiều lớp visualizer cùng lúc: engine chỉ dùng lớp cuối (một cụm sóng duy nhất).
-- Video layer chưa áp được filter (phải bake mỗi frame).
-- Chưa kiểm thử xuất MP4 end-to-end trong GUI (cần hộp thoại file thật).
+Giới hạn đã biết (sau khi xử lý 3 mục cuối):
+- Video layer có filter màu được bake mỗi frame (giới hạn 1920px để không tụt FPS); video không filter dùng VideoTexture trực tiếp.
+- Nhiều lớp visualizer: lớp đầu tiên sở hữu scene đầy đủ (logo/vòng/hạt), các lớp sau vẽ vòng phổ riêng qua `SpectrumRing`.
+- Sóng quanh ảnh dùng bảng màu cố định (cyan/hồng), chưa lấy theo màu của lớp sóng.
+- Chưa có người dùng chạy thử xuất MP4 trong GUI (hộp thoại file thật); phần IPC + mux đã có test tự động.
 
 
 ---
