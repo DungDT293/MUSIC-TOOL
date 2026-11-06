@@ -1601,6 +1601,7 @@ export class AveeVisualizerEngine {
         uPixelRatio: { value: Math.min(2, window.devicePixelRatio || 1) },
         uShape: { value: layer.shape === 'square' ? 1 : layer.shape === 'star' ? 2 : 0 },
         uMirror: { value: layer.mirror ? 1 : 0 },
+        uFade: { value: 1 },
       },
       vertexShader: /* glsl */ `
         attribute float aSize;
@@ -1619,6 +1620,7 @@ export class AveeVisualizerEngine {
         uniform vec3 uColor;
         uniform float uShape;
         uniform float uMirror;
+        uniform float uFade;
         varying float vAlpha;
         void main() {
           vec2 coord = gl_PointCoord - 0.5;
@@ -1632,7 +1634,7 @@ export class AveeVisualizerEngine {
             mask = step(max(abs(coord.x), abs(coord.y)), 0.35);
           }
           if (mask <= 0.001) discard;
-          gl_FragColor = vec4(uColor, mask * vAlpha);
+          gl_FragColor = vec4(uColor, mask * vAlpha * uFade);
         }
       `,
     })
@@ -1647,23 +1649,39 @@ export class AveeVisualizerEngine {
       depthFactor: 1,
       layer,
       tick: () => {
+        const live = (node.layer ?? layer) as ParticlesLayer
         const frame = this.lastFrame
         const beat = frame ? this.bandEnergy(frame, this.analyzerOf(layer)) : 0
         const dt = this.lastDelta
         const position = geometry.getAttribute('position') as THREE.BufferAttribute
         const data = position.array as Float32Array
-        const drift = layer.speed * dt
+        const drift = live.speed * dt
         for (let i = 0; i < amount; i += 1) {
           const yIndex = i * 3 + 1
-          data[yIndex] -= drift + layer.gravity * dt
+          data[yIndex] -= drift + live.gravity * dt
           data[i * 3] += Math.sin(seeds[i] + this.lastTimeSec * 0.8) * 0.0025
           if (data[yIndex] < -1.9) data[yIndex] = 1.9
           if (data[yIndex] > 1.9) data[yIndex] = -1.9
         }
         position.needsUpdate = true
-        material.uniforms.uMirror.value = layer.mirror ? 1 : 0
-        const boost = 1 + beat * layer.beatBoost
+        material.uniforms.uMirror.value = live.mirror ? 1 : 0
+        const boost = 1 + beat * live.beatBoost
         material.uniforms.uPixelRatio.value = Math.min(2, window.devicePixelRatio || 1) * boost
+        // Origin is in 0..1 frame space; the stage is centred on 0.
+        points.position.set((live.originX - 0.5) * this.stageWidth, (0.5 - live.originY) * this.stageHeight, 0)
+        const fadeIn = Math.max(0, live.fadeInSec ?? 0)
+        const fadeOut = Math.max(0, live.fadeOutSec ?? 0)
+        let fade = 1
+        const range = live.timeRange
+        if (range) {
+          const start = range.startSec
+          const end = Number.isFinite(range.endSec) ? range.endSec : start + fadeIn + fadeOut + 1
+          const now = this.lastTimeSec
+          if (fadeIn > 0 && now < start + fadeIn) fade = Math.max(0, (now - start) / fadeIn)
+          if (fadeOut > 0 && now > end - fadeOut) fade = Math.max(0, (end - now) / fadeOut)
+        }
+        material.uniforms.uFade.value = Math.max(0, Math.min(1, fade))
+        if (live.constantSize) material.uniforms.uPixelRatio.value = Math.min(2, window.devicePixelRatio || 1) * 1
       },
       dispose: () => {
         geometry.dispose()

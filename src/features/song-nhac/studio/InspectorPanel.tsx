@@ -759,6 +759,51 @@ export function InspectorPanel() {
               onChange={(beatBoost) => updateLayer(layer.id, { beatBoost })}
               onCommit={commit}
             />
+            <SliderRow
+              label="Gốc ngang"
+              value={layer.originX}
+              min={0}
+              max={1}
+              step={0.01}
+              format={(value) => `${Math.round(value * 100)}%`}
+              onChange={(originX) => updateLayer(layer.id, { originX })}
+              onCommit={commit}
+            />
+            <SliderRow
+              label="Gốc dọc"
+              value={layer.originY}
+              min={0}
+              max={1}
+              step={0.01}
+              format={(value) => `${Math.round(value * 100)}%`}
+              onChange={(originY) => updateLayer(layer.id, { originY })}
+              onCommit={commit}
+            />
+            <SliderRow
+              label="Mờ dần vào"
+              value={layer.fadeInSec}
+              min={0}
+              max={5}
+              step={0.1}
+              format={(value) => `${value.toFixed(1)}s`}
+              onChange={(fadeInSec) => updateLayer(layer.id, { fadeInSec })}
+              onCommit={commit}
+            />
+            <SliderRow
+              label="Mờ dần ra"
+              value={layer.fadeOutSec}
+              min={0}
+              max={5}
+              step={0.1}
+              format={(value) => `${value.toFixed(1)}s`}
+              onChange={(fadeOutSec) => updateLayer(layer.id, { fadeOutSec })}
+              onCommit={commit}
+            />
+            <CheckRow
+              label="Cỡ cố định"
+              checked={layer.constantSize}
+              onChange={(constantSize) => updateLayerWithHistory(layer.id, { constantSize })}
+            />
             <CheckRow label="Đối xứng" checked={layer.mirror} onChange={(mirror) => updateLayerWithHistory(layer.id, { mirror })} />
           </Section>
         )}

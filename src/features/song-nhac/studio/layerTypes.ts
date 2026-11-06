@@ -427,6 +427,14 @@ export interface ParticlesLayer extends StudioLayerBase {
   spread: number
   /** Pulls particles down; negative floats up. */
   gravity: number
+  /** Emission centre, 0..1 of the frame (0.5 = centre). */
+  originX: number
+  originY: number
+  /** When true every particle keeps its size instead of growing on the beat. */
+  constantSize: boolean
+  /** Seconds of fade at the start / end of the clip. */
+  fadeInSec: number
+  fadeOutSec: number
   /** Extra size on the kick drum, 0 = none. */
   beatBoost: number
   mirror: boolean
@@ -446,6 +454,11 @@ export function createParticlesLayer(name = 'Hạt'): ParticlesLayer {
     speed: 0.35,
     spread: 5.2,
     gravity: 0.02,
+    originX: 0.5,
+    originY: 0.5,
+    constantSize: false,
+    fadeInSec: 0,
+    fadeOutSec: 0,
     beatBoost: 0.6,
     mirror: true,
   }
