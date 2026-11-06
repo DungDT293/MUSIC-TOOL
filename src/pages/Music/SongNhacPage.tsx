@@ -131,6 +131,11 @@ export default function SongNhacPage() {
     if (layer?.type === 'text') state.setFocusContentInputId(layer.id)
   }
   const [isExporting, setIsExporting] = useState(false)
+  const [exportWidth, setExportWidth] = useState(1920)
+  const [exportHeight, setExportHeight] = useState(1080)
+  const [exportFps, setExportFps] = useState(30)
+  const [rangeStart, setRangeStart] = useState<number | ''>('')
+  const [rangeEnd, setRangeEnd] = useState<number | ''>('')
   const [progress, setProgress] = useState<SongNhacExportProgress | null>(null)
   const [message, setMessage] = useState('Chọn audio để bắt đầu.')
 
@@ -433,9 +438,11 @@ export default function SongNhacPage() {
           requestId,
           audioPath,
           outputPath,
-          width: 1920,
-          height: 1080,
-          fps: 30,
+          width: exportWidth,
+          height: exportHeight,
+          fps: exportFps,
+          rangeStartSec: typeof rangeStart === 'number' ? rangeStart : undefined,
+          rangeEndSec: typeof rangeEnd === 'number' ? rangeEnd : undefined,
           theme,
           intensity,
           quality: 'balanced',
@@ -457,9 +464,9 @@ export default function SongNhacPage() {
           audioPath,
           outputPath,
           style,
-          width: 1920,
-          height: 1080,
-          fps: 30,
+          width: exportWidth,
+          height: exportHeight,
+          fps: exportFps,
         })
         setMessage(result.success ? `Xuất xong: ${result.outputPath}` : result.error || 'Xuất Song Nhạc thất bại.')
       }
@@ -862,6 +869,60 @@ export default function SongNhacPage() {
           >
             {isExporting ? 'Đang xuất video…' : 'Bắt đầu xuất MP4'}
           </button>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginTop: 8 }}>
+            <label style={{ fontSize: 11, color: '#94a3b8' }}>
+              Độ phân giải
+              <select
+                value={`${exportWidth}x${exportHeight}`}
+                onChange={(event) => {
+                  const [w, h] = event.target.value.split('x').map(Number)
+                  setExportWidth(w)
+                  setExportHeight(h)
+                }}
+                style={{ width: '100%', background: '#0f172a', border: '1px solid #334155', borderRadius: 6, color: '#e2e8f0', fontSize: 12, padding: '4px 6px' }}
+              >
+                <option value="1280x720">720p</option>
+                <option value="1920x1080">1080p</option>
+                <option value="2560x1440">1440p</option>
+              </select>
+            </label>
+            <label style={{ fontSize: 11, color: '#94a3b8' }}>
+              FPS
+              <select
+                value={exportFps}
+                onChange={(event) => setExportFps(Number(event.target.value))}
+                style={{ width: '100%', background: '#0f172a', border: '1px solid #334155', borderRadius: 6, color: '#e2e8f0', fontSize: 12, padding: '4px 6px' }}
+              >
+                <option value={24}>24</option>
+                <option value={30}>30</option>
+                <option value={60}>60</option>
+              </select>
+            </label>
+            <label style={{ fontSize: 11, color: '#94a3b8' }}>
+              Từ giây
+              <input
+                type="number"
+                min={0}
+                step={1}
+                value={rangeStart}
+                placeholder="0"
+                onChange={(event) => setRangeStart(event.target.value === '' ? '' : Number(event.target.value))}
+                style={{ width: '100%', background: '#0f172a', border: '1px solid #334155', borderRadius: 6, color: '#e2e8f0', fontSize: 12, padding: '4px 6px' }}
+              />
+            </label>
+            <label style={{ fontSize: 11, color: '#94a3b8' }}>
+              Đến giây (trống = hết)
+              <input
+                type="number"
+                min={0}
+                step={1}
+                value={rangeEnd}
+                onChange={(event) => setRangeEnd(event.target.value === '' ? '' : Number(event.target.value))}
+                style={{ width: '100%', background: '#0f172a', border: '1px solid #334155', borderRadius: 6, color: '#e2e8f0', fontSize: 12, padding: '4px 6px' }}
+              />
+            </label>
+          </div>
 
           {isExporting && (
             <button

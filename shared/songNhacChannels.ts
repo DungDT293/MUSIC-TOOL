@@ -17,6 +17,9 @@ export interface SongNhacFramesRequest {
   height: number
   fps: number
   totalFrames: number
+  /** Optional trim of the source audio, in seconds. Absent = whole file. */
+  startSec?: number
+  durationSec?: number
 }
 
 export interface SongNhacFramesResult {

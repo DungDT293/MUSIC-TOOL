@@ -106,16 +106,23 @@ function validateFramesRequest(raw: unknown): SongNhacFramesRequest {
   if (!Number.isInteger(height) || height < 180 || height > 2160) throw new Error('Height không hợp lệ.')
   if (!Number.isInteger(fps) || fps < 12 || fps > 60) throw new Error('FPS không hợp lệ.')
   if (!Number.isInteger(totalFrames) || totalFrames < 1) throw new Error('totalFrames không hợp lệ.')
-  return { ...request, requestId: request.requestId.trim(), width, height, fps, totalFrames } as SongNhacFramesRequest
+  const startSec = request.startSec === undefined ? undefined : Number(request.startSec)
+  const durationSec = request.durationSec === undefined ? undefined : Number(request.durationSec)
+  if (startSec !== undefined && (!Number.isFinite(startSec) || startSec < 0)) throw new Error('startSec không hợp lệ.')
+  if (durationSec !== undefined && (!Number.isFinite(durationSec) || durationSec <= 0)) throw new Error('durationSec không hợp lệ.')
+  return { ...request, requestId: request.requestId.trim(), width, height, fps, totalFrames, startSec, durationSec } as SongNhacFramesRequest
 }
 
 function muxFrames(session: FrameSession): Promise<void> {
   const { request, tempPath } = session
   const { ffmpeg } = getFfmpegPaths()
+  const trim = request.startSec && request.startSec > 0 ? ['-ss', String(request.startSec)] : []
   const args = [
     '-hide_banner', '-loglevel', 'error', '-y',
     '-f', 'h264', '-framerate', String(request.fps), '-i', tempPath,
+    ...trim,
     '-i', request.audioPath,
+    ...(request.durationSec && request.durationSec > 0 ? ['-t', String(request.durationSec)] : []),
     '-map', '0:v:0', '-map', '1:a:0',
     '-c:v', 'copy',
     '-c:a', 'aac', '-b:a', '192k', '-ar', '48000',

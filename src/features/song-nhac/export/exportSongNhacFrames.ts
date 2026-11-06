@@ -19,6 +19,9 @@ export interface ExportSongNhacFramesOptions {
   seed?: number
   /** Layer stack to render. Without it the exported video loses every image/text layer. */
   layers?: StudioAnyLayer[]
+  /** Optional trim, in seconds. Absent = whole audio. */
+  rangeStartSec?: number
+  rangeEndSec?: number
   signal?: AbortSignal
   onProgress?: (percent: number, renderedFrames: number, totalFrames: number) => void
 }
@@ -48,8 +51,15 @@ export async function exportSongNhacFrames(options: ExportSongNhacFramesOptions)
     const analysisContext = new OfflineAudioContext(1, 1, 48000)
     const audioBuffer = await analysisContext.decodeAudioData(audioBytes.slice(0))
 
-    const frames = analyzeAudioBuffer(audioBuffer, { fps: options.fps })
-    if (!frames.length) throw new Error('Không đọc được dữ liệu âm thanh.')
+    const allFrames = analyzeAudioBuffer(audioBuffer, { fps: options.fps })
+    if (!allFrames.length) throw new Error('Không đọc được dữ liệu âm thanh.')
+
+    const rangeStart = Math.max(0, options.rangeStartSec ?? 0)
+    const rangeEnd = Math.min(audioBuffer.duration, options.rangeEndSec ?? audioBuffer.duration)
+    const frames = rangeEnd > rangeStart
+      ? allFrames.filter((frame) => frame.timeSec >= rangeStart && frame.timeSec < rangeEnd)
+      : allFrames
+    if (!frames.length) throw new Error('Khoảng thời gian đã chọn không có frame nào.')
 
     const begin = await api.framesBegin({
       requestId,
@@ -59,6 +69,8 @@ export async function exportSongNhacFrames(options: ExportSongNhacFramesOptions)
       height: options.height,
       fps: options.fps,
       totalFrames: frames.length,
+      startSec: rangeStart > 0 ? rangeStart : undefined,
+      durationSec: frames.length / options.fps,
     })
     if (!begin.success) return begin
 
