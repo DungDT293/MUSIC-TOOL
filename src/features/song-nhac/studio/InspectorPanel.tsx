@@ -80,7 +80,7 @@ function SliderRow(props: {
   onChange: (value: number) => void
   onCommit?: () => void
 }) {
-  const { label, value, min, max, step, format, onChange, onCommit } = props
+  const { label, value, min, max, step, format, onChange } = props
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
       <span style={labelStyle}>{label}</span>
@@ -91,7 +91,11 @@ function SliderRow(props: {
         step={step}
         value={value}
         onChange={(event) => onChange(Number(event.target.value))}
-        onPointerUp={onCommit}
+        // One drag = one undo step: snapshot on press, close the gesture on release.
+        onPointerDown={() => useSongNhacLayerStore.getState().beginHistoryGesture()}
+        onPointerUp={() => useSongNhacLayerStore.getState().endHistoryGesture()}
+        onKeyDown={() => useSongNhacLayerStore.getState().beginHistoryGesture()}
+        onKeyUp={() => useSongNhacLayerStore.getState().endHistoryGesture()}
         style={{ flex: 1 }}
       />
       <span style={valueStyle}>{format ? format(value) : value.toFixed(2)}</span>
@@ -124,6 +128,9 @@ function NumRow(props: {
           if (min !== undefined && max !== undefined) next = Math.max(min, Math.min(max, raw))
           onChange(next)
         }}
+        // Typing in a number field is one undo step, closed on blur.
+        onFocus={() => useSongNhacLayerStore.getState().beginHistoryGesture()}
+        onBlur={() => useSongNhacLayerStore.getState().endHistoryGesture()}
         style={{ ...inputStyle, flex: 1 }}
       />
     </div>
