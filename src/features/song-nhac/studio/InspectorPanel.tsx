@@ -20,6 +20,12 @@ const WAVE_STYLES = [
   { id: 'dots', label: 'Điểm' },
   { id: 'ring', label: 'Vành' },
   { id: 'particles', label: 'Hạt' },
+  { id: 'mirror', label: 'Gương (đối xứng)' },
+  { id: 'tunnel', label: 'Hầm neon' },
+  { id: 'orbit', label: 'Quỹ đạo hạt' },
+  { id: 'pulse', label: 'Vòng nhịp' },
+  { id: 'grid', label: 'Lưới địa hình' },
+  { id: 'polar', label: 'Hào quang' },
 ]
 
 const panelStyle: React.CSSProperties = {

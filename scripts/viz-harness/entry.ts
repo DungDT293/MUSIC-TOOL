@@ -42,6 +42,16 @@ function makeBrightLogoDataUrl(): string {
   return canvas.toDataURL('image/png')
 }
 
+function syntheticWaveform(time: number): Uint8Array {
+  const data = new Uint8Array(128)
+  for (let i = 0; i < data.length; i += 1) {
+    const t = i / data.length
+    const value = Math.sin(t * Math.PI * 6 + time * 2.2) * 0.55 + Math.sin(t * Math.PI * 17 + time * 4.1) * 0.25
+    data[i] = Math.max(0, Math.min(255, Math.round(value * 110 + 128)))
+  }
+  return data
+}
+
 function syntheticSpectrum(bins: number, time: number): Uint8Array {
   const data = new Uint8Array(bins)
   for (let i = 0; i < bins; i += 1) {
@@ -103,7 +113,7 @@ function syntheticSpectrum(bins: number, time: number): Uint8Array {
   const frame = {
     timeSec: options.time ?? 3.2,
     frequencyData: spectrum,
-    waveformData: new Uint8Array(0),
+    waveformData: syntheticWaveform(options.time ?? 3.2),
     bass: 0.72,
     mid: 0.45,
     treble: 0.3,
@@ -126,5 +136,6 @@ function syntheticSpectrum(bins: number, time: number): Uint8Array {
   }
 
   ;(window as unknown as Record<string, unknown>).__layerDebug = engine.debugLayers()
+  ;(window as unknown as Record<string, unknown>).__engine = engine
   return true
 }

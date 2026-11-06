@@ -6,6 +6,8 @@ import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPa
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
 import type { SongNhacAudioFrame } from '../core/types'
 import { SpectrumRing } from './SpectrumRing'
+import { createFxStyle, isFxStyle, type WaveStyleObject } from './waveStyles'
+import { ShaderScene, isShaderScene } from './shaderScene'
 import {
   buildCssFilter,
   hasColorFilter,
@@ -340,6 +342,12 @@ export class AveeVisualizerEngine {
   private layerNodes = new Map<string, LayerNode>()
   private extraVisualizers = new Map<string, { ring: SpectrumRing; layer: VisualizerLayer }>()
   private waveRings = new Map<string, { ring: SpectrumRing; layer: ImageLayer }>()
+  private fxStyle: WaveStyleObject | null = null
+  private fxStyleKey = ''
+  private fxColorA = 0x00f2fe
+  private fxColorB = 0xfe0979
+  private shaderScene: ShaderScene | null = null
+  private shaderSceneKey = ''
   private currentVisualizerLayer: StudioLayer | null = null
   private selectionFrame!: THREE.LineLoop
   private selectedLayerId: string | null = null
@@ -852,6 +860,9 @@ export class AveeVisualizerEngine {
     const height = 2 * Math.tan((this.camera.fov * Math.PI) / 360) * distance
     this.stageHeight = height
     this.stageWidth = height * this.camera.aspect
+    if (this.shaderScene) {
+      this.shaderScene.resize(this.stageWidth * 1.35, this.stageHeight * 1.35)
+    }
   }
 
   /** px of the 1080-high reference stage → world units. */
@@ -972,20 +983,90 @@ export class AveeVisualizerEngine {
     this.visualizerSensitivity = layer.sensitivity
     this.visualizerSpeed = layer.speed
     this.bloomPass.strength = layer.glowEnabled ? 0.22 + layer.glowIntensity * 0.55 : 0.12
+    let primaryColor = 0x00f2fe
+    let secondaryColor = 0xfe0979
     if (layer.colorMode === 'rainbow') {
       const palette = AVEE_THEMES[this.options.theme]
+      primaryColor = palette.primary
+      secondaryColor = palette.secondary
       this.writeBarColors(palette.primary, palette.secondary, palette.accent)
     } else {
       const primary = new THREE.Color(layer.color1).getHex()
       const secondary = layer.colorMode === 'gradient' ? new THREE.Color(layer.color2).getHex() : primary
+      primaryColor = primary
+      secondaryColor = secondary
       this.writeBarColors(primary, secondary, primary)
     }
+    const shaderActive = this.ensureShaderScene(layer.waveStyle, primaryColor, secondaryColor, AVEE_THEMES[this.options.theme]?.accent ?? 0xffffff)
+    this.ensureFxStyle(shaderActive ? '' : layer.waveStyle, primaryColor, secondaryColor)
     const t = layer.transform
     const unit = this.unit
     this.visualizerGroup.position.set(t.x * unit, -t.y * unit, -2.2 + index * 0.02)
     this.visualizerGroup.scale.set(t.scaleX * (t.flipX ? -1 : 1), t.scaleY * (t.flipY ? -1 : 1), 1)
     this.visualizerGroup.rotation.z = (t.rotation * Math.PI) / 180
     this.visualizerGroup.visible = layer.visible
+  }
+
+  /** Full-frame shader scenes (grid / polar) drawn behind every layer. */
+  private ensureShaderScene(style: string, colorA: number, colorB: number, accent: number): boolean {
+    if (!isShaderScene(style)) {
+      if (this.shaderScene) {
+        this.visualizerGroup.remove(this.shaderScene.object)
+        this.shaderScene.dispose()
+        this.shaderScene = null
+        this.shaderSceneKey = ''
+      }
+      return false
+    }
+    const key = `${style}:${colorA}:${colorB}:${accent}`
+    if (this.shaderScene && this.shaderSceneKey === key) {
+      if (this.barsMesh) this.barsMesh.visible = false
+      if (this.barsInner) this.barsInner.visible = false
+      return true
+    }
+    if (this.shaderScene) {
+      this.visualizerGroup.remove(this.shaderScene.object)
+      this.shaderScene.dispose()
+    }
+    this.shaderScene = new ShaderScene(style, colorA, colorB, accent)
+    this.shaderScene.object.position.set(0, 0, 0)
+    this.shaderScene.resize(this.stageWidth * 1.35, this.stageHeight * 1.35)
+    this.shaderSceneKey = key
+    this.visualizerGroup.add(this.shaderScene.object)
+    return true
+  }
+
+  /**
+   * The "fx" wave styles (waveform/tunnel/orbit/pulse/mirror) are standalone scene
+   * objects. The ring styles keep using the instanced bars, so only one path is ever
+   * visible at a time.
+   */
+  private ensureFxStyle(style: string, colorA: number, colorB: number): void {
+    const wanted = isFxStyle(style) ? style : null
+    if (!wanted) {
+      if (this.fxStyle) {
+        this.visualizerGroup.remove(this.fxStyle.object)
+        this.fxStyle.dispose()
+        this.fxStyle = null
+        this.fxStyleKey = ''
+      }
+      if (this.barsMesh) this.barsMesh.visible = !this.shaderScene
+      if (this.barsInner) this.barsInner.visible = !this.shaderScene
+      return
+    }
+    if (this.barsMesh) this.barsMesh.visible = false
+    if (this.barsInner) this.barsInner.visible = false
+    this.fxColorA = colorA
+    this.fxColorB = colorB
+    const key = `${wanted}:${colorA}:${colorB}`
+    if (this.fxStyle && this.fxStyleKey === key) return
+    if (this.fxStyle) {
+      this.visualizerGroup.remove(this.fxStyle.object)
+      this.fxStyle.dispose()
+    }
+    this.fxStyle = createFxStyle(wanted, colorA, colorB)
+    this.fxStyleKey = key
+    this.visualizerGroup.add(this.fxStyle.object)
   }
 
   private applyLayerTransform(node: LayerNode, layer: Exclude<StudioLayer, { type: 'visualizer' }>, index: number): void {
@@ -1380,7 +1461,28 @@ export class AveeVisualizerEngine {
       entry.ring.group.rotation.z = (t.rotation * Math.PI) / 180
       entry.ring.update(frame, 1)
     }
-    if (this.options.showBars) this.updateBars(frame)
+    if (this.shaderScene) {
+      this.shaderScene.update(
+        frame,
+        { colorA: this.fxColorA, colorB: this.fxColorB, intensity, speed: this.visualizerSpeed },
+        timeSec,
+      )
+    }
+    if (this.fxStyle) {
+      this.fxStyle.update(
+        frame,
+        {
+          colorA: this.fxColorA,
+          colorB: this.fxColorB,
+          sensitivity: this.visualizerSensitivity,
+          speed: this.visualizerSpeed,
+          intensity,
+        },
+        dt,
+      )
+    } else if (this.options.showBars) {
+      this.updateBars(frame)
+    }
     if (this.options.showParticles) this.positionParticles(timeSec)
 
     this.composer.render()
