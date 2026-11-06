@@ -85,3 +85,22 @@ căn giữa giãn chữ + effects blur 15%) rồi xuất 3 giây qua hàng đợ
 | ~~Keyframe easing~~ | ✅ linear / easeIn / easeOut / easeInOut, đổi ngay trên chip keyframe |
 | Vizzy "Explore creations" / publish | Không thuộc phạm vi app offline |
 | 48 preset built-in của Vizzy | Mình có 15 preset + preset tự tạo |
+## Xác nhận hoàn thiện (vòng 40)
+
+**Kiểm tra tự động**
+- `electron-vite build`: sạch (main + preload + renderer)
+- `tsc -p tsconfig.check.json`: **0 lỗi trong toàn bộ code song-nhac** (49 lỗi còn lại đều ở file cũ không liên quan: App.tsx, components/, Autopilot/)
+- `vitest`: **293 test pass / 44 file**
+
+**Xuất video thật (đủ mọi tính năng)**
+Project: visualizer + 2 spectrum layer + particles xoáy + text 2 dòng căn giữa + keyframe opacity có easing + effects (blur 10%, shake, FXAA, two-pass blur), xuất qua hàng đợi:
+
+| Thông số | Giá trị |
+|---|---|
+| File | `final-*.mp4`, 1.78 MB |
+| Kích thước | **960×540**, 24 fps |
+| Frame | **96** (đúng 4.000s) |
+| Codec | **h264 + aac**, 3.57 Mbps |
+| ffprobe | khớp thời lượng, có audio |
+
+**Kết luận**: mọi chức năng bóc được từ Vizzy (7 panel trái, 5 loại object ở Inspector, timeline đầy đủ) đã được clone và kiểm chứng trong app thật. Phần còn lại chỉ là ngoài phạm vi (publish/community cần server Vizzy) hoặc nội dung (số lượng preset).
