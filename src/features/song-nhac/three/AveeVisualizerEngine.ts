@@ -4,6 +4,7 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
+import { FinishPass } from './finishPass'
 import type { SongNhacAudioFrame } from '../core/types'
 import { SpectrumRing } from './SpectrumRing'
 import { createFxStyle, isFxStyle, type WaveStyleObject } from './waveStyles'
@@ -306,6 +307,7 @@ export class AveeVisualizerEngine {
   private camera: THREE.PerspectiveCamera
   private composer: EffectComposer
   private bloomPass: UnrealBloomPass
+  private finishPass!: FinishPass
 
   private backgroundMesh: THREE.Mesh
   private backgroundMaterial: THREE.ShaderMaterial
@@ -536,6 +538,8 @@ export class AveeVisualizerEngine {
     this.composer.addPass(new RenderPass(this.scene, this.camera))
     this.bloomPass = new UnrealBloomPass(new THREE.Vector2(width, height), 0.55, 0.45, 0.85)
     this.composer.addPass(this.bloomPass)
+    this.finishPass = new FinishPass()
+    this.composer.addPass(this.finishPass)
     this.composer.addPass(new OutputPass())
 
     this.buildSelectionFrame()
@@ -1439,6 +1443,11 @@ export class AveeVisualizerEngine {
 
     this.outerRing.rotation.z = timeSec * this.visualizerSpeed * 0.18
     this.backgroundMaterial.uniforms.uPulse.value = bass * intensity
+    if (this.finishPass) {
+      this.finishPass.time = timeSec
+      // The grade breathes with the kick drum, just enough to feel alive.
+      this.finishPass.aberration = 0.0005 + bass * 0.0012 * intensity
+    }
 
     // timeRange fade + filter opacity are per-frame values, not layout state.
     this.refreshLayerOpacity(timeSec)

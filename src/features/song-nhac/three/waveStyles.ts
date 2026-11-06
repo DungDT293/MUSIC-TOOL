@@ -40,60 +40,86 @@ function gradientColors(count: number, colorA: number, colorB: number): Float32A
 export class WaveformStyle implements WaveStyleObject {
   readonly object = new THREE.Group()
   private readonly points: number
-  private readonly top: THREE.Line
-  private readonly echo: THREE.Line
+  private readonly top: THREE.Mesh
+  private readonly echo: THREE.Mesh
   private readonly topGeometry = new THREE.BufferGeometry()
   private readonly echoGeometry = new THREE.BufferGeometry()
   private readonly topPositions: Float32Array
   private readonly echoPositions: Float32Array
   private readonly display: Float32Array
   private readonly width = 7.4
-  private readonly amplitude = 0.62
+  private readonly amplitude = 0.6
+  private readonly thickness = 0.07
 
   constructor(points = 160, colorA = 0x00f2fe, colorB = 0xfe0979) {
     this.points = points
-    this.topPositions = new Float32Array(points * 3)
-    this.echoPositions = new Float32Array(points * 3)
+    this.topPositions = new Float32Array(points * 2 * 3)
+    this.echoPositions = new Float32Array(points * 2 * 3)
     this.display = new Float32Array(points)
+    const colors = new Float32Array(points * 2 * 3)
+    const gradient = gradientColors(points, colorA, colorB)
+    const indices: number[] = []
+    for (let i = 0; i < points; i += 1) {
+      colors[i * 6] = gradient[i * 3]
+      colors[i * 6 + 1] = gradient[i * 3 + 1]
+      colors[i * 6 + 2] = gradient[i * 3 + 2]
+      colors[i * 6 + 3] = gradient[i * 3]
+      colors[i * 6 + 4] = gradient[i * 3 + 1]
+      colors[i * 6 + 5] = gradient[i * 3 + 2]
+      if (i < points - 1) {
+        const a = i * 2
+        indices.push(a, a + 1, a + 2, a + 1, a + 3, a + 2)
+      }
+    }
+    const index = new THREE.BufferAttribute(new Uint16Array(indices), 1)
     this.topGeometry.setAttribute('position', new THREE.BufferAttribute(this.topPositions, 3))
-    this.topGeometry.setAttribute('color', new THREE.BufferAttribute(gradientColors(points, colorA, colorB), 3))
+    this.topGeometry.setAttribute('color', new THREE.BufferAttribute(colors, 3))
+    this.topGeometry.setIndex(index)
     this.echoGeometry.setAttribute('position', new THREE.BufferAttribute(this.echoPositions, 3))
-    this.echoGeometry.setAttribute('color', new THREE.BufferAttribute(gradientColors(points, colorA, colorB), 3))
+    this.echoGeometry.setAttribute('color', new THREE.BufferAttribute(colors, 3))
+    this.echoGeometry.setIndex(index.clone())
 
-    this.top = new THREE.Line(this.topGeometry, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.95, toneMapped: false }))
-    this.echo = new THREE.Line(
+    // A real ribbon instead of a Line: WebGL ignores linewidth, and thick glowing
+    // strokes are what make the reference visualizers read as "designed".
+    this.top = new THREE.Mesh(
+      this.topGeometry,
+      new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.95, side: THREE.DoubleSide, toneMapped: false }),
+    )
+    this.echo = new THREE.Mesh(
       this.echoGeometry,
-      new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.22, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }),
+      new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.25, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, toneMapped: false }),
     )
-    // A dimmer copy slightly enlarged reads as a soft glow without another pass.
-    const haloGeometry = this.topGeometry.clone()
-    const halo = new THREE.Line(
-      haloGeometry,
-      new THREE.LineBasicMaterial({ color: colorA, transparent: true, opacity: 0.18, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }),
-    )
-    halo.scale.set(1, 1.06, 1)
-    this.object.position.y = -1.15
-    this.object.add(this.top, this.echo, halo)
+    this.top.renderOrder = 2
+    this.echo.renderOrder = 1
+    this.object.position.y = -1.45
+    this.object.add(this.echo, this.top)
   }
 
   update(frame: SongNhacAudioFrame, params: WaveParams): void {
     const data = frame.waveformData
     const length = data.length
     if (!length) return
-    const gain = params.sensitivity
+    const half = (this.thickness * (0.75 + Math.min(1, frame.bass) * 0.6)) / 2
     for (let i = 0; i < this.points; i += 1) {
       const t = i / (this.points - 1)
       const sample = data[Math.min(length - 1, Math.floor(t * length))] ?? 128
-      const target = ((sample - 128) / 128) * this.amplitude * gain
+      const target = ((sample - 128) / 128) * this.amplitude * params.sensitivity
       this.display[i] += (target - this.display[i]) * 0.35
       const x = -this.width / 2 + t * this.width
       const y = this.display[i] * params.intensity
-      this.topPositions[i * 3] = x
-      this.topPositions[i * 3 + 1] = y
-      this.topPositions[i * 3 + 2] = 0
-      this.echoPositions[i * 3] = x
-      this.echoPositions[i * 3 + 1] = -y * 0.55 - 0.02
-      this.echoPositions[i * 3 + 2] = -0.01
+      const top = i * 6
+      this.topPositions[top] = x
+      this.topPositions[top + 1] = y + half
+      this.topPositions[top + 2] = 0
+      this.topPositions[top + 3] = x
+      this.topPositions[top + 4] = y - half
+      this.topPositions[top + 5] = 0
+      this.echoPositions[top] = x
+      this.echoPositions[top + 1] = -y * 0.5 - 0.03 + half * 0.5
+      this.echoPositions[top + 2] = -0.01
+      this.echoPositions[top + 3] = x
+      this.echoPositions[top + 4] = -y * 0.5 - 0.03 - half * 0.5
+      this.echoPositions[top + 5] = -0.01
     }
     ;(this.topGeometry.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true
     ;(this.echoGeometry.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true
@@ -104,14 +130,8 @@ export class WaveformStyle implements WaveStyleObject {
     this.echoGeometry.dispose()
     ;(this.top.material as THREE.Material).dispose()
     ;(this.echo.material as THREE.Material).dispose()
-    this.object.children.forEach((child) => {
-      const line = child as THREE.Line
-      line.geometry.dispose()
-      ;(line.material as THREE.Material).dispose()
-    })
   }
 }
-
 /** Rings flying toward the camera, the classic neon tunnel. */
 export class TunnelStyle implements WaveStyleObject {
   readonly object = new THREE.Group()
