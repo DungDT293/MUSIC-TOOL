@@ -14,6 +14,10 @@ export interface CompositionEffects {
   mirror: boolean
   /** Composition zoom, 1 = normal. */
   zoom: number
+  /** Anti-alias the composition with FXAA. */
+  fxaa: boolean
+  /** 'fast' = single 9-tap in the grade pass, 'two-pass' = separable Gaussian. */
+  blurMode: 'fast' | 'two-pass'
 }
 
 export const DEFAULT_EFFECTS: CompositionEffects = {
@@ -24,6 +28,8 @@ export const DEFAULT_EFFECTS: CompositionEffects = {
   shake: 0,
   mirror: false,
   zoom: 1,
+  fxaa: true,
+  blurMode: 'fast',
 }
 
 interface EffectsStore extends CompositionEffects {

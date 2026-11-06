@@ -1263,6 +1263,21 @@ export default function SongNhacPage() {
                 <input type="checkbox" checked={effects.mirror} onChange={(event) => effects.setEffect('mirror', event.target.checked)} style={{ accentColor: '#0ea5e9' }} />
                 Lật ngang toàn khung
               </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <input type="checkbox" checked={effects.fxaa} onChange={(event) => effects.setEffect('fxaa', event.target.checked)} style={{ accentColor: '#0ea5e9' }} />
+                Khử răng cưa (FXAA)
+              </label>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <span>Kiểu làm mờ</span>
+                <select
+                  value={effects.blurMode}
+                  onChange={(event) => effects.setEffect('blurMode', event.target.value as 'fast' | 'two-pass')}
+                  style={{ padding: '5px 8px', borderRadius: 6, border: '1px solid #334155', background: '#0f172a', color: '#e2e8f0', fontSize: 12 }}
+                >
+                  <option value="fast">Nhanh (1 pass)</option>
+                  <option value="two-pass">Hai pass (mượt hơn)</option>
+                </select>
+              </label>
               <button
                 type="button"
                 onClick={() => effects.reset()}

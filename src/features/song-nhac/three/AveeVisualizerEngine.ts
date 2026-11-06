@@ -5,6 +5,9 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
 import { FinishPass } from './finishPass'
+import { BlurPass } from './blurPass'
+import { FXAAShader } from 'three/examples/jsm/shaders/FXAAShader.js'
+import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js'
 import type { SongNhacAudioFrame } from '../core/types'
 import { SpectrumRing } from './SpectrumRing'
 import { activeLyricIndex } from '../studio/lyrics'
@@ -317,6 +320,9 @@ export class AveeVisualizerEngine {
   /** Bloom level from the theme/layer, modulated per frame by the beat. */
   private baseBloom = 0.55
   private finishPass!: FinishPass
+  private blurPassH!: BlurPass
+  private blurPassV!: BlurPass
+  private fxaaPass!: ShaderPass
 
   private backgroundMesh: THREE.Mesh
   private backgroundMaterial: THREE.ShaderMaterial
@@ -550,8 +556,21 @@ export class AveeVisualizerEngine {
     this.composer.addPass(new RenderPass(this.scene, this.camera))
     this.bloomPass = new UnrealBloomPass(new THREE.Vector2(width, height), 0.55, 0.45, 0.85)
     this.composer.addPass(this.bloomPass)
+    // Optional two-pass separable blur, then the grade, then FXAA, then output.
+    this.blurPassH = new BlurPass()
+    this.blurPassV = new BlurPass()
+    this.blurPassH.direction = new THREE.Vector2(1, 0)
+    this.blurPassV.direction = new THREE.Vector2(0, 1)
+    this.blurPassH.enabled = false
+    this.blurPassV.enabled = false
+    this.composer.addPass(this.blurPassH)
+    this.composer.addPass(this.blurPassV)
     this.finishPass = new FinishPass()
     this.composer.addPass(this.finishPass)
+    const fxaa = new ShaderPass(FXAAShader)
+    fxaa.material.uniforms.resolution = { value: new THREE.Vector2(1 / width, 1 / height) }
+    this.fxaaPass = fxaa
+    this.composer.addPass(fxaa)
     this.composer.addPass(new OutputPass())
 
     this.buildSelectionFrame()
@@ -1791,6 +1810,29 @@ export class AveeVisualizerEngine {
       this.finishPass.tintStrength = this.effects.tintStrength
       this.finishPass.mirror = this.effects.mirror
       this.finishPass.zoom = this.effects.zoom
+      // Blur can run either inside the grade (single 9-tap) or as two separable passes.
+      const twoPass = this.effects.blurMode === 'two-pass' && this.effects.blur > 0.001
+      this.finishPass.blur = twoPass ? 0 : this.effects.blur
+      if (this.blurPassH && this.blurPassV) {
+        this.blurPassH.enabled = twoPass
+        this.blurPassV.enabled = twoPass
+        if (twoPass) {
+          const radius = Math.max(0.5, this.effects.blur * 6)
+          this.blurPassH.radius = radius
+          this.blurPassV.radius = radius
+          const blurSize = this.renderer.getSize(new THREE.Vector2())
+          this.blurPassH.width = blurSize.x
+          this.blurPassH.height = blurSize.y
+          this.blurPassV.width = blurSize.x
+          this.blurPassV.height = blurSize.y
+        }
+      }
+      if (this.fxaaPass) {
+        this.fxaaPass.enabled = this.effects.fxaa
+        const resolution = this.fxaaPass.material.uniforms.resolution
+        const fxaaSize = this.renderer.getSize(new THREE.Vector2())
+        if (resolution) resolution.value.set(1 / Math.max(1, fxaaSize.x), 1 / Math.max(1, fxaaSize.y))
+      }
     }
 
     // timeRange fade + filter opacity are per-frame values, not layout state.
