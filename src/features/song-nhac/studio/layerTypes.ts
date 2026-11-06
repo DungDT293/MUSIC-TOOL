@@ -72,7 +72,11 @@ export const DEFAULT_ANALYZER: StudioAnalyzer = {
 /** Animatable properties for automations. */
 export type StudioAutomationProperty = 'opacity' | 'scaleX' | 'scaleY' | 'x' | 'y' | 'rotation'
 
+export type StudioKeyframeEasing = 'linear' | 'easeIn' | 'easeOut' | 'easeInOut'
+
 export interface StudioKeyframe {
+  /** Curve used to reach the next keyframe; defaults to linear. */
+  easing?: StudioKeyframeEasing
   timeSec: number
   value: number
 }
@@ -80,6 +84,16 @@ export interface StudioKeyframe {
 export interface StudioAutomation {
   property: StudioAutomationProperty
   keyframes: StudioKeyframe[]
+}
+
+/** Eases the 0..1 progress of a segment. */
+export function applyEasing(t: number, easing?: StudioKeyframeEasing): number {
+  const clamped = Math.max(0, Math.min(1, t))
+  if (easing === 'easeIn') return clamped * clamped
+  if (easing === 'easeOut') return 1 - (1 - clamped) * (1 - clamped)
+  if (easing === 'easeInOut')
+    return clamped < 0.5 ? 2 * clamped * clamped : 1 - Math.pow(-2 * clamped + 2, 2) / 2
+  return clamped
 }
 
 export function evaluateAutomation(automation: StudioAutomation, timeSec: number): number | null {
@@ -93,7 +107,8 @@ export function evaluateAutomation(automation: StudioAutomation, timeSec: number
     const next = keys[i]
     if (timeSec <= next.timeSec) {
       const span = Math.max(1e-6, next.timeSec - previous.timeSec)
-      const t = (timeSec - previous.timeSec) / span
+      const raw = (timeSec - previous.timeSec) / span
+      const t = applyEasing(raw, previous.easing)
       return previous.value + (next.value - previous.value) * t
     }
   }

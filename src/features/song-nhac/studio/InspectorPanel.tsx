@@ -539,6 +539,31 @@ export function InspectorPanel() {
                               </button>
                               <button
                                 type="button"
+                                onClick={() => {
+                                  const order = ['linear', 'easeIn', 'easeOut', 'easeInOut'] as const
+                                  const next = order[(order.indexOf(frame.easing ?? 'linear') + 1) % order.length]
+                                  updateLayerWithHistory(layer.id, {
+                                    automations: (layer.automations ?? []).map((item) =>
+                                      item.property === row.property
+                                        ? {
+                                            ...item,
+                                            keyframes: item.keyframes.map((entry) =>
+                                              Math.abs(entry.timeSec - frame.timeSec) < 0.001
+                                                ? { ...entry, easing: next }
+                                                : entry,
+                                            ),
+                                          }
+                                        : item,
+                                    ),
+                                  } as never)
+                                }}
+                                title={`Kiểu nội suy: ${frame.easing ?? 'linear'} (bấm để đổi)`}
+                                style={{ background: 'transparent', border: 'none', color: '#c4b5fd', fontSize: 9, cursor: 'pointer', padding: 0 }}
+                              >
+                                {frame.easing === 'easeIn' ? 'I' : frame.easing === 'easeOut' ? 'O' : frame.easing === 'easeInOut' ? 'IO' : 'L'}
+                              </button>
+                              <button
+                                type="button"
                                 onClick={() => store.duplicateKeyframe(layer.id, row.property, frame.timeSec)}
                                 title="Nhân bản key này (+1s)"
                                 style={{ background: 'transparent', border: 'none', color: '#67e8f9', fontSize: 9, cursor: 'pointer', padding: 0 }}
