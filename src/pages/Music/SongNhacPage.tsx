@@ -649,7 +649,7 @@ export default function SongNhacPage() {
     const selection = store.selectedIds
     const groupIds =
       mode === 'move' && selection.length > 1 && selection.includes(layer.id) ? selection.slice() : [layer.id]
-    // Snap marks: composition edges, the playhead and every other clip edge.
+    // Snap marks: composition edges, the playhead, other clip edges and the time grid.
     const targets = [0, total, playhead]
     for (const item of store.layers) {
       if (groupIds.includes(item.id) || item.type === 'group') continue
@@ -660,6 +660,9 @@ export default function SongNhacPage() {
         targets.push(0, total)
       }
     }
+    // A 1s grid up to 4 minutes, 5s beyond that, so short edits still land on seconds.
+    const gridStep = total <= 240 ? 1 : total <= 900 ? 5 : 15
+    for (let mark = gridStep; mark < total; mark += gridStep) targets.push(mark)
     const tolerance = snapEnabled ? 8 * secPerPx : 0
     store.beginHistoryGesture()
     const onMove = (moveEvent: PointerEvent) => {
