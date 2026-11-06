@@ -207,20 +207,23 @@ export default function SongNhacPage() {
           targetsX.push(other.transform.x)
           targetsY.push(other.transform.y)
         }
-        const snap = (value: number, targets: number[]) => {
+        const snap = (value: number, targets: number[], axis: 'x' | 'y') => {
           let best = value
           let distance = 10
+          let guide: number | null = null
           for (const target of targets) {
             const delta = Math.abs(target - value)
             if (delta <= distance) {
               distance = delta
               best = target
+              guide = target
             }
           }
+          setLayerGuides((current) => ({ ...current, [axis]: guide }))
           return best
         }
-        nextX = snap(nextX, targetsX)
-        nextY = snap(nextY, targetsY)
+        nextX = snap(nextX, targetsX, 'x')
+        nextY = snap(nextY, targetsY, 'y')
       }
       state.updateLayer(layer.id, { transform: { ...layer.transform, x: nextX, y: nextY } })
     }
@@ -229,6 +232,7 @@ export default function SongNhacPage() {
   const onCanvasPointerUp = () => {
     if (!dragRef.current) return
     dragRef.current = null
+    setLayerGuides({ x: null, y: null })
     useSongNhacLayerStore.getState().endHistoryGesture()
   }
 
@@ -341,6 +345,7 @@ export default function SongNhacPage() {
   const [snapEnabled, setSnapEnabled] = useState(true)
   const seekGuardRef = useRef(0)
   const [presetThumbs, setPresetThumbs] = useState<Record<string, string>>({})
+  const [layerGuides, setLayerGuides] = useState<{ x: number | null; y: number | null }>({ x: null, y: null })
   const [userPresetThumbs, setUserPresetThumbs] = useState<Record<string, string>>({})
   const [snapGuide, setSnapGuide] = useState<number | null>(null)
   const [lyricsText, setLyricsText] = useState('')
@@ -2359,6 +2364,36 @@ export default function SongNhacPage() {
               boxShadow: '0 8px 32px rgba(0, 0, 0, 0.6)',
             }}
           />
+          {(layerGuides.x !== null || layerGuides.y !== null) && (
+            <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
+              {layerGuides.x !== null && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    left: `${50 + (layerGuides.x / 1920) * 100}%`,
+                    top: 0,
+                    bottom: 0,
+                    width: 1,
+                    background: '#f472b6',
+                    boxShadow: '0 0 6px #f472b6',
+                  }}
+                />
+              )}
+              {layerGuides.y !== null && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: `${50 + (layerGuides.y / 1080) * 100}%`,
+                    left: 0,
+                    right: 0,
+                    height: 1,
+                    background: '#f472b6',
+                    boxShadow: '0 0 6px #f472b6',
+                  }}
+                />
+              )}
+            </div>
+          )}
           {selectionBounds && (
             <>
               <div
