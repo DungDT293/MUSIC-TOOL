@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { audioFrameFromAnalyser, emptyAudioFrame } from '../../features/song-nhac/core/audioBands'
 import { renderSongNhacFrame } from '../../features/song-nhac/core/renderSongNhacFrame'
 import { SONG_NHAC_STYLES, clampRenderConfig, type SongNhacStyle } from '../../features/song-nhac/core/types'
+import { AveeVisualizerEngine, AVEE_THEMES, type AveeColorTheme } from '../../features/song-nhac/three/AveeVisualizerEngine'
 import type { SongNhacExportProgress } from '../../../shared/songNhacChannels'
 
 function localFileUrl(filePath: string): string {
@@ -16,37 +17,141 @@ export default function SongNhacPage() {
   const sourceRef = useRef<MediaElementAudioSourceNode | null>(null)
   const rafRef = useRef<number | null>(null)
   const previousBassRef = useRef(0)
+
+  const aveeEngineRef = useRef<AveeVisualizerEngine | null>(null)
+  const webglUnavailableRef = useRef(false)
+
   const [audioPath, setAudioPath] = useState('')
+  const [logoPath, setLogoPath] = useState('')
   const [outputPath, setOutputPath] = useState('')
-  const [style, setStyle] = useState<SongNhacStyle>('neon-tunnel')
+  const [style, setStyle] = useState<SongNhacStyle>('avee-circle')
+  const [theme, setTheme] = useState<AveeColorTheme>('cyberpunk')
+  const [intensity, setIntensity] = useState<number>(1.0)
+  const [showParticles, setShowParticles] = useState<boolean>(true)
+  const [showLogo, setShowLogo] = useState<boolean>(true)
+
   const [isPlaying, setIsPlaying] = useState(false)
+  const [webglFallback, setWebglFallback] = useState(false)
   const [isExporting, setIsExporting] = useState(false)
   const [progress, setProgress] = useState<SongNhacExportProgress | null>(null)
   const [message, setMessage] = useState('Chọn audio để bắt đầu.')
 
-  const draw = useCallback(() => {
+  // Re-create Avee engine when canvas mounts or style switches
+  const initAveeEngine = useCallback(() => {
+    if (aveeEngineRef.current) {
+      aveeEngineRef.current.dispose()
+      aveeEngineRef.current = null
+    }
+
     const canvas = canvasRef.current
+    if (!canvas || style !== 'avee-circle' || webglUnavailableRef.current) return
+
+    try {
+      aveeEngineRef.current = new AveeVisualizerEngine(canvas, {
+        theme,
+        logoUrl: logoPath ? localFileUrl(logoPath) : null,
+        intensity,
+        showParticles,
+        showLogo,
+      })
+    } catch (error) {
+      // No usable WebGL context (VM, old driver, blocked GPU). Remember the failure so the
+      // animation loop does not retry every frame, and let the caller draw the 2D fallback.
+      webglUnavailableRef.current = true
+      aveeEngineRef.current = null
+      console.warn('[SongNhac] Không tạo được WebGL, chuyển sang bộ dựng canvas 2D:', error)
+      // Force a fresh 2D canvas element in case the failed WebGL init already bound a
+      // context to the current one (a canvas cannot switch context types).
+      setWebglFallback(true)
+    }
+  }, [style, theme, intensity, logoPath, showParticles, showLogo])
+
+  useEffect(() => {
+    if (style === 'avee-circle') initAveeEngine()
+    if (aveeEngineRef.current) {
+      // Initial render frame
+      aveeEngineRef.current.render(emptyAudioFrame())
+    } else {
+      const canvas = canvasRef.current
+      const context = canvas?.getContext('2d')
+      if (canvas && context) {
+        renderSongNhacFrame(
+          context,
+          canvas.width,
+          canvas.height,
+          emptyAudioFrame(),
+          clampRenderConfig({ style, quality: 'balanced', intensity: 1, seed: 93 }),
+        )
+      }
+    }
+
+    return () => {
+      if (aveeEngineRef.current) {
+        aveeEngineRef.current.dispose()
+        aveeEngineRef.current = null
+      }
+    }
+  }, [style, initAveeEngine, webglFallback])
+
+  // Sync Avee options without re-creating engine
+  useEffect(() => {
+    if (aveeEngineRef.current && style === 'avee-circle') {
+      aveeEngineRef.current.setOptions({
+        theme,
+        intensity,
+        showParticles,
+        showLogo,
+        logoUrl: logoPath ? localFileUrl(logoPath) : null,
+      })
+    }
+  }, [theme, intensity, showParticles, showLogo, logoPath, style])
+
+  const draw = useCallback(() => {
     const analyser = analyserRef.current
     const audio = audioRef.current
-    if (!canvas || !analyser || !audio) return
-    const context = canvas.getContext('2d')
-    if (!context) return
+    if (!analyser || !audio) return
+
     const frequencyData = new Uint8Array(analyser.frequencyBinCount)
     const waveformData = new Uint8Array(analyser.fftSize)
+
     const render = () => {
+      // Re-read the element every frame: the canvas is remounted when the visualizer
+      // style switches between the WebGL engine and the 2D fallback.
+      const canvas = canvasRef.current
+      if (!canvas) {
+        rafRef.current = requestAnimationFrame(render)
+        return
+      }
       analyser.getByteFrequencyData(frequencyData)
       analyser.getByteTimeDomainData(waveformData)
       const frame = audioFrameFromAnalyser(audio.currentTime, frequencyData, waveformData, previousBassRef.current)
       previousBassRef.current = frame.bass
-      renderSongNhacFrame(context, canvas.width, canvas.height, frame, clampRenderConfig({ style, quality: 'balanced', intensity: 1, seed: 93 }))
+
+      if (style === 'avee-circle' && !webglUnavailableRef.current && !aveeEngineRef.current) {
+        initAveeEngine()
+      }
+      if (aveeEngineRef.current && style === 'avee-circle') {
+        aveeEngineRef.current.render(frame)
+      } else {
+        const context = canvas.getContext('2d')
+        if (context) {
+          renderSongNhacFrame(
+            context,
+            canvas.width,
+            canvas.height,
+            frame,
+            clampRenderConfig({ style, quality: 'balanced', intensity, seed: 93 }),
+          )
+        }
+      }
+
       rafRef.current = requestAnimationFrame(render)
     }
+
     if (rafRef.current !== null) cancelAnimationFrame(rafRef.current)
     render()
-  }, [style])
+  }, [style, intensity, initAveeEngine])
 
-  // Create MediaElementSource only after user click. React StrictMode runs effects
-  // twice in development, while one HTMLMediaElement can own only one source node.
   useEffect(() => () => {
     if (rafRef.current !== null) cancelAnimationFrame(rafRef.current)
     sourceRef.current?.disconnect()
@@ -55,6 +160,10 @@ export default function SongNhacPage() {
     contextRef.current = null
     analyserRef.current = null
     sourceRef.current = null
+    if (aveeEngineRef.current) {
+      aveeEngineRef.current.dispose()
+      aveeEngineRef.current = null
+    }
   }, [])
 
   const ensureAudioGraph = () => {
@@ -65,7 +174,7 @@ export default function SongNhacPage() {
     const context = new AudioContext({ latencyHint: 'interactive' })
     const analyser = context.createAnalyser()
     analyser.fftSize = 2048
-    analyser.smoothingTimeConstant = 0.8
+    analyser.smoothingTimeConstant = 0.78
     const source = context.createMediaElementSource(audio)
     source.connect(analyser)
     analyser.connect(context.destination)
@@ -74,13 +183,6 @@ export default function SongNhacPage() {
     sourceRef.current = source
     return context
   }
-
-  useEffect(() => {
-    const canvas = canvasRef.current
-    if (!canvas) return
-    const context = canvas.getContext('2d')
-    if (context) renderSongNhacFrame(context, canvas.width, canvas.height, emptyAudioFrame(), clampRenderConfig({ style, quality: 'balanced', intensity: 1, seed: 93 }))
-  }, [style])
 
   useEffect(() => {
     const unsubscribe = window.api.songNhac?.onProgress?.(setProgress)
@@ -93,8 +195,25 @@ export default function SongNhacPage() {
     setAudioPath(selected)
     audioRef.current.src = localFileUrl(selected)
     audioRef.current.load()
-    setMessage('Audio sẵn sàng. Bấm Phát để xem visualizer.')
+    setMessage('Audio sẵn sàng. Bấm Phát preview để thưởng thức sóng nhạc.')
     setProgress(null)
+  }
+
+  const chooseLogo = async () => {
+    const selected = await window.api.selectImageFile()
+    if (selected) {
+      setLogoPath(selected)
+      if (aveeEngineRef.current) {
+        aveeEngineRef.current.loadLogo(localFileUrl(selected))
+      }
+    }
+  }
+
+  const resetDefaultLogo = () => {
+    setLogoPath('')
+    if (aveeEngineRef.current) {
+      aveeEngineRef.current.resetDefaultLogo()
+    }
   }
 
   const chooseOutput = async () => {
@@ -124,8 +243,16 @@ export default function SongNhacPage() {
     setIsExporting(true)
     setMessage('Đang xuất MP4…')
     try {
-      const result = await window.api.songNhac.start({ requestId, audioPath, outputPath, style, width: 1920, height: 1080, fps: 30 })
-      setMessage(result.success ? `Xuất xong: ${result.outputPath}` : (result.error || 'Xuất Song Nhạc thất bại.'))
+      const result = await window.api.songNhac.start({
+        requestId,
+        audioPath,
+        outputPath,
+        style,
+        width: 1920,
+        height: 1080,
+        fps: 30,
+      })
+      setMessage(result.success ? `Xuất xong: ${result.outputPath}` : result.error || 'Xuất Song Nhạc thất bại.')
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error))
     } finally {
@@ -139,24 +266,377 @@ export default function SongNhacPage() {
 
   return (
     <section style={{ minHeight: '100%', color: '#e5e7eb', fontFamily: 'Inter, system-ui, sans-serif' }}>
-      <h1 style={{ marginTop: 0 }}>Sóng nhạc</h1>
-      <p style={{ color: '#94a3b8' }}>Canvas 2D pseudo-3D · Web Audio FFT · MP4 export</p>
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 300px', gap: 18 }}>
-        <div style={{ background: '#020617', border: '1px solid #1e40af', borderRadius: 12, padding: 12 }}>
-          <canvas ref={canvasRef} width={960} height={540} style={{ display: 'block', width: '100%', borderRadius: 8 }} />
-          <audio ref={audioRef} onPlay={() => { setIsPlaying(true); draw() }} onPause={() => setIsPlaying(false)} style={{ display: 'none' }} />
+      <h1 style={{ marginTop: 0, marginBottom: 4, fontSize: 24, fontWeight: 700 }}>Sóng nhạc</h1>
+      <p style={{ color: '#94a3b8', marginTop: 0, marginBottom: 18, fontSize: 13 }}>
+        Visualizer 3D phong cách Avee Player · WebGL Three.js · Beat Audio Reactive
+      </p>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 320px', gap: 18 }}>
+        {/* Canvas Display Viewport */}
+        <div
+          style={{
+            background: '#020617',
+            border: '1px solid #1e293b',
+            borderRadius: 12,
+            padding: 12,
+            display: 'flex',
+            flexDirection: 'column',
+            justifyContent: 'center',
+            alignItems: 'center',
+            position: 'relative',
+          }}
+        >
+          {/* Key forces fresh canvas element on style switch to avoid WebGL / 2D context collision */}
+          <canvas
+            key={style === 'avee-circle' && !webglFallback ? 'canvas-three' : 'canvas-2d'}
+            ref={canvasRef}
+            width={960}
+            height={540}
+            style={{
+              display: 'block',
+              width: '100%',
+              aspectRatio: '16/9',
+              borderRadius: 8,
+              background: '#040714',
+              boxShadow: '0 8px 32px rgba(0, 0, 0, 0.6)',
+            }}
+          />
+          <audio
+            ref={audioRef}
+            onPlay={() => {
+              setIsPlaying(true)
+              draw()
+            }}
+            onPause={() => setIsPlaying(false)}
+            style={{ display: 'none' }}
+          />
+
+          <div
+            style={{
+              display: 'flex',
+              gap: 12,
+              marginTop: 14,
+              width: '100%',
+              justifyContent: 'center',
+              alignItems: 'center',
+            }}
+          >
+            <button
+              type="button"
+              onClick={togglePlay}
+              disabled={!audioPath}
+              style={{
+                padding: '9px 24px',
+                background: isPlaying ? '#dc2626' : '#0284c7',
+                border: 'none',
+                borderRadius: 6,
+                color: '#ffffff',
+                fontWeight: 600,
+                fontSize: 14,
+                cursor: audioPath ? 'pointer' : 'not-allowed',
+                opacity: audioPath ? 1 : 0.6,
+                transition: 'all 0.2s',
+              }}
+            >
+              {isPlaying ? 'Tạm dừng preview' : 'Phát preview'}
+            </button>
+          </div>
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, background: '#081124', border: '1px solid #172554', borderRadius: 12, padding: 16 }}>
-          <button type="button" onClick={chooseAudio}>Chọn audio</button>
-          <div style={{ fontSize: 11, wordBreak: 'break-all', color: '#94a3b8' }}>{audioPath || 'Chưa chọn audio'}</div>
-          <button type="button" onClick={togglePlay} disabled={!audioPath}>{isPlaying ? 'Tạm dừng preview' : 'Phát preview'}</button>
-          <label>Style<select value={style} onChange={(event) => setStyle(event.target.value as SongNhacStyle)} style={{ display: 'block', width: '100%', marginTop: 6 }}>{SONG_NHAC_STYLES.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
-          <button type="button" onClick={chooseOutput}>Chọn output MP4</button>
-          <div style={{ fontSize: 11, wordBreak: 'break-all', color: '#94a3b8' }}>{outputPath || 'Chưa chọn output'}</div>
-          <button type="button" onClick={startExport} disabled={!audioPath || !outputPath || isExporting}>{isExporting ? 'Đang xuất…' : 'Xuất MP4'}</button>
-          {isExporting && <button type="button" onClick={cancelExport}>Hủy export</button>}
-          {progress && <div style={{ color: '#67e8f9', fontSize: 12 }}>{progress.percent.toFixed(1)}% · {progress.timeSec.toFixed(1)}s / {progress.totalSec.toFixed(1)}s</div>}
-          <div style={{ color: '#cbd5e1', fontSize: 12 }}>{message}</div>
+
+        {/* Controls Sidebar */}
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 14,
+            background: '#090e1a',
+            border: '1px solid #1e293b',
+            borderRadius: 12,
+            padding: 18,
+            fontSize: 13,
+          }}
+        >
+          {/* 1. Audio File */}
+          <div>
+            <div style={{ fontWeight: 600, color: '#f1f5f9', marginBottom: 6 }}>1. Tệp âm thanh</div>
+            <button
+              type="button"
+              onClick={chooseAudio}
+              style={{
+                width: '100%',
+                padding: '8px 12px',
+                background: '#1e293b',
+                border: '1px solid #334155',
+                borderRadius: 6,
+                color: '#f8fafc',
+                cursor: 'pointer',
+                textAlign: 'center',
+              }}
+            >
+              Chọn tệp audio
+            </button>
+            <div
+              style={{
+                fontSize: 11,
+                wordBreak: 'break-all',
+                color: '#94a3b8',
+                marginTop: 4,
+                padding: '4px 6px',
+                background: '#040714',
+                borderRadius: 4,
+              }}
+            >
+              {audioPath ? audioPath.split(/[/\\]/).pop() : 'Chưa chọn audio'}
+            </div>
+          </div>
+
+          {/* 2. Visualizer Style */}
+          <div>
+            <label style={{ fontWeight: 600, color: '#f1f5f9', display: 'block', marginBottom: 6 }}>
+              2. Kiểu sóng nhạc
+            </label>
+            <select
+              value={style}
+              onChange={(e) => setStyle(e.target.value as SongNhacStyle)}
+              style={{
+                width: '100%',
+                padding: '8px 10px',
+                background: '#1e293b',
+                border: '1px solid #334155',
+                borderRadius: 6,
+                color: '#e2e8f0',
+                outline: 'none',
+              }}
+            >
+              {SONG_NHAC_STYLES.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* 3. Avee Player Specific Settings */}
+          {style === 'avee-circle' && (
+            <div
+              style={{
+                background: '#040714',
+                border: '1px solid #1e293b',
+                borderRadius: 8,
+                padding: 12,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 12,
+              }}
+            >
+              <div style={{ fontWeight: 600, color: '#38bdf8', fontSize: 12, textTransform: 'uppercase' }}>
+                Tùy chỉnh Avee Player
+              </div>
+
+              {/* Logo Select */}
+              <div>
+                <label style={{ color: '#cbd5e1', display: 'block', marginBottom: 4, fontSize: 12 }}>
+                  Logo trung tâm:
+                </label>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button
+                    type="button"
+                    onClick={chooseLogo}
+                    style={{
+                      flex: 1,
+                      padding: '6px 8px',
+                      background: '#1e293b',
+                      border: '1px solid #334155',
+                      borderRadius: 4,
+                      color: '#f8fafc',
+                      cursor: 'pointer',
+                      fontSize: 12,
+                    }}
+                  >
+                    Chọn ảnh logo
+                  </button>
+                  {logoPath && (
+                    <button
+                      type="button"
+                      onClick={resetDefaultLogo}
+                      style={{
+                        padding: '6px 10px',
+                        background: '#334155',
+                        border: 'none',
+                        borderRadius: 4,
+                        color: '#fca5a5',
+                        cursor: 'pointer',
+                        fontSize: 12,
+                      }}
+                    >
+                      Mặc định
+                    </button>
+                  )}
+                </div>
+                <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>
+                  {logoPath ? logoPath.split(/[/\\]/).pop() : 'Đang dùng logo 93 Media'}
+                </div>
+              </div>
+
+              {/* Color Theme */}
+              <div>
+                <label style={{ color: '#cbd5e1', display: 'block', marginBottom: 4, fontSize: 12 }}>
+                  Tông màu neon:
+                </label>
+                <select
+                  value={theme}
+                  onChange={(e) => setTheme(e.target.value as AveeColorTheme)}
+                  style={{
+                    width: '100%',
+                    padding: '6px 8px',
+                    background: '#1e293b',
+                    border: '1px solid #334155',
+                    borderRadius: 4,
+                    color: '#e2e8f0',
+                    fontSize: 12,
+                    outline: 'none',
+                  }}
+                >
+                  {(Object.keys(AVEE_THEMES) as AveeColorTheme[]).map((key) => (
+                    <option key={key} value={key}>
+                      {AVEE_THEMES[key].name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Intensity Slider */}
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', color: '#cbd5e1', fontSize: 12 }}>
+                  <span>Độ nhạy đập beat:</span>
+                  <span style={{ color: '#38bdf8', fontWeight: 600 }}>{intensity.toFixed(1)}x</span>
+                </div>
+                <input
+                  type="range"
+                  min="0.5"
+                  max="2.0"
+                  step="0.1"
+                  value={intensity}
+                  onChange={(e) => setIntensity(Number(e.target.value))}
+                  style={{ width: '100%', marginTop: 6, accentColor: '#0ea5e9' }}
+                />
+              </div>
+
+              {/* Toggles */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12 }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', color: '#cbd5e1' }}>
+                  <input
+                    type="checkbox"
+                    checked={showParticles}
+                    onChange={(e) => setShowParticles(e.target.checked)}
+                    style={{ accentColor: '#0ea5e9' }}
+                  />
+                  Hạt bụi sao phát sáng (Particles)
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', color: '#cbd5e1' }}>
+                  <input
+                    type="checkbox"
+                    checked={showLogo}
+                    onChange={(e) => setShowLogo(e.target.checked)}
+                    style={{ accentColor: '#0ea5e9' }}
+                  />
+                  Logo và vòng viền trung tâm
+                </label>
+              </div>
+            </div>
+          )}
+
+          {/* 4. Output MP4 */}
+          <div>
+            <div style={{ fontWeight: 600, color: '#f1f5f9', marginBottom: 6 }}>3. Xuất video MP4</div>
+            <button
+              type="button"
+              onClick={chooseOutput}
+              style={{
+                width: '100%',
+                padding: '8px 12px',
+                background: '#1e293b',
+                border: '1px solid #334155',
+                borderRadius: 6,
+                color: '#f8fafc',
+                cursor: 'pointer',
+                textAlign: 'center',
+              }}
+            >
+              Chọn nơi lưu MP4
+            </button>
+            <div
+              style={{
+                fontSize: 11,
+                wordBreak: 'break-all',
+                color: '#94a3b8',
+                marginTop: 4,
+                padding: '4px 6px',
+                background: '#040714',
+                borderRadius: 4,
+              }}
+            >
+              {outputPath ? outputPath.split(/[/\\]/).pop() : 'Chưa chọn nơi lưu'}
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={startExport}
+            disabled={!audioPath || !outputPath || isExporting}
+            style={{
+              padding: '10px 14px',
+              background: isExporting ? '#64748b' : '#059669',
+              border: 'none',
+              borderRadius: 6,
+              color: '#ffffff',
+              fontWeight: 700,
+              fontSize: 14,
+              cursor: !audioPath || !outputPath || isExporting ? 'not-allowed' : 'pointer',
+              opacity: !audioPath || !outputPath || isExporting ? 0.6 : 1,
+              marginTop: 4,
+            }}
+          >
+            {isExporting ? 'Đang xuất video…' : 'Bắt đầu xuất MP4'}
+          </button>
+
+          {isExporting && (
+            <button
+              type="button"
+              onClick={cancelExport}
+              style={{
+                padding: '7px 12px',
+                background: '#dc2626',
+                border: 'none',
+                borderRadius: 6,
+                color: '#ffffff',
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              Hủy xuất
+            </button>
+          )}
+
+          {progress && (
+            <div style={{ color: '#67e8f9', fontSize: 12 }}>
+              Tiến độ: {progress.percent.toFixed(1)}% ({progress.timeSec.toFixed(1)}s / {progress.totalSec.toFixed(1)}s)
+            </div>
+          )}
+
+          <div
+            style={{
+              color: '#94a3b8',
+              fontSize: 12,
+              lineHeight: 1.5,
+              background: '#040714',
+              padding: 10,
+              borderRadius: 6,
+              border: '1px solid #1e293b',
+            }}
+          >
+            {message}
+          </div>
         </div>
       </div>
     </section>

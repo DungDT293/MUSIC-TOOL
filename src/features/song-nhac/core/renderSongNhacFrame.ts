@@ -81,6 +81,61 @@ export function renderSongNhacFrame(
     context.beginPath()
     context.arc(centerX, centerY, radius, 0, Math.PI * 2)
     context.stroke()
+  } else if (config.style === 'avee-circle') {
+    // GPU-free fallback for the Avee Player look: mirrored radial spectrum around a
+    // pulsing disc. The Three.js engine draws a richer version of this; this branch
+    // keeps the preview and the export path usable when WebGL is unavailable.
+    const bars = Math.max(24, count * 2)
+    const half = Math.max(8, Math.floor(bars / 2))
+    const discRadius = minSize * (0.2 + frame.bass * 0.05 * intensity)
+    const barBase = discRadius * 1.06
+    const dataLength = Math.min(frame.frequencyData.length, 180)
+
+    const disc = context.createRadialGradient(centerX, centerY, discRadius * 0.08, centerX, centerY, discRadius)
+    disc.addColorStop(0, 'rgba(18,30,58,0.96)')
+    disc.addColorStop(0.75, 'rgba(6,10,22,0.92)')
+    disc.addColorStop(1, 'rgba(2,4,10,0.88)')
+    context.globalAlpha = 1
+    context.fillStyle = disc
+    context.beginPath()
+    context.arc(centerX, centerY, discRadius, 0, Math.PI * 2)
+    context.fill()
+
+    context.lineWidth = Math.max(1, (Math.PI * barBase) / bars * 0.62)
+    for (let index = 0; index < half; index += 1) {
+      const normalized = Math.pow(index / half, 1.45)
+      const value = dataLength > 0
+        ? (frame.frequencyData[Math.min(dataLength - 1, Math.floor(normalized * dataLength))] ?? 0) / 255
+        : 0
+      const barLength = minSize * (0.012 + value * 0.17 * intensity)
+      context.globalAlpha = 0.45 + value * 0.55
+      context.strokeStyle = index % 2 ? cyan : magenta
+      for (const side of [-1, 1]) {
+        const angle = -Math.PI / 2 + side * (index / half) * Math.PI
+        const cos = Math.cos(angle)
+        const sin = Math.sin(angle)
+        context.beginPath()
+        context.moveTo(centerX + cos * barBase, centerY + sin * barBase)
+        context.lineTo(centerX + cos * (barBase + barLength), centerY + sin * (barBase + barLength))
+        context.stroke()
+      }
+    }
+
+    context.globalAlpha = 0.9
+    context.strokeStyle = cyan
+    context.beginPath()
+    context.arc(centerX, centerY, discRadius, 0, Math.PI * 2)
+    context.stroke()
+
+    context.globalAlpha = 0.45
+    context.strokeStyle = magenta
+    const outerRadius = barBase + minSize * 0.02
+    for (let index = 0; index < 24; index += 1) {
+      const start = (index / 24) * Math.PI * 2 + frame.timeSec * 0.35
+      context.beginPath()
+      context.arc(centerX, centerY, outerRadius, start, start + Math.PI / 36)
+      context.stroke()
+    }
   } else {
     const horizon = centerY - minSize * 0.12
     const spacing = Math.max(18, minSize / 16)

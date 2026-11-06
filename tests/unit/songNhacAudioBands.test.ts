@@ -32,7 +32,7 @@ describe('Song Nhạc audio frame helpers', () => {
       style: 'pulse-grid', quality: 'full', intensity: 2, seed: 4,
     })
     expect(clampRenderConfig({ style: 'invalid' as never, quality: 'bad' as never, intensity: Number.NaN })).toEqual({
-      style: 'neon-tunnel', quality: 'balanced', intensity: 1, seed: 93,
+      style: 'avee-circle', quality: 'balanced', intensity: 1, seed: 93,
     })
   })
 })

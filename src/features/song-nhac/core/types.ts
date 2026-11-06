@@ -1,4 +1,4 @@
-export type SongNhacStyle = 'neon-tunnel' | 'orbit-spectrum' | 'pulse-grid'
+export type SongNhacStyle = 'avee-circle' | 'neon-tunnel' | 'orbit-spectrum' | 'pulse-grid'
 export type SongNhacQuality = 'low' | 'balanced' | 'full'
 
 export interface SongNhacRenderConfig {
@@ -20,15 +20,16 @@ export interface SongNhacAudioFrame {
 }
 
 export const SONG_NHAC_STYLES: Array<{ id: SongNhacStyle; label: string; hint: string }> = [
+  { id: 'avee-circle', label: 'Avee Player (Sóng tròn + Logo beat)', hint: 'Sóng tròn, logo đập nhịp và hạt bay phong cách Avee Player' },
   { id: 'neon-tunnel', label: 'Neon Tunnel', hint: 'Ống neon pseudo-3D' },
   { id: 'orbit-spectrum', label: 'Orbit Spectrum', hint: 'Quỹ đạo phổ âm thanh' },
   { id: 'pulse-grid', label: 'Pulse Grid', hint: 'Lưới nhịp phát sáng' },
 ]
 
 export function clampRenderConfig(config: Partial<SongNhacRenderConfig>): SongNhacRenderConfig {
-  const style = config.style === 'orbit-spectrum' || config.style === 'pulse-grid'
+  const style = config.style === 'neon-tunnel' || config.style === 'orbit-spectrum' || config.style === 'pulse-grid'
     ? config.style
-    : 'neon-tunnel'
+    : 'avee-circle'
   const quality = config.quality === 'low' || config.quality === 'full'
     ? config.quality
     : 'balanced'

@@ -1,4 +1,4 @@
-export type SongNhacStyle = 'neon-tunnel' | 'orbit-spectrum' | 'pulse-grid'
+export type SongNhacStyle = 'avee-circle' | 'neon-tunnel' | 'orbit-spectrum' | 'pulse-grid'
 
 export interface SongNhacFrameOptions {
   style: SongNhacStyle

@@ -2,7 +2,7 @@ export const SONG_NHAC_EXPORT_START = 'song-nhac:export:start'
 export const SONG_NHAC_EXPORT_CANCEL = 'song-nhac:export:cancel'
 export const SONG_NHAC_EXPORT_PROGRESS = 'song-nhac:export:progress'
 
-export type SongNhacStyle = 'neon-tunnel' | 'orbit-spectrum' | 'pulse-grid'
+export type SongNhacStyle = 'avee-circle' | 'neon-tunnel' | 'orbit-spectrum' | 'pulse-grid'
 
 export interface SongNhacExportRequest {
   requestId: string

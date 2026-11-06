@@ -4,6 +4,7 @@ import path from 'node:path'
 import { getFfmpegPaths } from '../ffmpeg/config'
 import { probeFile } from '../ffmpeg/probe'
 import type { SongNhacExportProgress, SongNhacExportRequest } from '../../shared/songNhacChannels'
+import { buildSongNhacVisualFilter } from './songNhacVisualFilter'
 
 export interface SongNhacFfmpegPipe {
   run: (onProgress: (progress: SongNhacExportProgress) => void) => Promise<void>
@@ -35,11 +36,11 @@ export function createSongNhacFfmpegPipe(
     if (totalSec <= 0) throw new Error('Không đọc được thời lượng audio.')
 
     const { ffmpeg } = getFfmpegPaths()
-    const visual = request.style === 'orbit-spectrum'
-      ? `showfreqs=s=${request.width}x${Math.max(180, Math.round(request.height * 0.28))}:mode=bar:colors=0xd946ef|0x22d3ee`
-      : request.style === 'pulse-grid'
-      ? `showwaves=s=${request.width}x${Math.max(180, Math.round(request.height * 0.28))}:mode=cline:colors=0xd946ef`
-      : `showwaves=s=${request.width}x${Math.max(180, Math.round(request.height * 0.28))}:mode=line:colors=0x22d3ee`
+    const visual = buildSongNhacVisualFilter({
+      style: request.style,
+      width: request.width,
+      height: request.height,
+    })
     const filter = [
       `[1:a]${visual},format=rgba[wave]`,
       `[0:v][wave]overlay=(W-w)/2:(H-h)/2:shortest=1[v]`,
@@ -52,13 +53,19 @@ export function createSongNhacFfmpegPipe(
       '-map', '[v]', '-map', '1:a:0',
       '-t', totalSec.toFixed(3),
       '-r', String(request.fps),
-      '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-preset', 'veryfast',
+      '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-preset', 'veryfast', '-crf', '19', '-profile:v', 'high',
       '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', '-y', request.outputPath,
     ]
 
     await new Promise<void>((resolve, reject) => {
-      child = spawn(ffmpeg, args, { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] })
-      onProcess?.(child)
+      // spawn() is typed by its stdio tuple; keep the public pipe contract (a process we
+      // can kill) without widening the exported callback type.
+      const proc = spawn(ffmpeg, args, {
+        windowsHide: true,
+        stdio: ['ignore', 'ignore', 'pipe'],
+      }) as unknown as ChildProcessWithoutNullStreams
+      child = proc
+      onProcess?.(proc)
       let stderr = ''
       let settled = false
       const finish = (error?: Error) => {
@@ -68,7 +75,7 @@ export function createSongNhacFfmpegPipe(
         if (error) reject(error)
         else resolve()
       }
-      child.stderr.on('data', (chunk: Buffer) => {
+      proc.stderr.on('data', (chunk: Buffer) => {
         stderr += chunk.toString('utf8')
         const match = stderr.match(/time=(\d{2}):(\d{2}):(\d{2}(?:\.\d+)?)/g)
         const last = match?.[match.length - 1]
@@ -78,8 +85,8 @@ export function createSongNhacFfmpegPipe(
         const timeSec = Number(timeMatch[1]) * 3600 + Number(timeMatch[2]) * 60 + Number(timeMatch[3])
         onProgress({ requestId: request.requestId, timeSec, totalSec, percent: Math.min(100, (timeSec / totalSec) * 100) })
       })
-      child.once('error', (error) => finish(error))
-      child.once('close', (code) => {
+      proc.once('error', (error) => finish(error))
+      proc.once('close', (code) => {
         if (cancelled) finish(new Error('Song Nhạc export đã bị hủy.'))
         else if (code !== 0) finish(new Error(stderr.trim().slice(-1200) || `FFmpeg exited with code ${code}.`))
         else finish()
