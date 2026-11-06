@@ -205,6 +205,11 @@ export default function SongNhacPage() {
   const [message, setMessage] = useState('Chọn audio để bắt đầu.')
 
   // Re-create Avee engine when canvas mounts or style switches
+  // Latest engine options without making initAveeEngine depend on them: changing the theme
+  // must not rebuild the whole scene (it re-fetched every image and flickered).
+  const engineSettingsRef = useRef({ theme, intensity, logoPath, showParticles, showLogo })
+  engineSettingsRef.current = { theme, intensity, logoPath, showParticles, showLogo }
+
   const initAveeEngine = useCallback(() => {
     if (aveeEngineRef.current) {
       aveeEngineRef.current.dispose()
@@ -215,12 +220,13 @@ export default function SongNhacPage() {
     if (!canvas || style !== 'avee-circle' || webglUnavailableRef.current) return
 
     try {
+      const settings = engineSettingsRef.current
       aveeEngineRef.current = new AveeVisualizerEngine(canvas, {
-        theme,
-        logoUrl: logoPath ? localFileUrl(logoPath) : null,
-        intensity,
-        showParticles,
-        showLogo,
+        theme: settings.theme,
+        logoUrl: settings.logoPath ? localFileUrl(settings.logoPath) : null,
+        intensity: settings.intensity,
+        showParticles: settings.showParticles,
+        showLogo: settings.showLogo,
       })
       aveeEngineRef.current.setLayers(useSongNhacLayerStore.getState().layers)
       aveeEngineRef.current.setSelectedLayer(useSongNhacLayerStore.getState().selectedLayerId)
@@ -237,7 +243,7 @@ export default function SongNhacPage() {
       // context to the current one (a canvas cannot switch context types).
       setWebglFallback(true)
     }
-  }, [style, theme, intensity, logoPath, showParticles, showLogo])
+  }, [style])
 
   useEffect(() => {
     if (style === 'avee-circle') initAveeEngine()

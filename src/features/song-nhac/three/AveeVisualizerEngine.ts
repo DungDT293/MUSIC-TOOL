@@ -545,7 +545,11 @@ export class AveeVisualizerEngine {
     ;(this.particlePoints.material as THREE.ShaderMaterial).uniforms.uColor.value.setHex(palette.particles)
     ;(this.logoGlow.material as THREE.SpriteMaterial).color.setHex(palette.primary)
     this.bloomPass.strength = palette.bloom * 0.55
-    this.writeBarColors(palette.primary, palette.secondary, palette.accent)
+    // A layer with custom colours keeps them when the page theme changes.
+    const viz = this.currentVisualizerLayer
+    if (!viz || viz.type !== 'visualizer' || viz.colorMode === 'rainbow') {
+      this.writeBarColors(palette.primary, palette.secondary, palette.accent)
+    }
   }
 
   private writeBarColors(primary: number, secondary: number, accent: number): void {
