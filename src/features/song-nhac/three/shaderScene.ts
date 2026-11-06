@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import type { SongNhacAudioFrame } from '../core/types'
 
-export type ShaderSceneMode = 'grid' | 'polar' | 'orb'
+export type ShaderSceneMode = 'grid' | 'polar' | 'orb' | 'warp'
 
 export interface ShaderSceneParams {
   colorA: number
@@ -175,6 +175,46 @@ void main() {
   gl_FragColor = vec4(color * (0.5 + uIntensity * 0.5), 1.0);
 }
 `
+/** Hyperspace tunnel: rings and spokes rushing at the camera. */
+const WARP_FRAGMENT = /* glsl */ `
+precision highp float;
+uniform float uTime;
+uniform float uBass;
+uniform float uIntensity;
+uniform float uSpeed;
+uniform float uAspect;
+uniform sampler2D uSpectrum;
+uniform vec3 uColorA;
+uniform vec3 uColorB;
+uniform vec3 uAccent;
+varying vec2 vUv;
+
+void main() {
+  vec2 p = vUv - 0.5;
+  p.x *= uAspect;
+  float r = length(p);
+  float angle = atan(p.y, p.x) / 6.2831853 + 0.5;
+  float mirrored = abs(fract(angle + 0.5) - 0.5) * 2.0;
+  float energy = texture2D(uSpectrum, vec2(mirrored, 0.5)).r;
+
+  // Depth grows toward the centre, so rings accelerate as they approach.
+  float depth = 1.0 / max(r, 0.05);
+  float scroll = depth * 1.35 + uTime * 1.15 * uSpeed;
+  float band = fract(scroll);
+  float ringMask = smoothstep(0.0, 0.12, band) * smoothstep(0.5, 0.18, band);
+
+  float spokes = smoothstep(0.44, 0.5, abs(fract(angle * 36.0) - 0.5)) * (0.1 + energy * 0.35);
+
+  vec3 base = mix(uColorA, uColorB, mirrored);
+  float fade = smoothstep(0.02, 0.22, r) * smoothstep(0.95, 0.35, r);
+  vec3 color = base * ringMask * (0.35 + energy * 1.4) * fade;
+  color += base * spokes * fade;
+  color += uAccent * exp(-r * 5.0) * (0.25 + uBass * 0.75);
+  color *= 0.45 + uIntensity * 0.75;
+
+  gl_FragColor = vec4(color, 1.0);
+}
+`
 export class ShaderScene {
   readonly object: THREE.Mesh
   private readonly material: THREE.ShaderMaterial
@@ -198,7 +238,7 @@ export class ShaderScene {
     const isOrb = mode === 'orb'
     this.material = new THREE.ShaderMaterial({
       vertexShader: isOrb ? ORB_VERTEX : VERTEX,
-      fragmentShader: isOrb ? ORB_FRAGMENT : mode === 'polar' ? POLAR_FRAGMENT : FRAGMENT,
+      fragmentShader: isOrb ? ORB_FRAGMENT : mode === 'polar' ? POLAR_FRAGMENT : mode === 'warp' ? WARP_FRAGMENT : FRAGMENT,
       uniforms: {
         uTime: { value: 0 },
         uBass: { value: 0 },
@@ -289,6 +329,6 @@ export class ShaderScene {
   }
 }
 
-export function isShaderScene(style: string): style is 'grid' | 'polar' | 'orb' {
-  return style === 'grid' || style === 'polar' || style === 'orb'
+export function isShaderScene(style: string): style is 'grid' | 'polar' | 'orb' | 'warp' {
+  return style === 'grid' || style === 'polar' || style === 'orb' || style === 'warp'
 }

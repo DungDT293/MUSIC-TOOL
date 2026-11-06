@@ -27,6 +27,7 @@ const WAVE_STYLES = [
   { id: 'grid', label: 'Lưới địa hình' },
   { id: 'polar', label: 'Hào quang' },
   { id: 'orb', label: 'Cầu năng lượng' },
+  { id: 'warp', label: 'Hầm warp' },
 ]
 
 const panelStyle: React.CSSProperties = {
