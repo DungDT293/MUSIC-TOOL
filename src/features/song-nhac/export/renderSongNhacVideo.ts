@@ -8,7 +8,9 @@ export interface RenderVideoOptions {
   frames: SongNhacAudioFrame[]
   fps: number
   bitrate: number
-  /** Emit chunks in order; the caller appends them to the .h264 stream. */
+  /** h264 = widest compatibility, hevc = smaller files. */
+  codec?: 'h264' | 'hevc'
+  /** Emit chunks in order; the caller appends them to the raw bitstream. */
   onChunk: (chunk: Uint8Array) => void
   onProgress?: (renderedFrames: number, totalFrames: number) => void | Promise<void>
   signal?: AbortSignal
@@ -29,9 +31,12 @@ export async function renderSongNhacVideo(options: RenderVideoOptions): Promise<
   const { canvas, engine, frames, fps, bitrate, onChunk, onProgress, signal } = options
   const keyFrameInterval = Math.max(1, Math.round((options.keyFrameIntervalSec ?? 2) * fps))
 
-  const encoder = new FrameEncoder({ width: canvas.width, height: canvas.height, fps, bitrate, onChunk })
+  const codec = options.codec ?? 'h264'
+  const encoder = new FrameEncoder({ width: canvas.width, height: canvas.height, fps, bitrate, codec, onChunk })
   const ready = await encoder.init()
-  if (!ready) throw new Error('Thiết bị không hỗ trợ WebCodecs H.264, không thể xuất video.')
+  if (!ready) {
+    throw new Error(`Thiết bị không hỗ trợ WebCodecs ${codec === 'hevc' ? 'HEVC (H.265)' : 'H.264'}, không thể xuất video.`)
+  }
 
   try {
     for (let index = 0; index < frames.length; index += 1) {
@@ -62,6 +67,6 @@ export function suggestBitrate(width: number, height: number, fps: number): numb
   const pixels = width * height
   // Music visuals are mostly dark gradients, so 10 Mbps at 1080p is already generous;
   // a 14 Mbps default turned a one-hour mix into a 6 GB upload.
-  const base = pixels >= 2560 * 1440 ? 18_000_000 : pixels >= 1920 * 1080 ? 10_000_000 : 6_000_000
+  const base = pixels >= 3840 * 2160 ? 22_000_000 : pixels >= 2560 * 1440 ? 12_000_000 : pixels >= 1920 * 1080 ? 8_000_000 : 4_500_000
   return Math.round(base * Math.min(1.5, Math.max(0.6, fps / 30)))
 }

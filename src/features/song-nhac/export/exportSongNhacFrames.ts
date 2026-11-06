@@ -22,9 +22,15 @@ export interface ExportSongNhacFramesOptions {
   /** Optional trim, in seconds. Absent = whole audio. */
   rangeStartSec?: number
   rangeEndSec?: number
+  /** avc = widest compatibility, hevc = ~35% smaller (needs hardware support). */
+  codec?: 'h264' | 'hevc'
+  /** Bitrate tier: high = 1.0x of the suggestion, balanced = 0.75x, light = 0.55x. */
+  bitrateTier?: 'high' | 'balanced' | 'light'
   signal?: AbortSignal
   onProgress?: (percent: number, renderedFrames: number, totalFrames: number) => void
 }
+
+const BITRATE_TIERS = { high: 1, balanced: 0.8, light: 0.55 } as const
 
 function decodeBase64(base64: string): ArrayBuffer {
   const binary = atob(base64)
@@ -71,6 +77,7 @@ export async function exportSongNhacFrames(options: ExportSongNhacFramesOptions)
       totalFrames: frames.length,
       startSec: rangeStart > 0 ? rangeStart : undefined,
       durationSec: frames.length / options.fps,
+      codec: options.codec ?? 'h264',
     })
     if (!begin.success) return begin
 
@@ -103,7 +110,8 @@ export async function exportSongNhacFrames(options: ExportSongNhacFramesOptions)
         engine,
         frames,
         fps: options.fps,
-        bitrate: suggestBitrate(options.width, options.height, options.fps),
+        bitrate: Math.round(suggestBitrate(options.width, options.height, options.fps) * BITRATE_TIERS[options.bitrateTier ?? 'balanced']),
+        codec: options.codec ?? 'h264',
         signal: options.signal,
         onChunk: (chunk) => queue.push(chunk),
         onProgress: async (rendered, total) => {

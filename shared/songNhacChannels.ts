@@ -20,6 +20,8 @@ export interface SongNhacFramesRequest {
   /** Optional trim of the source audio, in seconds. Absent = whole file. */
   startSec?: number
   durationSec?: number
+  /** Raw bitstream flavour the renderer produced. */
+  codec?: 'h264' | 'hevc'
 }
 
 export interface SongNhacFramesResult {

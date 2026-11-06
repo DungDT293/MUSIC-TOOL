@@ -1,36 +1,61 @@
+export type FrameCodec = 'h264' | 'hevc'
+
 export interface FrameEncoderOptions {
   width: number
   height: number
   fps: number
   /** Target bitrate in bits per second. */
   bitrate: number
+  /** Output bitstream flavour; both are Annex-B so FFmpeg can copy them. */
+  codec?: FrameCodec
   onChunk: (chunk: Uint8Array) => void
 }
 
-const CODEC_CANDIDATES = ['avc1.640028', 'avc1.4d4028', 'avc1.42e01f']
+const CODEC_CANDIDATES: Record<FrameCodec, string[]> = {
+  // High 4.0 first, then Main, then Baseline for old GPUs.
+  h264: ['avc1.640028', 'avc1.4d4028', 'avc1.42e01f'],
+  // Main profile, level 4.0 / 4.1 — enough for 1080p30 and 1440p30.
+  hevc: ['hvc1.1.6.L120.90', 'hvc1.1.6.L123.B0', 'hev1.1.6.L120.90'],
+}
 
 /**
- * Thin WebCodecs wrapper that turns canvases into an Annex-B H.264 stream.
+ * Thin WebCodecs wrapper that turns canvases into an Annex-B bitstream.
  *
- * Annex-B matters: the chunks are appended to a .h264 file and handed to FFmpeg
- * with `-c:v copy`, so no second generation of compression is spent on muxing.
+ * Annex-B matters: the chunks are appended to a raw .h264/.265 file and handed to
+ * FFmpeg with `-c:v copy`, so muxing never spends a second generation of compression.
  */
 export class FrameEncoder {
   private encoder: VideoEncoder | null = null
   private readonly options: FrameEncoderOptions
+  private readonly requestedCodec: FrameCodec
   private codec = ''
 
   constructor(options: FrameEncoderOptions) {
     this.options = options
+    this.requestedCodec = options.codec ?? 'h264'
   }
 
   static isSupported(): boolean {
     return typeof globalThis.VideoEncoder !== 'undefined' && typeof globalThis.VideoFrame !== 'undefined'
   }
 
+  /** Probes one configuration without creating an encoder. */
+  static async probe(codec: FrameCodec, width: number, height: number, fps: number, bitrate: number): Promise<boolean> {
+    if (!FrameEncoder.isSupported()) return false
+    for (const candidate of CODEC_CANDIDATES[codec]) {
+      try {
+        const support = await VideoEncoder.isConfigSupported({ codec: candidate, width, height, framerate: fps, bitrate })
+        if (support.supported) return true
+      } catch {
+        // try next
+      }
+    }
+    return false
+  }
+
   async init(): Promise<boolean> {
     if (!FrameEncoder.isSupported()) return false
-    for (const codec of CODEC_CANDIDATES) {
+    for (const codec of CODEC_CANDIDATES[this.requestedCodec]) {
       try {
         const support = await VideoEncoder.isConfigSupported({
           codec,
@@ -59,16 +84,25 @@ export class FrameEncoder {
         console.error('[FrameEncoder] encoder error:', error)
       },
     })
-    this.encoder.configure({
+    const base: VideoEncoderConfig = {
       codec: this.codec,
       width: this.options.width,
       height: this.options.height,
       bitrate: this.options.bitrate,
       framerate: this.options.fps,
       latencyMode: 'quality',
-      avc: { format: 'annexb' },
-    })
+    }
+    this.encoder.configure(
+      (this.requestedCodec === 'hevc'
+        ? { ...base, hevc: { format: 'annexb' } }
+        : { ...base, avc: { format: 'annexb' } }) as VideoEncoderConfig,
+    )
     return true
+  }
+
+  /** Codec actually selected (may differ from the request when a profile is unsupported). */
+  get selectedCodec(): string {
+    return this.codec
   }
 
   get queueSize(): number {

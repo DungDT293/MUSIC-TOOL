@@ -94,6 +94,46 @@ describe('Song Nhạc frame export IPC', () => {
     expect(Number(parsed.format.duration)).toBeGreaterThan(0.8)
   }, 120000)
 
+
+  it('muxes an HEVC bitstream into a tagged hvc1 MP4', async () => {
+    const { registerSongNhacHandlers } = await import('../../electron/handlers/songNhacHandlers')
+    const { SONG_NHAC_FRAMES_BEGIN, SONG_NHAC_FRAMES_CHUNK, SONG_NHAC_FRAMES_FLUSH, SONG_NHAC_FRAMES_END } = await import(
+      '../../shared/songNhacChannels'
+    )
+    registerSongNhacHandlers(() => null)
+
+    const hevcPath = path.join(workDir, 'clip.265')
+    run(FFMPEG, ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc=size=320x180:rate=30:duration=1', '-c:v', 'libx265', '-x265-params', 'log-level=error', '-f', 'hevc', hevcPath])
+
+    const hevcOutput = path.join(workDir, 'out-hevc.mp4')
+    const begin = handlers.get(SONG_NHAC_FRAMES_BEGIN) as (event: unknown, payload: unknown) => Promise<{ success: boolean; error?: string }>
+    const chunk = listeners.get(SONG_NHAC_FRAMES_CHUNK) as (event: unknown, requestId: unknown, data: unknown) => void
+    const flush = handlers.get(SONG_NHAC_FRAMES_FLUSH) as (event: unknown, requestId: unknown) => Promise<unknown>
+    const end = handlers.get(SONG_NHAC_FRAMES_END) as (event: unknown, requestId: unknown) => Promise<{ success: boolean; error?: string }>
+
+    const requestId = 'test-hevc'
+    const started = await begin(null, {
+      requestId,
+      audioPath,
+      outputPath: hevcOutput,
+      width: 320,
+      height: 180,
+      fps: 30,
+      totalFrames: 30,
+      durationSec: 1,
+      codec: 'hevc',
+    })
+    expect(started.success).toBe(true)
+    chunk(null, requestId, fs.readFileSync(hevcPath))
+    await flush(null, requestId)
+    const finished = await end(null, requestId)
+    expect(finished.success).toBe(true)
+
+    const probe = spawnSync(FFPROBE, ['-v', 'error', '-show_entries', 'stream=codec_name,codec_tag_string', '-of', 'json', hevcOutput], { encoding: 'utf8' })
+    const parsed = JSON.parse(probe.stdout) as { streams: Array<{ codec_name: string; codec_tag_string: string }> }
+    expect(parsed.streams.some((item) => item.codec_name === 'hevc')).toBe(true)
+    expect(parsed.streams.some((item) => item.codec_tag_string === 'hvc1')).toBe(true)
+  }, 120000)
   it('rejects an unknown session id', async () => {
     const { SONG_NHAC_FRAMES_END } = await import('../../shared/songNhacChannels')
     const end = handlers.get(SONG_NHAC_FRAMES_END) as (event: unknown, requestId: unknown) => Promise<{ success: boolean; error?: string }>

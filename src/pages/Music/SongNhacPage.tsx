@@ -5,6 +5,7 @@ import { renderSongNhacFrame } from '../../features/song-nhac/core/renderSongNha
 import { SONG_NHAC_STYLES, clampRenderConfig, type SongNhacStyle } from '../../features/song-nhac/core/types'
 import { AveeVisualizerEngine, AVEE_THEMES, type AveeColorTheme } from '../../features/song-nhac/three/AveeVisualizerEngine'
 import { exportSongNhacFrames } from '../../features/song-nhac/export/exportSongNhacFrames'
+import { FrameEncoder } from '../../features/song-nhac/export/frameEncoder'
 import { LayersPanel } from '../../features/song-nhac/studio/LayersPanel'
 import { InspectorPanel } from '../../features/song-nhac/studio/InspectorPanel'
 import { useSongNhacLayerStore } from '../../features/song-nhac/studio/songNhacLayerStore'
@@ -201,6 +202,17 @@ export default function SongNhacPage() {
   const [exportFps, setExportFps] = useState(30)
   const [rangeStart, setRangeStart] = useState<number | ''>('')
   const [rangeEnd, setRangeEnd] = useState<number | ''>('')
+  const [exportCodec, setExportCodec] = useState<'h264' | 'hevc'>('h264')
+  const [bitrateTier, setBitrateTier] = useState<'high' | 'balanced' | 'light'>('balanced')
+  const [hevcSupported, setHevcSupported] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    FrameEncoder.probe('hevc', 1920, 1080, 30, 6_000_000)
+      .then((supported) => { if (!cancelled) setHevcSupported(supported) })
+      .catch(() => { if (!cancelled) setHevcSupported(false) })
+    return () => { cancelled = true }
+  }, [])
   const [progress, setProgress] = useState<SongNhacExportProgress | null>(null)
   const [message, setMessage] = useState('Chọn audio để bắt đầu.')
 
@@ -518,6 +530,8 @@ export default function SongNhacPage() {
           fps: exportFps,
           rangeStartSec: typeof rangeStart === 'number' ? rangeStart : undefined,
           rangeEndSec: typeof rangeEnd === 'number' ? rangeEnd : undefined,
+          codec: exportCodec,
+          bitrateTier,
           theme,
           intensity,
           quality: 'balanced',
@@ -1029,6 +1043,31 @@ export default function SongNhacPage() {
                 <option value={24}>24</option>
                 <option value={30}>30</option>
                 <option value={60}>60</option>
+              </select>
+            </label>
+            <label style={{ fontSize: 11, color: '#94a3b8' }}>
+              Codec
+              <select
+                value={exportCodec}
+                onChange={(event) => setExportCodec(event.target.value as 'h264' | 'hevc')}
+                style={{ width: '100%', background: '#0f172a', border: '1px solid #334155', borderRadius: 6, color: '#e2e8f0', fontSize: 12, padding: '4px 6px' }}
+              >
+                <option value="h264">H.264 (tương thích)</option>
+                <option value="hevc" disabled={!hevcSupported}>
+                  HEVC {hevcSupported ? '(nhỏ hơn ~35%)' : '(máy không hỗ trợ)'}
+                </option>
+              </select>
+            </label>
+            <label style={{ fontSize: 11, color: '#94a3b8' }}>
+              Chất lượng
+              <select
+                value={bitrateTier}
+                onChange={(event) => setBitrateTier(event.target.value as 'high' | 'balanced' | 'light')}
+                style={{ width: '100%', background: '#0f172a', border: '1px solid #334155', borderRadius: 6, color: '#e2e8f0', fontSize: 12, padding: '4px 6px' }}
+              >
+                <option value="high">Cao (~8 Mbps)</option>
+                <option value="balanced">Cân bằng (~6.4 Mbps)</option>
+                <option value="light">Nhẹ (~4.4 Mbps)</option>
               </select>
             </label>
             <label style={{ fontSize: 11, color: '#94a3b8' }}>

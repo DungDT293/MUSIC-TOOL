@@ -110,7 +110,8 @@ function validateFramesRequest(raw: unknown): SongNhacFramesRequest {
   const durationSec = request.durationSec === undefined ? undefined : Number(request.durationSec)
   if (startSec !== undefined && (!Number.isFinite(startSec) || startSec < 0)) throw new Error('startSec không hợp lệ.')
   if (durationSec !== undefined && (!Number.isFinite(durationSec) || durationSec <= 0)) throw new Error('durationSec không hợp lệ.')
-  return { ...request, requestId: request.requestId.trim(), width, height, fps, totalFrames, startSec, durationSec } as SongNhacFramesRequest
+  const codec = request.codec === 'hevc' ? 'hevc' : 'h264'
+  return { ...request, requestId: request.requestId.trim(), width, height, fps, totalFrames, startSec, durationSec, codec } as SongNhacFramesRequest
 }
 
 function muxFrames(session: FrameSession): Promise<void> {
@@ -119,12 +120,13 @@ function muxFrames(session: FrameSession): Promise<void> {
   const trim = request.startSec && request.startSec > 0 ? ['-ss', String(request.startSec)] : []
   const args = [
     '-hide_banner', '-loglevel', 'error', '-y',
-    '-f', 'h264', '-framerate', String(request.fps), '-i', tempPath,
+    '-f', request.codec === 'hevc' ? 'hevc' : 'h264', '-framerate', String(request.fps), '-i', tempPath,
     ...trim,
     '-i', request.audioPath,
     ...(request.durationSec && request.durationSec > 0 ? ['-t', String(request.durationSec)] : []),
     '-map', '0:v:0', '-map', '1:a:0',
     '-c:v', 'copy',
+    ...(request.codec === 'hevc' ? ['-tag:v', 'hvc1'] : []),
     // Tag the colour space explicitly: WebCodecs writes yuv420p but no colr box, and
     // players then guess (usually bt709, but not always).
     '-color_primaries', 'bt709', '-color_trc', 'bt709', '-colorspace', 'bt709',
@@ -196,7 +198,7 @@ function registerFrameHandlers(): void {
       if (frameSessions.size > 0) throw new Error('Đã có Sóng nhạc export đang chạy.')
       if (fs.existsSync(request.outputPath)) throw new Error('Output đã tồn tại. Chọn file khác để tránh ghi đè.')
 
-      const tempPath = `${request.outputPath}.part-${Date.now()}.h264`
+      const tempPath = `${request.outputPath}.part-${Date.now()}.${request.codec === 'hevc' ? '265' : 'h264'}`
       await fs.promises.mkdir(path.dirname(tempPath), { recursive: true })
       const stream = fs.createWriteStream(tempPath, { flags: 'w' })
       await new Promise<void>((resolve, reject) => {
