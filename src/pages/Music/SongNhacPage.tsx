@@ -63,6 +63,73 @@ export default function SongNhacPage() {
   const [webglFallback, setWebglFallback] = useState(false)
   const layers = useSongNhacLayerStore((state) => state.layers)
   const layersRef = useRef(layers)
+  const dragRef = useRef<null | {
+    startX: number
+    startY: number
+    baseX: number
+    baseY: number
+    baseRotation: number
+    mode: 'move' | 'rotate'
+  }>(null)
+
+  const onCanvasPointerDown = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    const state = useSongNhacLayerStore.getState()
+    const layer = state.layers.find((item) => item.id === state.selectedLayerId)
+    if (!layer || layer.type === 'group' || layer.locked) return
+    event.currentTarget.setPointerCapture(event.pointerId)
+    state.beginHistoryGesture()
+    dragRef.current = {
+      startX: event.clientX,
+      startY: event.clientY,
+      baseX: layer.transform.x,
+      baseY: layer.transform.y,
+      baseRotation: layer.transform.rotation,
+      mode: event.shiftKey ? 'rotate' : 'move',
+    }
+  }
+
+  const onCanvasPointerMove = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    const drag = dragRef.current
+    if (!drag) return
+    const state = useSongNhacLayerStore.getState()
+    const layer = state.layers.find((item) => item.id === state.selectedLayerId)
+    if (!layer || layer.type === 'group') return
+    const rect = event.currentTarget.getBoundingClientRect()
+    const dx = ((event.clientX - drag.startX) / Math.max(1, rect.width)) * 1920
+    const dy = ((event.clientY - drag.startY) / Math.max(1, rect.height)) * 1080
+    if (drag.mode === 'rotate') {
+      state.updateLayer(layer.id, { transform: { ...layer.transform, rotation: drag.baseRotation + dx * 0.4 } })
+    } else {
+      state.updateLayer(layer.id, { transform: { ...layer.transform, x: drag.baseX + dx, y: drag.baseY + dy } })
+    }
+  }
+
+  const onCanvasPointerUp = () => {
+    if (!dragRef.current) return
+    dragRef.current = null
+    useSongNhacLayerStore.getState().endHistoryGesture()
+  }
+
+  const onCanvasWheel = (event: React.WheelEvent<HTMLCanvasElement>) => {
+    const state = useSongNhacLayerStore.getState()
+    const layer = state.layers.find((item) => item.id === state.selectedLayerId)
+    if (!layer || layer.type === 'group' || layer.locked) return
+    event.preventDefault()
+    const factor = event.deltaY < 0 ? 1.05 : 0.95
+    state.updateLayerWithHistory(layer.id, {
+      transform: {
+        ...layer.transform,
+        scaleX: Math.max(0.05, layer.transform.scaleX * factor),
+        scaleY: Math.max(0.05, layer.transform.scaleY * factor),
+      },
+    })
+  }
+
+  const onCanvasDoubleClick = () => {
+    const state = useSongNhacLayerStore.getState()
+    const layer = state.layers.find((item) => item.id === state.selectedLayerId)
+    if (layer?.type === 'text') state.setFocusContentInputId(layer.id)
+  }
   const [isExporting, setIsExporting] = useState(false)
   const [progress, setProgress] = useState<SongNhacExportProgress | null>(null)
   const [message, setMessage] = useState('Chọn audio để bắt đầu.')
@@ -300,6 +367,54 @@ export default function SongNhacPage() {
     aveeEngineRef.current?.setLayers(layers)
   }, [layers, webglFallback])
 
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null
+      if (
+        target &&
+        (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable)
+      ) {
+        return
+      }
+      const state = useSongNhacLayerStore.getState()
+      const modifier = event.ctrlKey || event.metaKey
+      const key = event.key.toLowerCase()
+      if (modifier && key === 'z') {
+        event.preventDefault()
+        if (event.shiftKey) state.redo()
+        else state.undo()
+        return
+      }
+      if (modifier && key === 'y') {
+        event.preventDefault()
+        state.redo()
+        return
+      }
+      if (modifier && key === 'c') {
+        state.copySelectedLayers()
+        return
+      }
+      if (modifier && key === 'v') {
+        state.pasteLayers()
+        return
+      }
+      if (modifier && key === 'd') {
+        event.preventDefault()
+        state.duplicateSelectedLayers()
+        return
+      }
+      if (event.key === 'Delete' || event.key === 'Backspace') {
+        state.removeSelectedLayers()
+        return
+      }
+      if (event.key === 'Escape') {
+        state.setSelection(null)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
+
   const startExport = async () => {
     if (!audioPath || !outputPath || isExporting) return
     const requestId = crypto.randomUUID()
@@ -398,6 +513,12 @@ export default function SongNhacPage() {
             ref={canvasRef}
             width={1600}
             height={900}
+            onPointerDown={onCanvasPointerDown}
+            onPointerMove={onCanvasPointerMove}
+            onPointerUp={onCanvasPointerUp}
+            onPointerCancel={onCanvasPointerUp}
+            onWheel={onCanvasWheel}
+            onDoubleClick={onCanvasDoubleClick}
             style={{
               display: 'block',
               width: '100%',
@@ -445,6 +566,38 @@ export default function SongNhacPage() {
               }}
             >
               {isPlaying ? 'Tạm dừng preview' : 'Phát preview'}
+            </button>
+            <button
+              type="button"
+              onClick={() => useSongNhacLayerStore.getState().undo()}
+              style={{
+                padding: '9px 14px',
+                background: '#1e293b',
+                border: '1px solid #334155',
+                borderRadius: 6,
+                color: '#e2e8f0',
+                fontWeight: 600,
+                fontSize: 13,
+                cursor: 'pointer',
+              }}
+            >
+              Hoàn tác
+            </button>
+            <button
+              type="button"
+              onClick={() => useSongNhacLayerStore.getState().redo()}
+              style={{
+                padding: '9px 14px',
+                background: '#1e293b',
+                border: '1px solid #334155',
+                borderRadius: 6,
+                color: '#e2e8f0',
+                fontWeight: 600,
+                fontSize: 13,
+                cursor: 'pointer',
+              }}
+            >
+              Làm lại
             </button>
           </div>
         </div>
