@@ -1,0 +1,101 @@
+import type { AveeColorTheme, AveeQuality } from '../three/AveeVisualizerEngine'
+import { AveeVisualizerEngine } from '../three/AveeVisualizerEngine'
+import { analyzeAudioBuffer } from './spectrumAnalyzer'
+import { renderSongNhacVideo, suggestBitrate } from './renderSongNhacVideo'
+import type { SongNhacFramesResult } from '../../../../shared/songNhacChannels'
+
+export interface ExportSongNhacFramesOptions {
+  audioPath: string
+  outputPath: string
+  width: number
+  height: number
+  fps: number
+  theme: AveeColorTheme
+  intensity: number
+  quality: AveeQuality
+  seed?: number
+  onProgress?: (percent: number) => void
+}
+
+function decodeBase64(base64: string): ArrayBuffer {
+  const binary = atob(base64)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i)
+  return bytes.buffer
+}
+
+/**
+ * Frame-accurate Sóng nhạc export: decode the audio once, pre-compute the spectrum
+ * for every frame, render those exact frames with the Three.js engine and stream the
+ * encoded H.264 to the main process for muxing. What the preview shows is what ships.
+ */
+export async function exportSongNhacFrames(options: ExportSongNhacFramesOptions): Promise<SongNhacFramesResult> {
+  const requestId = `songnhac-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+  const api = window.api.songNhac
+
+  try {
+    const audioBase64 = await window.api.system.readFileAsBase64(options.audioPath)
+    const audioBytes = decodeBase64(audioBase64)
+    const analysisContext = new OfflineAudioContext(1, 1, 48000)
+    const audioBuffer = await analysisContext.decodeAudioData(audioBytes.slice(0))
+
+    const frames = analyzeAudioBuffer(audioBuffer, { fps: options.fps })
+    if (!frames.length) throw new Error('Không đọc được dữ liệu âm thanh.')
+
+    const begin = await api.framesBegin({
+      requestId,
+      audioPath: options.audioPath,
+      outputPath: options.outputPath,
+      width: options.width,
+      height: options.height,
+      fps: options.fps,
+      totalFrames: frames.length,
+    })
+    if (!begin.success) return begin
+
+    const canvas = document.createElement('canvas')
+    canvas.width = options.width
+    canvas.height = options.height
+    const engine = new AveeVisualizerEngine(canvas, {
+      theme: options.theme,
+      intensity: options.intensity,
+      quality: options.quality,
+      seed: options.seed ?? 93,
+    })
+
+    const queue: Uint8Array[] = []
+    const flushQueue = async () => {
+      if (!queue.length) return
+      const pending = queue.splice(0, queue.length)
+      for (const chunk of pending) api.framesChunk(requestId, chunk)
+      await api.framesFlush(requestId)
+    }
+
+    try {
+      await renderSongNhacVideo({
+        canvas,
+        engine,
+        frames,
+        fps: options.fps,
+        bitrate: suggestBitrate(options.width, options.height, options.fps),
+        onChunk: (chunk) => queue.push(chunk),
+        onProgress: async (rendered, total) => {
+          await flushQueue()
+          options.onProgress?.(Math.min(99, Math.round((rendered / total) * 100)))
+        },
+      })
+      await flushQueue()
+    } finally {
+      engine.dispose()
+    }
+
+    return await api.framesEnd(requestId)
+  } catch (error) {
+    await api.framesCancel(requestId).catch(() => undefined)
+    return {
+      success: false,
+      requestId,
+      error: error instanceof Error ? error.message : String(error),
+    }
+  }
+}

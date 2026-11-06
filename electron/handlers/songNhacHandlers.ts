@@ -1,18 +1,37 @@
 import { ipcMain, type BrowserWindow } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
+import { spawn } from 'node:child_process'
 import { isValidAbsolutePath } from '../authState'
+import { getFfmpegPaths } from '../../backend/ffmpeg/config'
 import { createSongNhacFfmpegPipe } from '../../backend/video/songNhacFfmpegPipe'
 import {
   SONG_NHAC_EXPORT_CANCEL,
   SONG_NHAC_EXPORT_PROGRESS,
   SONG_NHAC_EXPORT_START,
+  SONG_NHAC_FRAMES_BEGIN,
+  SONG_NHAC_FRAMES_CANCEL,
+  SONG_NHAC_FRAMES_CHUNK,
+  SONG_NHAC_FRAMES_END,
+  SONG_NHAC_FRAMES_FLUSH,
   type SongNhacExportProgress,
   type SongNhacExportRequest,
   type SongNhacExportResult,
+  type SongNhacFramesRequest,
+  type SongNhacFramesResult,
 } from '../../shared/songNhacChannels'
 
 const activeExports = new Map<string, { cancel: () => void }>()
+
+interface FrameSession {
+  request: SongNhacFramesRequest
+  stream: fs.WriteStream
+  tempPath: string
+  receivedBytes: number
+  cancelled: boolean
+}
+
+const frameSessions = new Map<string, FrameSession>()
 
 function validateRequest(raw: unknown): SongNhacExportRequest {
   if (!raw || typeof raw !== 'object') throw new Error('Song Nhạc payload không hợp lệ.')
@@ -21,11 +40,14 @@ function validateRequest(raw: unknown): SongNhacExportRequest {
   if (!isValidAbsolutePath(request.audioPath) || !fs.existsSync(request.audioPath)) throw new Error('Audio path không hợp lệ hoặc không tồn tại.')
   if (!isValidAbsolutePath(request.outputPath)) throw new Error('Output path không hợp lệ.')
   if (path.extname(request.outputPath).toLowerCase() !== '.mp4') throw new Error('Output phải có đuôi .mp4.')
-  if (!['neon-tunnel', 'orbit-spectrum', 'pulse-grid'].includes(request.style || '')) throw new Error('Style Song Nhạc không hợp lệ.')
-  if (!Number.isInteger(request.width) || request.width < 320 || request.width > 3840) throw new Error('Width Song Nhạc không hợp lệ.')
-  if (!Number.isInteger(request.height) || request.height < 180 || request.height > 2160) throw new Error('Height Song Nhạc không hợp lệ.')
-  if (!Number.isInteger(request.fps) || request.fps < 12 || request.fps > 60) throw new Error('FPS Song Nhạc không hợp lệ.')
-  return { ...request, requestId: request.requestId.trim() } as SongNhacExportRequest
+  if (!['avee-circle', 'neon-tunnel', 'orbit-spectrum', 'pulse-grid'].includes(request.style || '')) throw new Error('Style Song Nhạc không hợp lệ.')
+  const width = Number(request.width)
+  const height = Number(request.height)
+  const fps = Number(request.fps)
+  if (!Number.isInteger(width) || width < 320 || width > 3840) throw new Error('Width Song Nhạc không hợp lệ.')
+  if (!Number.isInteger(height) || height < 180 || height > 2160) throw new Error('Height Song Nhạc không hợp lệ.')
+  if (!Number.isInteger(fps) || fps < 12 || fps > 60) throw new Error('FPS Song Nhạc không hợp lệ.')
+  return { ...request, requestId: request.requestId.trim(), width, height, fps } as SongNhacExportRequest
 }
 
 export function registerSongNhacHandlers(_getMainWindow: () => BrowserWindow | null): void {
@@ -61,4 +83,138 @@ export function registerSongNhacHandlers(_getMainWindow: () => BrowserWindow | n
     return { success: true }
   })
 
+  registerFrameHandlers()
+}
+
+// ── Frame-accurate export ──────────────────────────────────────────────────────
+// The renderer renders and encodes every frame (WebCodecs H.264, Annex-B) and
+// streams the chunks here. Main only appends bytes and muxes with the audio, so
+// the exported file is exactly the preview timeline.
+
+function validateFramesRequest(raw: unknown): SongNhacFramesRequest {
+  if (!raw || typeof raw !== 'object') throw new Error('Payload Song Nhạc không hợp lệ.')
+  const request = raw as Partial<SongNhacFramesRequest>
+  if (typeof request.requestId !== 'string' || !request.requestId.trim()) throw new Error('requestId không hợp lệ.')
+  if (!isValidAbsolutePath(request.audioPath) || !fs.existsSync(request.audioPath)) throw new Error('Audio path không hợp lệ hoặc không tồn tại.')
+  if (!isValidAbsolutePath(request.outputPath)) throw new Error('Output path không hợp lệ.')
+  if (path.extname(request.outputPath).toLowerCase() !== '.mp4') throw new Error('Output phải có đuôi .mp4.')
+  const width = Number(request.width)
+  const height = Number(request.height)
+  const fps = Number(request.fps)
+  const totalFrames = Number(request.totalFrames)
+  if (!Number.isInteger(width) || width < 320 || width > 3840) throw new Error('Width không hợp lệ.')
+  if (!Number.isInteger(height) || height < 180 || height > 2160) throw new Error('Height không hợp lệ.')
+  if (!Number.isInteger(fps) || fps < 12 || fps > 60) throw new Error('FPS không hợp lệ.')
+  if (!Number.isInteger(totalFrames) || totalFrames < 1) throw new Error('totalFrames không hợp lệ.')
+  return { ...request, requestId: request.requestId.trim(), width, height, fps, totalFrames } as SongNhacFramesRequest
+}
+
+function muxFrames(session: FrameSession): Promise<void> {
+  const { request, tempPath } = session
+  const { ffmpeg } = getFfmpegPaths()
+  const args = [
+    '-hide_banner', '-loglevel', 'error', '-y',
+    '-f', 'h264', '-framerate', String(request.fps), '-i', tempPath,
+    '-i', request.audioPath,
+    '-map', '0:v:0', '-map', '1:a:0',
+    '-c:v', 'copy',
+    '-c:a', 'aac', '-b:a', '192k', '-ar', '48000',
+    '-shortest',
+    '-movflags', '+faststart',
+    request.outputPath,
+  ]
+  return new Promise<void>((resolve, reject) => {
+    const child = spawn(ffmpeg, args, { windowsHide: true })
+    let stderr = ''
+    child.stderr.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString('utf8')
+    })
+    child.once('error', reject)
+    child.once('close', (code) => {
+      if (session.cancelled) return reject(new Error('Đã hủy xuất video.'))
+      if (code === 0) resolve()
+      else reject(new Error(stderr.trim().slice(-800) || `FFmpeg mux lỗi (code ${code}).`))
+    })
+  })
+}
+
+function cleanupSession(requestId: string): void {
+  const session = frameSessions.get(requestId)
+  if (!session) return
+  frameSessions.delete(requestId)
+  try {
+    session.stream.close()
+  } catch {
+    // already closed
+  }
+  fs.promises.unlink(session.tempPath).catch(() => {})
+}
+
+function registerFrameHandlers(): void {
+  ipcMain.handle(SONG_NHAC_FRAMES_BEGIN, async (_event, raw: unknown): Promise<SongNhacFramesResult> => {
+    let requestId = ''
+    try {
+      const request = validateFramesRequest(raw)
+      requestId = request.requestId
+      if (frameSessions.size > 0) throw new Error('Đã có Sóng nhạc export đang chạy.')
+      if (fs.existsSync(request.outputPath)) throw new Error('Output đã tồn tại. Chọn file khác để tránh ghi đè.')
+
+      const tempPath = `${request.outputPath}.part-${Date.now()}.h264`
+      await fs.promises.mkdir(path.dirname(tempPath), { recursive: true })
+      const stream = fs.createWriteStream(tempPath, { flags: 'w' })
+      await new Promise<void>((resolve, reject) => {
+        stream.once('open', () => resolve())
+        stream.once('error', reject)
+      })
+      frameSessions.set(requestId, { request, stream, tempPath, receivedBytes: 0, cancelled: false })
+      return { success: true, requestId }
+    } catch (error) {
+      return { success: false, requestId, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
+
+  ipcMain.on(SONG_NHAC_FRAMES_CHUNK, (_event, requestId: unknown, chunk: unknown) => {
+    const session = typeof requestId === 'string' ? frameSessions.get(requestId) : undefined
+    if (!session || session.cancelled) return
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as ArrayBuffer)
+    if (!buffer.length) return
+    session.receivedBytes += buffer.length
+    session.stream.write(buffer)
+  })
+
+  ipcMain.handle(SONG_NHAC_FRAMES_FLUSH, async (_event, requestId: unknown) => {
+    const session = typeof requestId === 'string' ? frameSessions.get(requestId) : undefined
+    if (!session) return { success: false }
+    // Resolves once the write buffer has drained — this is the backpressure gate the
+    // renderer awaits every few dozen chunks.
+    if (session.stream.writableNeedDrain) {
+      await new Promise<void>((resolve) => session.stream.once('drain', () => resolve()))
+    }
+    return { success: true, receivedBytes: session.receivedBytes }
+  })
+
+  ipcMain.handle(SONG_NHAC_FRAMES_END, async (_event, requestId: unknown): Promise<SongNhacFramesResult> => {
+    const id = typeof requestId === 'string' ? requestId : ''
+    const session = frameSessions.get(id)
+    if (!session) return { success: false, requestId: id, error: 'Không tìm thấy phiên xuất video.' }
+    try {
+      await new Promise<void>((resolve) => session.stream.end(resolve))
+      if (session.receivedBytes === 0) throw new Error('Không nhận được frame nào từ renderer.')
+      await muxFrames(session)
+      return { success: true, requestId: id, outputPath: session.request.outputPath }
+    } catch (error) {
+      return { success: false, requestId: id, error: error instanceof Error ? error.message : String(error) }
+    } finally {
+      cleanupSession(id)
+    }
+  })
+
+  ipcMain.handle(SONG_NHAC_FRAMES_CANCEL, async (_event, requestId: unknown) => {
+    const id = typeof requestId === 'string' ? requestId : ''
+    const session = frameSessions.get(id)
+    if (!session) return { success: false }
+    session.cancelled = true
+    cleanupSession(id)
+    return { success: true }
+  })
 }

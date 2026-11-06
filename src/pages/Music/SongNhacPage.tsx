@@ -3,6 +3,7 @@ import { audioFrameFromAnalyser, emptyAudioFrame } from '../../features/song-nha
 import { renderSongNhacFrame } from '../../features/song-nhac/core/renderSongNhacFrame'
 import { SONG_NHAC_STYLES, clampRenderConfig, type SongNhacStyle } from '../../features/song-nhac/core/types'
 import { AveeVisualizerEngine, AVEE_THEMES, type AveeColorTheme } from '../../features/song-nhac/three/AveeVisualizerEngine'
+import { exportSongNhacFrames } from '../../features/song-nhac/export/exportSongNhacFrames'
 import type { SongNhacExportProgress } from '../../../shared/songNhacChannels'
 
 function localFileUrl(filePath: string): string {
@@ -243,15 +244,34 @@ export default function SongNhacPage() {
     setIsExporting(true)
     setMessage('Đang xuất MP4…')
     try {
-      const result = await window.api.songNhac.start({
-        requestId,
-        audioPath,
-        outputPath,
-        style,
-        width: 1920,
-        height: 1080,
-        fps: 30,
-      })
+      // avee-circle renders through the Three.js engine frame by frame, so the exported
+      // file matches the preview. The remaining styles still use the FFmpeg filter path.
+      const result = style === 'avee-circle'
+        ? await exportSongNhacFrames({
+            audioPath,
+            outputPath,
+            width: 1920,
+            height: 1080,
+            fps: 30,
+            theme,
+            intensity,
+            quality: 'balanced',
+            onProgress: (percent) => setProgress({
+              requestId,
+              percent,
+              timeSec: 0,
+              totalSec: 0,
+            }),
+          })
+        : await window.api.songNhac.start({
+            requestId,
+            audioPath,
+            outputPath,
+            style,
+            width: 1920,
+            height: 1080,
+            fps: 30,
+          })
       setMessage(result.success ? `Xuất xong: ${result.outputPath}` : result.error || 'Xuất Song Nhạc thất bại.')
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error))

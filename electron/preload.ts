@@ -35,9 +35,16 @@ import {
   SONG_NHAC_EXPORT_CANCEL,
   SONG_NHAC_EXPORT_PROGRESS,
   SONG_NHAC_EXPORT_START,
+  SONG_NHAC_FRAMES_BEGIN,
+  SONG_NHAC_FRAMES_CANCEL,
+  SONG_NHAC_FRAMES_CHUNK,
+  SONG_NHAC_FRAMES_END,
+  SONG_NHAC_FRAMES_FLUSH,
   type SongNhacExportProgress,
   type SongNhacExportRequest,
   type SongNhacExportResult,
+  type SongNhacFramesRequest,
+  type SongNhacFramesResult,
 } from '../shared/songNhacChannels'
 
 const api: IPCAPI = {
@@ -414,6 +421,17 @@ const api: IPCAPI = {
   songNhac: {
     start: (request: SongNhacExportRequest) => ipcRenderer.invoke(SONG_NHAC_EXPORT_START, request) as Promise<SongNhacExportResult>,
     cancel: (requestId: string) => ipcRenderer.invoke(SONG_NHAC_EXPORT_CANCEL, requestId) as Promise<{ success: boolean; error?: string }>,
+    framesBegin: (request: SongNhacFramesRequest) =>
+      ipcRenderer.invoke(SONG_NHAC_FRAMES_BEGIN, request) as Promise<SongNhacFramesResult>,
+    framesChunk: (requestId: string, chunk: ArrayBuffer) => {
+      ipcRenderer.send(SONG_NHAC_FRAMES_CHUNK, requestId, chunk)
+    },
+    framesFlush: (requestId: string) =>
+      ipcRenderer.invoke(SONG_NHAC_FRAMES_FLUSH, requestId) as Promise<{ success: boolean; receivedBytes?: number }>,
+    framesEnd: (requestId: string) =>
+      ipcRenderer.invoke(SONG_NHAC_FRAMES_END, requestId) as Promise<SongNhacFramesResult>,
+    framesCancel: (requestId: string) =>
+      ipcRenderer.invoke(SONG_NHAC_FRAMES_CANCEL, requestId) as Promise<{ success: boolean }>,
     onProgress: (handler: (progress: SongNhacExportProgress) => void) => {
       const listener = (_event: IpcRendererEvent, progress: SongNhacExportProgress) => handler(progress)
       ipcRenderer.on(SONG_NHAC_EXPORT_PROGRESS, listener)

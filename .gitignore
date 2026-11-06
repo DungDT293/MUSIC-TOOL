@@ -79,3 +79,4 @@ security/dev_private_key.pem
 # Viz preview harness output
 scripts/viz-harness/bundle.js
 scripts/viz-harness/*.png
+scripts/viz-harness/export-bundle.js
