@@ -12,6 +12,7 @@ import { useSongNhacLayerStore } from '../../features/song-nhac/studio/songNhacL
 import { WAVE_PRESETS } from '../../features/song-nhac/studio/builtInPresets'
 import { useCompositionEffects } from '../../features/song-nhac/studio/effectsStore'
 import { parseLyrics } from '../../features/song-nhac/studio/lyrics'
+import { TimelineClipMenu, type ClipMenuState } from '../../features/song-nhac/studio/TimelineClipMenu'
 import { useMediaLibrary, type MediaKind } from '../../features/song-nhac/studio/mediaLibraryStore'
 import { useExportQueue, type ExportJob } from '../../features/song-nhac/studio/exportQueueStore'
 import { useProjectHistory } from '../../features/song-nhac/studio/projectHistoryStore'
@@ -294,6 +295,8 @@ export default function SongNhacPage() {
   const selectedIds = useSongNhacLayerStore((state) => state.selectedIds)
   const queueJobs = useExportQueue((state) => state.jobs)
   const projectHistory = useProjectHistory()
+  const [clipMenu, setClipMenu] = useState<ClipMenuState | null>(null)
+  const [snapEnabled, setSnapEnabled] = useState(true)
   const [presetThumbs, setPresetThumbs] = useState<Record<string, string>>({})
   const [snapGuide, setSnapGuide] = useState<number | null>(null)
   const [lyricsText, setLyricsText] = useState('')
@@ -656,7 +659,7 @@ export default function SongNhacPage() {
         targets.push(0, total)
       }
     }
-    const tolerance = 8 * secPerPx
+    const tolerance = snapEnabled ? 8 * secPerPx : 0
     store.beginHistoryGesture()
     const onMove = (moveEvent: PointerEvent) => {
       const delta = (moveEvent.clientX - startX) * secPerPx
@@ -2593,12 +2596,19 @@ export default function SongNhacPage() {
                 >
                   <div
                     onPointerDown={(event) => {
+                      // Right-click must reach onContextMenu instead of starting a drag.
+                      if (event.button !== 0) return
                       const store = useSongNhacLayerStore.getState()
                       const already = store.selectedIds.includes(layer.id)
                       if (!already) {
                         store.setSelection(layer.id, { ctrlKey: event.ctrlKey || event.metaKey, shiftKey: event.shiftKey })
                       }
                       beginClipDrag(event, layer, 'move')
+                    }}
+                    onContextMenu={(event) => {
+                      event.preventDefault()
+                      useSongNhacLayerStore.getState().setSelection(layer.id)
+                      setClipMenu({ x: event.clientX, y: event.clientY, layerId: layer.id })
                     }}
                     title={`${formatClock(start)} → ${formatClock(end)} (kéo để dời, kéo mép để đổi độ dài)`}
                     style={{
@@ -2664,6 +2674,16 @@ export default function SongNhacPage() {
           })}
         </div>
         </div>
+        {clipMenu && (
+          <TimelineClipMenu
+            menu={clipMenu}
+            playhead={playhead}
+            duration={audioDuration}
+            snapEnabled={snapEnabled}
+            onClose={() => setClipMenu(null)}
+            onToggleSnap={() => setSnapEnabled((value) => !value)}
+          />
+        )}
       </div>
     </section>
   )
