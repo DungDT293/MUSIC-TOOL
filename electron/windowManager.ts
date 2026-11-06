@@ -341,6 +341,9 @@ export function createWindow() {
   if (process.env.ELECTRON_RENDERER_URL) {
     console.log('[Window] Loading dev URL:', process.env.ELECTRON_RENDERER_URL)
     mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL).catch((err) => {
+      // The renderer reloads itself once on startup (WebCodecs probe) and HMR does the
+      // same, which rejects this promise with ERR_ABORTED even though the page loads.
+      if (String(err?.message ?? err).includes('ERR_ABORTED')) return
       console.error('[Window] Failed to load dev URL:', err)
       showLoadErrorDialog(
         mainWindow,

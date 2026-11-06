@@ -12,13 +12,22 @@ if (typeof window !== 'undefined' && !window.api) {
 // Electron's very first renderer in a fresh window can come up without WebCodecs
 // (VideoEncoder/VideoDecoder undefined while VideoFrame exists); one reload restores
 // them. Guarded by sessionStorage so an unsupported machine reloads at most once.
+// The reload is deferred until after `load`: reloading mid-navigation rejects the
+// loadURL promise in the main process with ERR_ABORTED and used to pop the boot-error
+// dialog on top of a perfectly healthy app.
 if (typeof window !== 'undefined') {
   const RELOAD_KEY = 'app.webcodecsReload'
   if (typeof (window as unknown as { VideoEncoder?: unknown }).VideoEncoder === 'undefined') {
-    if (!sessionStorage.getItem(RELOAD_KEY)) {
-      sessionStorage.setItem(RELOAD_KEY, String(Date.now()))
-      window.location.reload()
+    const maybeReload = () => {
+      window.setTimeout(() => {
+        if (typeof (window as unknown as { VideoEncoder?: unknown }).VideoEncoder !== 'undefined') return
+        if (sessionStorage.getItem(RELOAD_KEY)) return
+        sessionStorage.setItem(RELOAD_KEY, String(Date.now()))
+        window.location.reload()
+      }, 600)
     }
+    if (document.readyState === 'complete') maybeReload()
+    else window.addEventListener('load', maybeReload, { once: true })
   } else {
     sessionStorage.removeItem(RELOAD_KEY)
   }
