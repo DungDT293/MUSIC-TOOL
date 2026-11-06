@@ -60,6 +60,8 @@ export async function renderSongNhacVideo(options: RenderVideoOptions): Promise<
 /** Rough bitrate that keeps a 1080p music visual sharp without wasting disk. */
 export function suggestBitrate(width: number, height: number, fps: number): number {
   const pixels = width * height
-  const base = pixels >= 2560 * 1440 ? 24_000_000 : pixels >= 1920 * 1080 ? 14_000_000 : 8_000_000
+  // Music visuals are mostly dark gradients, so 10 Mbps at 1080p is already generous;
+  // a 14 Mbps default turned a one-hour mix into a 6 GB upload.
+  const base = pixels >= 2560 * 1440 ? 18_000_000 : pixels >= 1920 * 1080 ? 10_000_000 : 6_000_000
   return Math.round(base * Math.min(1.5, Math.max(0.6, fps / 30)))
 }
