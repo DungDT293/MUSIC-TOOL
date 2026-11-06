@@ -341,19 +341,31 @@ export class MirrorStyle implements WaveStyleObject {
 }
 export type WaveStyleId = 'circlebars' | 'bars' | 'dots' | 'waveform' | 'tunnel' | 'orbit' | 'pulse' | 'mirror'
 
-export function isFxStyle(style: string): style is 'waveform' | 'tunnel' | 'orbit' | 'pulse' | 'mirror' {
-  return style === 'waveform' || style === 'tunnel' || style === 'orbit' || style === 'pulse' || style === 'mirror'
+export function isFxStyle(style: string): style is 'waveform' | 'tunnel' | 'orbit' | 'pulse' | 'mirror' | 'line' | 'ring' | 'particles' {
+  return (
+    style === 'waveform' ||
+    style === 'tunnel' ||
+    style === 'orbit' ||
+    style === 'pulse' ||
+    style === 'mirror' ||
+    style === 'line' ||
+    style === 'ring' ||
+    style === 'particles'
+  )
 }
 
-export function createFxStyle(style: 'waveform' | 'tunnel' | 'orbit' | 'pulse' | 'mirror', colorA: number, colorB: number): WaveStyleObject {
+export function createFxStyle(style: 'waveform' | 'tunnel' | 'orbit' | 'pulse' | 'mirror' | 'line' | 'ring' | 'particles', colorA: number, colorB: number): WaveStyleObject {
   switch (style) {
     case 'waveform':
+    case 'line':
       return new WaveformStyle(160, colorA, colorB)
     case 'tunnel':
       return new TunnelStyle(colorA, colorB)
     case 'orbit':
+    case 'particles':
       return new OrbitStyle(colorA, colorB)
     case 'pulse':
+    case 'ring':
       return new PulseStyle(colorA, colorB)
     case 'mirror':
     default:
