@@ -928,6 +928,54 @@ export function InspectorPanel() {
               onChange={(fadeOutSec) => updateLayer(layer.id, { fadeOutSec })}
               onCommit={commit}
             />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={labelStyle}>Kiểu bay</span>
+              {(['drift', 'swirl', 'explode'] as const).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => updateLayerWithHistory(layer.id, { behaviour: mode })}
+                  style={{
+                    ...miniButtonStyle,
+                    flex: 1,
+                    color: layer.behaviour === mode ? '#67e8f9' : '#94a3b8',
+                    borderColor: layer.behaviour === mode ? '#0ea5e9' : '#334155',
+                  }}
+                >
+                  {mode === 'drift' ? 'Trôi' : mode === 'swirl' ? 'Xoáy' : 'Toả'}
+                </button>
+              ))}
+            </div>
+            <SliderRow
+              label="Ngẫu nhiên"
+              value={layer.randomness}
+              min={0}
+              max={1}
+              step={0.01}
+              format={(value) => `${Math.round(value * 100)}%`}
+              onChange={(randomness) => updateLayer(layer.id, { randomness })}
+              onCommit={commit}
+            />
+            <SliderRow
+              label="Giới hạn trước"
+              value={layer.frontLimit}
+              min={0}
+              max={1}
+              step={0.01}
+              format={(value) => `${Math.round(value * 100)}%`}
+              onChange={(frontLimit) => updateLayer(layer.id, { frontLimit })}
+              onCommit={commit}
+            />
+            <SliderRow
+              label="Giới hạn sau"
+              value={layer.backLimit}
+              min={0}
+              max={1}
+              step={0.01}
+              format={(value) => `${Math.round(value * 100)}%`}
+              onChange={(backLimit) => updateLayer(layer.id, { backLimit })}
+              onCommit={commit}
+            />
             <CheckRow
               label="Cỡ cố định"
               checked={layer.constantSize}

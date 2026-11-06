@@ -474,6 +474,13 @@ export interface ParticlesLayer extends StudioLayerBase {
   originY: number
   /** When true every particle keeps its size instead of growing on the beat. */
   constantSize: boolean
+  /** Motion pattern: drift upwards, swirl around the origin or burst outwards. */
+  behaviour: 'drift' | 'swirl' | 'explode'
+  /** 0..1 — how differently each particle moves (0 = identical). */
+  randomness: number
+  /** Depth spread towards the camera / away from it, 0..1. */
+  frontLimit: number
+  backLimit: number
   /** Seconds of fade at the start / end of the clip. */
   fadeInSec: number
   fadeOutSec: number
@@ -496,6 +503,10 @@ export function createParticlesLayer(name = 'Hạt'): ParticlesLayer {
     speed: 0.35,
     spread: 5.2,
     gravity: 0.02,
+    behaviour: 'drift',
+    randomness: 0.35,
+    frontLimit: 0.5,
+    backLimit: 0.5,
     originX: 0.5,
     originY: 0.5,
     constantSize: false,

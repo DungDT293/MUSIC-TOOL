@@ -1704,12 +1704,42 @@ export class AveeVisualizerEngine {
         const position = geometry.getAttribute('position') as THREE.BufferAttribute
         const data = position.array as Float32Array
         const drift = live.speed * dt
+        const behaviour = live.behaviour || 'drift'
+        const randomness = Math.max(0, Math.min(1, live.randomness ?? 0))
+        const zFront = 0.2 + (live.frontLimit ?? 0.5) * 1.6
+        const zBack = -0.2 - (live.backLimit ?? 0.5) * 1.6
         for (let i = 0; i < amount; i += 1) {
+          const xIndex = i * 3
           const yIndex = i * 3 + 1
-          data[yIndex] -= drift + live.gravity * dt
-          data[i * 3] += Math.sin(seeds[i] + this.lastTimeSec * 0.8) * 0.0025
+          const zIndex = i * 3 + 2
+          const speedScale = 1 + (seeds[i] % 1) * randomness * 2
+          if (behaviour === 'swirl') {
+            // Tangential motion around the origin keeps the cloud rotating.
+            const angle = 0.6 * dt * speedScale
+            const cos = Math.cos(angle)
+            const sin = Math.sin(angle)
+            const x = data[xIndex]
+            const y = data[yIndex]
+            data[xIndex] = x * cos - y * sin
+            data[yIndex] = x * sin + y * cos - live.gravity * dt
+          } else if (behaviour === 'explode') {
+            // Radial burst from the emission centre, slowing with distance.
+            const x = data[xIndex]
+            const y = data[yIndex]
+            const length = Math.max(0.05, Math.hypot(x, y))
+            const push = (drift + live.gravity * dt) * speedScale
+            data[xIndex] = x + (x / length) * push
+            data[yIndex] = y + (y / length) * push
+          } else {
+            data[yIndex] -= drift * speedScale + live.gravity * dt
+            data[xIndex] += Math.sin(seeds[i] + this.lastTimeSec * 0.8) * 0.0025 * (1 + randomness)
+          }
           if (data[yIndex] < -1.9) data[yIndex] = 1.9
           if (data[yIndex] > 1.9) data[yIndex] = -1.9
+          if (data[xIndex] > 2.6) data[xIndex] = -2.6
+          if (data[xIndex] < -2.6) data[xIndex] = 2.6
+          if (data[zIndex] > zFront) data[zIndex] = zBack
+          if (data[zIndex] < zBack) data[zIndex] = zFront
         }
         position.needsUpdate = true
         material.uniforms.uMirror.value = live.mirror ? 1 : 0
