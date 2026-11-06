@@ -17,6 +17,7 @@ interface HarnessOptions {
   seed?: number
   simulateLogo?: boolean
   withLayers?: boolean
+  waveStyle?: string
   showParticles?: boolean
   showBars?: boolean
   showLogo?: boolean
@@ -72,11 +73,13 @@ function syntheticSpectrum(bins: number, time: number): Uint8Array {
 
   const bins = options.bins ?? 128
   if (options.withLayers) {
-    engine.setLayers([
-      createImageLayer(makeBrightLogoDataUrl(), 'Ảnh nền'),
-      createVisualizerLayer(),
-      createTextLayer('Tên bài hát'),
-    ])
+    const imageLayer = createImageLayer(makeBrightLogoDataUrl(), 'Anh nen')
+    imageLayer.fitMode = 'cover'
+    const vizLayer = createVisualizerLayer()
+    vizLayer.waveStyle = options.waveStyle ?? 'circlebars'
+    const textLayer = createTextLayer('Ten bai hat')
+    engine.setLayers([imageLayer, vizLayer, textLayer])
+    engine.setSelectedLayer(textLayer.id)
   }
   const spectrum = syntheticSpectrum(bins, options.time ?? 3.2)
   const frame = {
@@ -93,10 +96,13 @@ function syntheticSpectrum(bins: number, time: number): Uint8Array {
   engine.render({ ...frame, timeSec: (options.time ?? 3.2) - 0.05 })
   engine.render(frame)
   if (options.withLayers) {
-    // Image layers resolve asynchronously; give them a beat and draw again so the
-    // screenshot shows the composited result.
-    await new Promise((resolve) => setTimeout(resolve, 350))
-    engine.render(frame)
+    const imageLayer = createImageLayer(makeBrightLogoDataUrl(), 'Anh nen')
+    imageLayer.fitMode = 'cover'
+    const vizLayer = createVisualizerLayer()
+    vizLayer.waveStyle = options.waveStyle ?? 'circlebars'
+    const textLayer = createTextLayer('Ten bai hat')
+    engine.setLayers([imageLayer, vizLayer, textLayer])
+    engine.setSelectedLayer(textLayer.id)
   }
   ;(window as unknown as Record<string, unknown>).__layerDebug = engine.debugLayers()
   if (options.themeAfter) {

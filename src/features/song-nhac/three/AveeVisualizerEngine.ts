@@ -660,6 +660,15 @@ export class AveeVisualizerEngine {
   }
 
   private updateBars(frame: SongNhacAudioFrame): void {
+    const style = this.currentVisualizerLayer?.type === 'visualizer' ? this.currentVisualizerLayer.waveStyle : 'circlebars'
+    if (style === 'bars') {
+      this.updateBottomBars(frame)
+      return
+    }
+    if (style === 'dots') {
+      this.updateRingDots(frame)
+      return
+    }
     const intensity = this.options.intensity
     const data = frame.frequencyData
     const dataLength = Math.min(data.length, 180)
@@ -892,6 +901,65 @@ export class AveeVisualizerEngine {
     }
   }
 
+  /** Flat spectrum along the bottom of the frame. */
+  private updateBottomBars(frame: SongNhacAudioFrame): void {
+    const data = frame.frequencyData
+    const dataLength = Math.min(data.length, 180)
+    const dummy = new THREE.Object3D()
+    const usableWidth = this.stageWidth * 0.82
+    const barWidth = (usableWidth / this.barCount) * 0.72
+    let peak = 0
+    for (let i = 0; i < dataLength; i += 1) if (data[i] > peak) peak = data[i]
+    const gain = peak > 8 ? 255 / peak : 1
+    for (let i = 0; i < this.barCount; i += 1) {
+      const t = i / Math.max(1, this.barCount - 1)
+      const freqIndex = Math.min(dataLength - 1, Math.floor(t * dataLength))
+      const raw = Math.min(1, ((data[freqIndex] ?? 0) * gain) / 255)
+      const target = 0.05 + Math.pow(raw, 0.65) * this.stageHeight * 0.42 * this.visualizerSensitivity
+      this.barHeights[i] += (target - this.barHeights[i]) * 0.35
+      const x = -usableWidth / 2 + t * usableWidth
+      dummy.position.set(x, -this.stageHeight * 0.46, 0)
+      dummy.rotation.set(0, 0, 0)
+      dummy.scale.set(barWidth, Math.max(0.02, this.barHeights[i]), 0.06)
+      dummy.updateMatrix()
+      this.barsMesh.setMatrixAt(i, dummy.matrix)
+      dummy.scale.set(barWidth * 0.5, Math.max(0.015, this.barHeights[i] * 0.42), 0.04)
+      dummy.updateMatrix()
+      this.barsInner.setMatrixAt(i, dummy.matrix)
+    }
+    this.barsMesh.instanceMatrix.needsUpdate = true
+    this.barsInner.instanceMatrix.needsUpdate = true
+  }
+
+  /** Ring of dots whose brightness follows the spectrum. */
+  private updateRingDots(frame: SongNhacAudioFrame): void {
+    const data = frame.frequencyData
+    const dataLength = Math.min(data.length, 180)
+    const half = Math.floor(this.barCount / 2)
+    const dummy = new THREE.Object3D()
+    let peak = 0
+    for (let i = 0; i < dataLength; i += 1) if (data[i] > peak) peak = data[i]
+    const gain = peak > 8 ? 255 / peak : 1
+    for (let i = 0; i < this.barCount; i += 1) {
+      const mirrored = i < half ? half - 1 - i : i - half
+      const normalized = Math.pow(mirrored / Math.max(1, half - 1), 1.2)
+      const freqIndex = dataLength > 0 ? Math.min(dataLength - 1, Math.floor(normalized * dataLength)) : -1
+      const raw = freqIndex >= 0 ? Math.min(1, ((data[freqIndex] ?? 0) * gain) / 255) : 0
+      const size = 0.045 + Math.pow(raw, 0.8) * 0.16 * this.visualizerSensitivity
+      const angle = (i / this.barCount) * Math.PI * 2 - Math.PI / 2
+      dummy.position.set(Math.cos(angle) * BAR_BASE_RADIUS, Math.sin(angle) * BAR_BASE_RADIUS, 0)
+      dummy.rotation.set(0, 0, angle - Math.PI / 2)
+      dummy.scale.set(size, size, size)
+      dummy.updateMatrix()
+      this.barsMesh.setMatrixAt(i, dummy.matrix)
+      dummy.scale.set(size * 0.5, size * 0.5, size * 0.5)
+      dummy.updateMatrix()
+      this.barsInner.setMatrixAt(i, dummy.matrix)
+    }
+    this.barsMesh.instanceMatrix.needsUpdate = true
+    this.barsInner.instanceMatrix.needsUpdate = true
+  }
+
   /** Image plates can breathe with the kick drum. */
   private applyBeatPulse(frame: SongNhacAudioFrame): void {
     const bass = Math.max(0, Math.min(1, frame.bass))
@@ -1084,6 +1152,22 @@ export class AveeVisualizerEngine {
   }
 
   /** Diagnostic snapshot of the layer graph (used by the preview harness). */
+  /**
+   * Bounding box of a layer in the 1080-high reference space (same units as
+   * transform.x/y), so the DOM gizmo can draw handles over the canvas.
+   */
+  public getLayerBoundsPx(id: string): { x: number; y: number; width: number; height: number; rotation: number } | null {
+    const node = this.layerNodes.get(id)
+    const layer = node?.layer
+    if (!node || !layer || layer.type === 'visualizer') return null
+    const t = layer.transform
+    const unit = this.unit
+    const width = (node.baseWidth * node.depthFactor * Math.abs(t.scaleX)) / unit
+    const height = (node.baseHeight * node.depthFactor * Math.abs(t.scaleY)) / unit
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return null
+    return { x: t.x - width / 2, y: t.y - height / 2, width, height, rotation: t.rotation }
+  }
+
   public debugLayers(): Array<{ id: string; type: string; visible: boolean; z: number; sx: number; sy: number; hasMap: boolean }> {
     return Array.from(this.layerNodes.entries()).map(([id, node]) => {
       const mesh = node.object as THREE.Mesh

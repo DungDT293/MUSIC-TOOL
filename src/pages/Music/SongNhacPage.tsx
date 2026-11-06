@@ -131,6 +131,68 @@ export default function SongNhacPage() {
     const layer = state.layers.find((item) => item.id === state.selectedLayerId)
     if (layer?.type === 'text') state.setFocusContentInputId(layer.id)
   }
+
+  const [selectionBounds, setSelectionBounds] = useState<null | { x: number; y: number; width: number; height: number }>(null)
+  const scaleRef = useRef<null | { startX: number; startY: number; scaleX: number; scaleY: number; width: number; height: number }>(null)
+
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => {
+      const engine = aveeEngineRef.current
+      if (!engine || !selectedLayerId) {
+        setSelectionBounds(null)
+        return
+      }
+      const bounds = engine.getLayerBoundsPx(selectedLayerId)
+      setSelectionBounds(bounds ? { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height } : null)
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [layers, selectedLayerId, webglFallback, style])
+
+  const onHandlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    event.stopPropagation()
+    const state = useSongNhacLayerStore.getState()
+    const layer = state.layers.find((item) => item.id === state.selectedLayerId)
+    if (!layer || layer.type === 'group' || !selectionBounds) return
+    event.currentTarget.setPointerCapture(event.pointerId)
+    state.beginHistoryGesture()
+    scaleRef.current = {
+      startX: event.clientX,
+      startY: event.clientY,
+      scaleX: layer.transform.scaleX,
+      scaleY: layer.transform.scaleY,
+      width: Math.max(1, selectionBounds.width),
+      height: Math.max(1, selectionBounds.height),
+    }
+  }
+
+  const onHandlePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = scaleRef.current
+    if (!drag) return
+    const state = useSongNhacLayerStore.getState()
+    const layer = state.layers.find((item) => item.id === state.selectedLayerId)
+    const canvas = canvasRef.current
+    if (!layer || layer.type === 'group' || !canvas) return
+    const rect = canvas.getBoundingClientRect()
+    const dxPx = ((event.clientX - drag.startX) / Math.max(1, rect.width)) * 1920
+    const dyPx = ((event.clientY - drag.startY) / Math.max(1, rect.height)) * 1080
+    // Drag the corner: width/height follow the pointer distance from the start box.
+    const nextScaleX = Math.max(0.05, drag.scaleX * (1 + dxPx / drag.width))
+    const nextScaleY = Math.max(0.05, drag.scaleY * (1 + dyPx / drag.height))
+    state.updateLayer(layer.id, {
+      transform: {
+        ...layer.transform,
+        scaleX: event.shiftKey ? nextScaleX : nextScaleX,
+        scaleY: event.shiftKey ? nextScaleX : nextScaleY,
+      },
+    })
+  }
+
+  const onHandlePointerUp = () => {
+    if (!scaleRef.current) return
+    scaleRef.current = null
+    useSongNhacLayerStore.getState().endHistoryGesture()
+    setSelectionBounds((current) => current)
+  }
   const [isExporting, setIsExporting] = useState(false)
   const [exportWidth, setExportWidth] = useState(1920)
   const [exportHeight, setExportHeight] = useState(1080)
@@ -518,6 +580,7 @@ export default function SongNhacPage() {
           }}
         >
           {/* Key forces fresh canvas element on style switch to avoid WebGL / 2D context collision */}
+          <div style={{ position: 'relative', width: '100%' }}>
           <canvas
             key={style === 'avee-circle' && !webglFallback ? 'canvas-three' : 'canvas-2d'}
             ref={canvasRef}
@@ -538,6 +601,48 @@ export default function SongNhacPage() {
               boxShadow: '0 8px 32px rgba(0, 0, 0, 0.6)',
             }}
           />
+          {selectionBounds && (
+            <>
+              <div
+                style={{
+                  position: 'absolute',
+                  left: `${((selectionBounds.x + 960) / 1920) * 100}%`,
+                  top: `${((selectionBounds.y + 540) / 1080) * 100}%`,
+                  width: `${(selectionBounds.width / 1920) * 100}%`,
+                  height: `${(selectionBounds.height / 1080) * 100}%`,
+                  border: '1px solid rgba(96,165,250,0.9)',
+                  pointerEvents: 'none',
+                }}
+              />
+              {([
+                ['nwse-resize', 0, 0],
+                ['nesw-resize', 100, 0],
+                ['nesw-resize', 0, 100],
+                ['nwse-resize', 100, 100],
+              ] as const).map(([cursor, xPercent, yPercent]) => (
+                <div
+                  key={`${xPercent}-${yPercent}`}
+                  onPointerDown={onHandlePointerDown}
+                  onPointerMove={onHandlePointerMove}
+                  onPointerUp={onHandlePointerUp}
+                  onPointerCancel={onHandlePointerUp}
+                  style={{
+                    position: 'absolute',
+                    left: `calc(${((selectionBounds.x + 960) / 1920) * 100 + xPercent * (selectionBounds.width / 1920) * 100}% - 6px)`,
+                    top: `calc(${((selectionBounds.y + 540) / 1080) * 100 + yPercent * (selectionBounds.height / 1080) * 100}% - 6px)`,
+                    width: 12,
+                    height: 12,
+                    background: '#60a5fa',
+                    border: '1px solid #1e3a8a',
+                    borderRadius: 3,
+                    cursor,
+                    touchAction: 'none',
+                  }}
+                />
+              ))}
+            </>
+          )}
+          </div>
           <audio
             ref={audioRef}
             onPlay={() => {
