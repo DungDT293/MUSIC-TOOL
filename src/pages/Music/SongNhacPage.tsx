@@ -297,6 +297,7 @@ export default function SongNhacPage() {
   const projectHistory = useProjectHistory()
   const [clipMenu, setClipMenu] = useState<ClipMenuState | null>(null)
   const [snapEnabled, setSnapEnabled] = useState(true)
+  const seekGuardRef = useRef(0)
   const [presetThumbs, setPresetThumbs] = useState<Record<string, string>>({})
   const [snapGuide, setSnapGuide] = useState<number | null>(null)
   const [lyricsText, setLyricsText] = useState('')
@@ -734,12 +735,16 @@ export default function SongNhacPage() {
     window.addEventListener('pointerup', onUp)
   }
   const seekToTime = (seconds: number) => {
-    const audio = audioRef.current
-    if (!audio || !audioDuration) return
-    const next = Math.max(0, Math.min(audioDuration, seconds))
-    audio.currentTime = next
+    // Seeking must move the playhead even before audio is decoded: keyframe, lyric and
+    // automation previews all read the clock, and they should not need playback.
+    const limit = audioDuration > 0 ? audioDuration : Math.max(0, seconds)
+    const next = Math.max(0, Math.min(limit, seconds))
     setPlayhead(next)
     useSongNhacLayerStore.getState().setCurrentTime(next)
+    // A manual seek makes the element emit a stale timeupdate for the old position.
+    seekGuardRef.current = performance.now()
+    const audio = audioRef.current
+    if (audio && audioDuration > 0 && audio.readyState > 0) audio.currentTime = next
   }
 
   const seekTo = (event: React.MouseEvent<HTMLDivElement>) => {    const audio = audioRef.current
@@ -749,6 +754,7 @@ export default function SongNhacPage() {
     const next = ratio * audioDuration
     audio.currentTime = next
     setPlayhead(next)
+    useSongNhacLayerStore.getState().setCurrentTime(next)
   }
 
   const applyWavePreset = (presetId: string) => {
@@ -975,6 +981,7 @@ export default function SongNhacPage() {
       setMessage(`Mở project lỗi: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
+
 
 
   // Real rendered preview per preset (cached per theme in localStorage).
@@ -1299,6 +1306,62 @@ export default function SongNhacPage() {
     }
   }
 
+  // Editor keyboard shortcuts. Typing in a field must never trigger them.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null
+      const tag = target?.tagName?.toLowerCase()
+      if (tag === 'input' || tag === 'textarea' || tag === 'select' || target?.isContentEditable) return
+      const mod = event.ctrlKey || event.metaKey
+      const store = useSongNhacLayerStore.getState()
+
+      if (mod && event.key.toLowerCase() === 'z') {
+        event.preventDefault()
+        if (event.shiftKey) store.redo()
+        else store.undo()
+        return
+      }
+      if (mod && (event.key.toLowerCase() === 'y' || (event.shiftKey && event.key.toLowerCase() === 'z'))) {
+        event.preventDefault()
+        store.redo()
+        return
+      }
+      if (mod && event.key.toLowerCase() === 'd') {
+        event.preventDefault()
+        store.duplicateSelectedLayers()
+        return
+      }
+      if (mod && event.key.toLowerCase() === 's') {
+        event.preventDefault()
+        void saveProject()
+        return
+      }
+      if (event.key === 'Delete' || event.key === 'Backspace') {
+        if (!store.selectedIds.length) return
+        event.preventDefault()
+        for (const id of store.selectedIds.slice()) store.removeLayer(id)
+        return
+      }
+      if (event.key === ' ') {
+        event.preventDefault()
+        void togglePlay()
+        return
+      }
+      if (!mod && event.key.toLowerCase() === 's') {
+        event.preventDefault()
+        setSnapEnabled((value) => !value)
+        return
+      }
+      if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+        event.preventDefault()
+        const step = (event.shiftKey ? 5 : 1) * (event.key === 'ArrowLeft' ? -1 : 1)
+        // Read the clock from the store: the effect closure would hold a stale playhead.
+        seekToTime(useSongNhacLayerStore.getState().currentTimeSec + step)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [saveProject, togglePlay])
   return (
     <section style={{ height: 'calc(100vh - 96px)', minHeight: 0, display: 'flex', flexDirection: 'column', color: '#e5e7eb', fontFamily: 'Inter, system-ui, sans-serif' }}>
       <h1 style={{ marginTop: 0, marginBottom: 4, fontSize: 24, fontWeight: 700 }}>Sóng nhạc</h1>
@@ -1448,6 +1511,16 @@ export default function SongNhacPage() {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12, color: '#cbd5e1' }}>
               <div style={{ color: '#94a3b8', lineHeight: 1.5 }}>
                 Lưu toàn bộ lớp, keyframe, hiệu ứng và cài đặt xuất vào một file .json để mở lại sau.
+              <div style={{ marginTop: 2, padding: 7, borderRadius: 8, background: '#0f172a', border: '1px solid #1e293b', fontSize: 11, color: '#94a3b8', lineHeight: 1.7 }}>
+                <div style={{ fontSize: 10, letterSpacing: 0.5, color: '#475569', marginBottom: 2 }}>PHÍM TẮT</div>
+                <div>Space — phát / dừng</div>
+                <div>← → — tua 1s (Shift: 5s)</div>
+                <div>Ctrl+D — nhân bản lớp</div>
+                <div>Delete — xoá lớp đang chọn</div>
+                <div>Ctrl+Z / Ctrl+Shift+Z — hoàn tác / làm lại</div>
+                <div>S — bật/tắt bắt dính (snap)</div>
+                <div>Ctrl+S — lưu project</div>
+              </div>
               </div>
               <button type="button" onClick={saveProject} style={projectButtonStyle}>
                 Lưu project (.json)
@@ -1904,6 +1977,8 @@ export default function SongNhacPage() {
             onTimeUpdate={(event) => {
               const time = event.currentTarget.currentTime
               setPlayhead(time)
+              // Ignore the stale update the element fires right after a manual seek.
+              if (performance.now() - seekGuardRef.current < 450) return
               useSongNhacLayerStore.getState().setCurrentTime(time)
             }}
             onLoadedMetadata={(event) => {
