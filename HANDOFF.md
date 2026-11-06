@@ -1,5 +1,100 @@
 # HANDOFF
 
+## 2026-11-06 — Sóng nhạc: fallback WebGL, dựng Avee bằng canvas 2D, tách filter builder
+
+- Bối cảnh:
+  - Engine Three.js của style `avee-circle` chỉ chạy khi có WebGL. Máy không có WebGL (VM, driver cũ) làm constructor ném lỗi ngay trong vòng lặp animation, preview trắng và lỗi lặp lại mỗi frame.
+  - Style `avee-circle` không có nhánh trong renderer canvas 2D nên khi fallback lại rơi vào nhánh `pulse-grid` (hình khác hẳn).
+  - Mapping filter FFmpeg của Sóng nhạc bị nhúng thẳng trong `songNhacFfmpegPipe.ts`, không test được và dễ lệch khi thêm style.
+
+- Thay đổi:
+  1. `src/features/song-nhac/core/renderSongNhacFrame.ts`: thêm nhánh `avee-circle` thuần canvas 2D — đĩa phát sáng theo bass, thanh quang phổ đối xứng hai bên, vòng ngoài xoay, giữ nguyên lớp hạt seed sẵn có.
+  2. `src/pages/Music/SongNhacPage.tsx`:
+     - Bọc khởi tạo `AveeVisualizerEngine` trong try/catch; đánh dấu `webglUnavailableRef` để không thử lại mỗi frame.
+     - Thêm state `webglFallback` để đổi key canvas sang `canvas-2d` (canvas không thể đổi loại context sau khi đã bind WebGL).
+     - Vòng render đọc `canvasRef.current` mỗi frame thay vì giữ tham chiếu canvas cũ sau khi remount.
+  3. `backend/video/songNhacVisualFilter.ts` (mới): `buildSongNhacVisualFilter()` thuần, clamp width/height, áp trần chiều cao cho từng style.
+     - `songNhacFfmpegPipe.ts` dùng lại hàm này, nâng encode lên `-crf 19 -profile:v high`, và sửa type process con (bỏ 3 lỗi TS2322/TS2345/TS18047).
+  4. Test: `tests/unit/songNhacVisualFilter.test.ts` (6 case) + thêm case `avee-circle` deterministic vào `tests/unit/songNhacRender.test.ts`.
+
+- Kiểm chứng:
+  - `npx vitest run songNhacVisualFilter songNhacRender songNhacAudioBands gpuDetection` -> 22/22 pass.
+  - `tsc --noEmit` (cả `tsconfig.json` và `tsconfig.node.json`): không phát sinh lỗi mới ở các file đã sửa.
+  - Render thử bằng `bin/ffmpeg.exe` với filter của cả 4 style -> 4/4 ra mp4 hợp lệ.
+
+- Follow-up:
+  - Preview Three.js (sóng tròn, logo, hạt) vẫn khác bản export (`showwaves`). Muốn khớp tuyệt đối phải render frame Three.js rồi đẩy sang FFmpeg — việc riêng, chưa làm.
+  - `src/features/song-nhac/renderSongNhacFrame.ts` (bản cũ 106 dòng, chữ ký khác) không còn file nào import; có thể xoá sau khi xác nhận.
+
+## 2026-11-06 — Sửa test sóng nhạc lệch hợp đồng mặc định style
+
+- Bối cảnh: tính năng Avee Player (2026-10-29) đổi style mặc định khi cấu hình không hợp lệ từ `neon-tunnel` sang `avee-circle`, nhưng test vẫn khoá giá trị cũ nên suite đỏ.
+- Thay đổi: `tests/unit/songNhacAudioBands.test.ts` cập nhật kỳ vọng fallback sang `avee-circle`.
+- Kiểm chứng: `npx vitest run tests/unit/songNhacRender.test.ts tests/unit/songNhacAudioBands.test.ts` -> 4/4 pass.
+
+## 2026-11-06 — Nâng chuẩn encode video xuất bản (upload-grade) cho mọi luồng export
+
+- Bối cảnh:
+  - Video xuất bằng tool có bitrate thấp hơn hẳn bản xuất bằng phần mềm dựng, nền gradient bị banding sau khi YouTube nén lại.
+  - Nguyên nhân gốc: mọi luồng export gọi `buildVideoEncoderArgsWithChoice(..., 'fast')`; tier `fast` dùng NVENC `-preset p1 -cq 23 -b:v 0` (preset nhanh nhất, chất lượng thấp nhất) hoặc libx264 `-preset veryfast -crf 23`, không có VBV ceiling và không set profile.
+  - Thêm vào đó pre-transcode 2-pass trong `normalizeVideo.ts` dùng CQ/CRF 23, và Pass 2 concat bằng `-c:v copy`, nên chất lượng bước này chính là chất lượng cuối của file.
+
+- Thay đổi:
+  1. `backend/utils/gpuDetection.ts`:
+     - Thêm bảng `ENCODE_TUNING` cho 3 tier `fast | medium | slow`: preset NVENC p5/p6/p7, CQ 20/19/17, preset x264 veryfast/medium/slow, CRF 19/18/16, MAXRATE/BUFSIZE 20M/40M, 24M/48M, 30M/60M.
+     - Tách 4 helper thuần `buildNvencEncodeArgs`, `buildX264EncodeArgs`, `buildAmfEncodeArgs`, `buildVideoToolboxEncodeArgs`; hai hàm public giữ nguyên chữ ký.
+     - Bật lại spatial/temporal AQ cho NVENC (`-spatial-aq 1 -temporal-aq 1 -aq-strength 8`) và thêm `-profile:v high`.
+     - Giữ `-vsync 2` để không đổi hành vi timing hiện hữu; `finalExport` vẫn tự chuyển thành `cfr` ở luồng concat.
+     - Không dùng `-tune` vì bản legacy FFmpeg đóng gói cho driver cũ không hỗ trợ.
+     - VideoToolbox chỉ dùng `-b:v` (bỏ `-maxrate`/`-bufsize`) vì một số build macOS từ chối VBV.
+  2. `backend/video/normalizeVideo.ts`: pre-transcode nâng CQ/CRF 23 lên 19 (NVENC p4 -> p5) vì đây là thế hệ nén duy nhất của video cuối.
+  3. `backend/video/finalExport.ts`: nhánh fallback `filter_complex` (chroma key / sóng nhạc) nâng `-crf 22` lên 19.
+  4. `tests/unit/backend/gpuDetection.test.ts`: thêm 3 test khoá tier NVENC, tham số x264 upload-grade và đường fallback CPU.
+
+- Kiểm chứng:
+  - `npx vitest run tests/unit/backend/gpuDetection.test.ts` -> 11/11 pass.
+  - `npx vitest run tests/unit/backend/healthCheck.test.ts tests/unit/fixes/bugFixes.test.ts` -> 28/28 pass.
+  - `tsc --noEmit -p tsconfig.node.json`: không phát sinh lỗi mới ở `gpuDetection.ts` / `normalizeVideo.ts` (repo còn 39 lỗi type cũ ở file khác, không liên quan).
+  - Encode thật bằng `bin/ffmpeg.exe`: nguồn gradient 1080p SSIM Y 0.99924 -> 0.99953, PSNR 57.45 -> 59.74 dB; video thật 1280x704 24fps dung lượng 6.35 MB -> 11.22 MB (bitrate master tăng khoảng 77%).
+
+- Lưu ý / follow-up:
+  - Tier `fast` là mặc định cho mọi luồng (finalExport, cutSingle, merge, healthCheck) nên thời gian encode tăng so với trước (NVENC p5 vs p1, x264 CRF 19 vs 23); hiện chưa có option chọn tier trên UI.
+  - Máy có driver NVIDIA cũ (API 12.2) vẫn rơi về CPU như cũ.
+  - Muốn thêm lựa chọn "chất lượng xuất" cho người dùng phải đi qua `shared/ipcSchemas.ts` + `src/types/ipc.ts` + `FinalExportTab` + autopilot `runtimeOverrides`.
+
+## 2026-10-29 — Nâng cấp tính năng Sóng Nhạc: Tích hợp Three.js Avee Player Style Visualizer
+
+- Bối cảnh:
+  - Người dùng phản hồi tính năng Sóng nhạc hiện tại đơn sơ, yêu cầu áp dụng công nghệ mới (đề xuất Three.js) để tạo hiệu ứng sóng nhạc đẹp mắt phong cách Avee Player:
+    1. Sóng tròn bao quanh logo đập theo phổ tần số âm thanh (Circular Spectrum Bars).
+    2. Logo trung tâm có thể nảy phóng to / thu nhỏ theo beat nhạc (Bass beat pulse / zoom in zoom out).
+    3. Camera tự động thở, zoom cận cảnh theo nhịp trống (Beat breathing & subtle camera shake).
+    4. Hiệu ứng hạt bụi phát sáng (3D Stardust Particles) bay tỏa theo beat.
+    5. Hỗ trợ chọn ảnh logo riêng (PNG/JPG) hoặc sử dụng logo mặc định 93 Media.
+    6. Tùy chỉnh màu sắc neon (Cyberpunk, Emerald, Gold, Ocean) và độ nhạy đập beat.
+  - Tuân thủ nghiêm ngặt quy tắc UI: Tuyệt đối không thêm icon hay emoji vào giao diện theo `AGENTS.md` và `GEMINI.md`.
+
+- Tính năng & Cải tiến:
+  1. **Thư viện Three.js**: Đã cài đặt `three` và `@types/three` phục vụ WebGL GPU acceleration.
+  2. **Engine Đồ Họa 3D Three.js (`src/features/song-nhac/three/AveeVisualizerEngine.ts`)**:
+     - Thiết lập Scene, PerspectiveCamera và WebGLRenderer hiệu năng cao.
+     - Tạo đĩa Logo trung tâm với texture canvas mặc định "93 MEDIA" hoặc texture từ tệp ảnh do người dùng chọn.
+     - Vòng viền phát sáng (Inner Ring & Outer Ring) xoay nhẹ và nảy theo nhịp Bass.
+     - 96 thanh sóng tròn (Circular Spectrum Bars) ánh xạ theo dải tần âm thanh FFT, đối xứng hai bên.
+     - 450 hạt bụi phát sáng (Stardust Particles) bay lơ lửng trong không gian 3D, gia tốc khi có beat mạnh.
+     - Camera động học: Tự động zoom in / zoom out theo biên độ Bass và rung lắc nhẹ khi trống dập.
+  3. **Cập nhật Giao diện Tab 5 Sóng nhạc (`src/pages/Music/SongNhacPage.tsx`)**:
+     - Thêm tùy chọn kiểu "Avee Player (Sóng tròn + Logo beat)" làm kiểu hiển thị chính.
+     - Bổ sung bộ điều khiển tùy chỉnh Avee Player:
+       + Nút "Chọn ảnh logo" (hỗ trợ chọn ảnh PNG/JPG từ máy) và nút "Mặc định".
+       + Lựa chọn tông màu neon: Cyberpunk (Xanh - Hồng), Emerald (Xanh ngọc), Gold (Vàng kim), Ocean (Xanh dương).
+       + Thanh trượt "Độ nhạy đập beat" (0.5x đến 2.0x).
+       + Hộp kiểm bật/tắt "Hạt bụi sao phát sáng" và "Logo và vòng viền trung tâm".
+     - Dùng cơ chế tách key canvas (`key={style === 'avee-circle' ? 'canvas-three' : 'canvas-2d'}`) để chuyển đổi an toàn giữa WebGL và Canvas 2D mà không bị xung đột ngữ cảnh.
+  4. **Data contracts & Video Pipe (`shared/songNhacChannels.ts`, `src/features/song-nhac/core/types.ts`, `backend/video/songNhacFfmpegPipe.ts`)**:
+     - Bổ sung `'avee-circle'` vào union type `SongNhacStyle`.
+     - Cập nhật FFmpeg video pipe hỗ trợ xuất video với style mới.
+
 ## 2026-10-14 — Phiên bản v4.5.4: Tính năng Nhạc nền (Background Music), Hòa âm âm lượng & Đóng gói Installer
 
 - Bối cảnh:
