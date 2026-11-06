@@ -16,6 +16,19 @@ export const SONG_NHAC_WAVEFORM = 'song-nhac:waveform'
 export const SONG_NHAC_PROJECT_SAVE = 'song-nhac:project:save'
 export const SONG_NHAC_PROJECT_OPEN = 'song-nhac:project:open'
 
+/** Online lyric search (lrclib.net), proxied through the main process. */
+export const SONG_NHAC_LYRICS_SEARCH = 'song-nhac:lyrics:search'
+
+export interface LyricSearchHit {
+  id: number
+  trackName: string
+  artistName: string
+  albumName?: string
+  durationSec?: number
+  syncedLyrics?: string | null
+  plainLyrics?: string | null
+}
+
 export interface SongNhacProjectResult {
   success: boolean
   data?: string

@@ -12,6 +12,8 @@ import {
   SONG_NHAC_FRAMES_BEGIN,
   SONG_NHAC_FRAMES_CANCEL,
   SONG_NHAC_WAVEFORM,
+  SONG_NHAC_LYRICS_SEARCH,
+  type LyricSearchHit,
   SONG_NHAC_PROJECT_SAVE,
   SONG_NHAC_PROJECT_OPEN,
   type SongNhacProjectResult,
@@ -235,6 +237,42 @@ function registerFrameHandlers(): void {
     }
   })
 
+  // Lyric search goes through main: the renderer has no direct network access to
+  // lrclib.net (CSP), and the request needs a timeout so the UI never hangs.
+  ipcMain.handle(SONG_NHAC_LYRICS_SEARCH, async (_event, raw: unknown): Promise<{ success: boolean; hits?: LyricSearchHit[]; error?: string }> => {
+    try {
+      const payload = (raw ?? {}) as { query?: string }
+      const query = typeof payload.query === 'string' ? payload.query.trim() : ''
+      if (!query) throw new Error('Nhập tên bài hát để tìm lời.')
+      if (query.length > 120) throw new Error('Từ khoá quá dài.')
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), 12_000)
+      const response = await fetch(`https://lrclib.net/api/search?q=${encodeURIComponent(query)}`, {
+        signal: controller.signal,
+        headers: { 'User-Agent': 'song-nhac-editor/1.0 (https://local)' },
+      })
+      clearTimeout(timer)
+      if (!response.ok) throw new Error(`LRCLIB trả về ${response.status}.`)
+      const data = (await response.json()) as unknown
+      if (!Array.isArray(data)) return { success: true, hits: [] }
+      const hits: LyricSearchHit[] = data.slice(0, 12).map((item) => {
+        const row = item as Record<string, unknown>
+        return {
+          id: Number(row.id ?? 0),
+          trackName: String(row.trackName ?? ''),
+          artistName: String(row.artistName ?? ''),
+          albumName: row.albumName ? String(row.albumName) : undefined,
+          durationSec: typeof row.duration === 'number' ? row.duration : undefined,
+          syncedLyrics: typeof row.syncedLyrics === 'string' ? row.syncedLyrics : null,
+          plainLyrics: typeof row.plainLyrics === 'string' ? row.plainLyrics : null,
+        }
+      })
+      return { success: true, hits }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      return { success: false, error: message === 'This operation was aborted' ? 'Hết thời gian chờ LRCLIB.' : message }
+    }
+  })
   ipcMain.handle(SONG_NHAC_PROJECT_SAVE, async (_event, raw: unknown): Promise<SongNhacProjectResult> => {
     try {
       const payload = (raw ?? {}) as { filePath?: string; json?: string }

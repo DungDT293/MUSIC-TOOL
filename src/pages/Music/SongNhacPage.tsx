@@ -22,6 +22,7 @@ import {
   renderUserPresetThumbnails,
 } from '../../features/song-nhac/studio/presetThumbnails'
 import type { StudioLayer } from '../../features/song-nhac/studio/layerTypes'
+import type { LyricSearchHit } from '../../../shared/songNhacChannels'
 import type { SongNhacExportProgress } from '../../../shared/songNhacChannels'
 
 
@@ -301,6 +302,10 @@ export default function SongNhacPage() {
   const projectHistory = useProjectHistory()
   const userPresets = useUserPresets()
   const [presetName, setPresetName] = useState('')
+  const [lyricQuery, setLyricQuery] = useState('')
+  const [lyricHits, setLyricHits] = useState<LyricSearchHit[]>([])
+  const [lyricBusy, setLyricBusy] = useState(false)
+  const [lyricError, setLyricError] = useState('')
   const [clipMenu, setClipMenu] = useState<ClipMenuState | null>(null)
   const [snapEnabled, setSnapEnabled] = useState(true)
   const seekGuardRef = useRef(0)
@@ -902,6 +907,40 @@ export default function SongNhacPage() {
     if (picked.canceled || !filePath) return
     useMediaLibrary.getState().add(mediaTab, filePath)
     applyMediaItem(mediaTab, filePath)
+  }
+  const searchLyricsOnline = async () => {
+    const query = lyricQuery.trim()
+    if (!query) {
+      setLyricError('Nhập tên bài hát để tìm lời.')
+      return
+    }
+    setLyricBusy(true)
+    setLyricError('')
+    try {
+      const result = await window.api.songNhac.lyricsSearch(query)
+      if (!result.success) {
+        setLyricHits([])
+        setLyricError(result.error || 'Tìm lời thất bại.')
+        return
+      }
+      setLyricHits(result.hits ?? [])
+      if (!(result.hits ?? []).length) setLyricError('Không tìm thấy lời cho từ khoá này.')
+    } catch (error) {
+      setLyricError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setLyricBusy(false)
+    }
+  }
+
+  const useLyricHit = (hit: LyricSearchHit) => {
+    const text = hit.syncedLyrics?.trim() || hit.plainLyrics?.trim() || ''
+    if (!text) {
+      setLyricError('Bài này không có lời kèm theo.')
+      return
+    }
+    setLyricsText(text)
+    setLyricError('')
+    setMessage(`Đã nạp lời: ${hit.trackName} — ${hit.artistName}`)
   }
   const createLyricsLayer = () => {
     const lines = parseLyrics(lyricsText, audioDuration)
@@ -1587,6 +1626,62 @@ export default function SongNhacPage() {
               <div style={{ color: '#94a3b8', lineHeight: 1.5 }}>
                 Dán lời (mỗi dòng một câu). Có timestamp LRC <code>[00:12.34]</code> thì dùng luôn, không thì tự chia đều theo độ dài nhạc.
               </div>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <input
+                  value={lyricQuery}
+                  onChange={(event) => setLyricQuery(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') void searchLyricsOnline()
+                  }}
+                  placeholder="Tìm lời trên LRCLIB (tên bài)"
+                  style={{
+                    flex: 1,
+                    padding: '6px 8px',
+                    borderRadius: 6,
+                    border: '1px solid #334155',
+                    background: '#0f172a',
+                    color: '#e2e8f0',
+                    fontSize: 11,
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={searchLyricsOnline}
+                  disabled={lyricBusy}
+                  style={{ ...projectButtonStyle, padding: '6px 10px', opacity: lyricBusy ? 0.6 : 1 }}
+                >
+                  {lyricBusy ? 'Đang tìm…' : 'Tìm'}
+                </button>
+              </div>
+              {lyricError && <div style={{ fontSize: 11, color: '#fca5a5' }}>{lyricError}</div>}
+              {lyricHits.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 170, overflowY: 'auto' }}>
+                  {lyricHits.map((hit) => (
+                    <button
+                      key={hit.id}
+                      type="button"
+                      onClick={() => useLyricHit(hit)}
+                      title={hit.albumName || ''}
+                      style={{
+                        textAlign: 'left',
+                        padding: '5px 7px',
+                        borderRadius: 6,
+                        border: '1px solid #1e293b',
+                        background: '#0f172a',
+                        color: '#cbd5e1',
+                        fontSize: 11,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <div style={{ color: '#e2e8f0' }}>{hit.trackName}</div>
+                      <div style={{ color: '#64748b' }}>
+                        {hit.artistName}
+                        {hit.syncedLyrics ? ' · có timestamp' : ' · chỉ lời thường'}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
               <textarea
                 value={lyricsText}
                 onChange={(event) => setLyricsText(event.target.value)}

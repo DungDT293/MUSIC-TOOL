@@ -6,6 +6,7 @@ import type {
   SongNhacFramesResult,
   SongNhacWaveformResult,
   SongNhacProjectResult,
+  LyricSearchHit,
 } from '../../shared/songNhacChannels'
 import type {
   FinalExportAudioFailure,
@@ -1183,6 +1184,7 @@ export interface IPCAPI {
     waveformImage: (audioPath: string, width?: number, height?: number) => Promise<SongNhacWaveformResult>
     projectSave: (filePath: string, json: string) => Promise<SongNhacProjectResult>
     projectOpen: (filePath: string) => Promise<SongNhacProjectResult>
+    lyricsSearch: (query: string) => Promise<{ success: boolean; hits?: LyricSearchHit[]; error?: string }>
     onProgress: (handler: (progress: SongNhacExportProgress) => void) => () => void
   }
   app: {

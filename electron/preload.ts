@@ -42,6 +42,8 @@ import {
   SONG_NHAC_FRAMES_FLUSH,
   SONG_NHAC_WAVEFORM,
   SONG_NHAC_PROJECT_SAVE,
+  SONG_NHAC_LYRICS_SEARCH,
+  type LyricSearchHit,
   SONG_NHAC_PROJECT_OPEN,
   type SongNhacExportProgress,
   type SongNhacExportRequest,
@@ -443,6 +445,8 @@ const api: IPCAPI = {
       ipcRenderer.invoke(SONG_NHAC_WAVEFORM, { audioPath, width, height }) as Promise<SongNhacWaveformResult>,
     projectSave: (filePath: string, json: string) =>
       ipcRenderer.invoke(SONG_NHAC_PROJECT_SAVE, { filePath, json }) as Promise<SongNhacProjectResult>,
+    lyricsSearch: (query: string) =>
+      ipcRenderer.invoke(SONG_NHAC_LYRICS_SEARCH, { query }) as Promise<{ success: boolean; hits?: LyricSearchHit[]; error?: string }>,
     projectOpen: (filePath: string) =>
       ipcRenderer.invoke(SONG_NHAC_PROJECT_OPEN, { filePath }) as Promise<SongNhacProjectResult>,
     onProgress: (handler: (progress: SongNhacExportProgress) => void) => {
