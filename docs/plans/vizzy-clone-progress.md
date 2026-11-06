@@ -33,7 +33,7 @@ Mục tiêu: clone toàn bộ chức năng editor Vizzy vào Sóng nhạc. Mỗi
 | playhead + seek | ✅ |
 | zoom | ✅ |
 | track theo layer | ✅ |
-| kéo mép clip đổi thời gian | ✅ kéo mép trái/phải + kéo thân clip, có undo gesture |
+| kéo mép clip đổi thời gian | ✅ kéo mép trái/phải + kéo thân clip, có undo gesture, **snap + đường guide** |
 | keyframe trên track | ❌ |
 | ruler thời gian | ✅ mốc tự chọn theo độ dài |
 

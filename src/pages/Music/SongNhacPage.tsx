@@ -288,6 +288,7 @@ export default function SongNhacPage() {
   const [leftTab, setLeftTab] = useState<'composition' | 'presets' | 'effects' | 'analyzer' | 'media' | 'lyrics' | 'project' | 'export'>('composition')
   const [mediaTab, setMediaTab] = useState<MediaKind>('image')
   const mediaLibrary = useMediaLibrary()
+  const [snapGuide, setSnapGuide] = useState<number | null>(null)
   const [lyricsText, setLyricsText] = useState('')
   const effects = useCompositionEffects()
   const [rightTab, setRightTab] = useState<'objects' | 'visualizer'>('visualizer')
@@ -595,6 +596,24 @@ export default function SongNhacPage() {
     setMessage('Đã thêm file kéo thả vào composition.')
   }
 
+  /**
+   * Snaps a candidate time to the nearest interesting mark (0, track end, playhead or
+   * another clip edge) and reports the guide to draw.
+   */
+  const snapTime = (value: number, targets: number[], tolerance: number): { value: number; guide: number | null } => {
+    let best = value
+    let guide: number | null = null
+    let bestDistance = tolerance
+    for (const target of targets) {
+      const distance = Math.abs(target - value)
+      if (distance <= bestDistance) {
+        bestDistance = distance
+        best = target
+        guide = target
+      }
+    }
+    return { value: best, guide }
+  }
   /** Drag a clip edge (or its body) to retime a layer on the timeline. */
   const beginClipDrag = (
     event: React.PointerEvent<HTMLElement>,
@@ -613,20 +632,48 @@ export default function SongNhacPage() {
     const origEnd =
       layer.timeRange && Number.isFinite(layer.timeRange.endSec) ? Math.min(total, layer.timeRange.endSec) : total
     const store = useSongNhacLayerStore.getState()
+    // Snap marks: composition edges, the playhead and every other clip edge.
+    const targets = [0, total, playhead]
+    for (const item of store.layers) {
+      if (item.id === layer.id || item.type === 'group') continue
+      if (item.timeRange) {
+        targets.push(Math.max(0, item.timeRange.startSec))
+        if (Number.isFinite(item.timeRange.endSec)) targets.push(Math.min(total, item.timeRange.endSec))
+      } else {
+        targets.push(0, total)
+      }
+    }
+    const tolerance = 8 * secPerPx
     store.beginHistoryGesture()
     const onMove = (moveEvent: PointerEvent) => {
       const delta = (moveEvent.clientX - startX) * secPerPx
       let start = origStart
       let end = origEnd
+      let guide: number | null = null
       if (mode === 'start') {
-        start = Math.max(0, Math.min(origEnd - 0.2, origStart + delta))
+        const snapped = snapTime(Math.max(0, Math.min(origEnd - 0.2, origStart + delta)), targets, tolerance)
+        start = snapped.value
+        guide = snapped.guide
       } else if (mode === 'end') {
-        end = Math.max(origStart + 0.2, Math.min(total, origEnd + delta))
+        const snapped = snapTime(Math.max(origStart + 0.2, Math.min(total, origEnd + delta)), targets, tolerance)
+        end = snapped.value
+        guide = snapped.guide
       } else {
         const length = Math.max(0.2, origEnd - origStart)
-        start = Math.max(0, Math.min(total - length, origStart + delta))
+        const snapped = snapTime(Math.max(0, Math.min(total - length, origStart + delta)), targets, tolerance)
+        start = snapped.value
         end = start + length
+        guide = snapped.guide
+        if (guide === null) {
+          const snappedEnd = snapTime(end, targets, tolerance)
+          if (snappedEnd.guide !== null) {
+            end = snappedEnd.value
+            start = Math.max(0, end - length)
+            guide = snappedEnd.guide
+          }
+        }
       }
+      setSnapGuide(guide)
       const current = useSongNhacLayerStore.getState().layers.find((item) => item.id === layer.id)
       const previous = current && current.type !== 'group' ? current.timeRange : undefined
       useSongNhacLayerStore.getState().updateLayer(layer.id, {
@@ -2082,6 +2129,19 @@ export default function SongNhacPage() {
                 boxShadow: '0 0 8px #0ea5e9',
               }}
             />
+            {snapGuide !== null && audioDuration > 0 && (
+              <div
+                style={{
+                  position: 'absolute',
+                  left: `${Math.max(0, Math.min(100, (snapGuide / audioDuration) * 100))}%`,
+                  top: 0,
+                  bottom: 0,
+                  width: 1,
+                  background: '#fbbf24',
+                  boxShadow: '0 0 6px #fbbf24',
+                }}
+              />
+            )}
           </div>
 
           {tickMarks.length > 0 && (
