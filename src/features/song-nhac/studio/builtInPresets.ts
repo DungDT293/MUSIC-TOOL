@@ -222,5 +222,37 @@ export const WAVE_PRESETS: WavePreset[] = [
       glowIntensity: 0.4,
     },
   },
+  {
+    id: 'orb-energy',
+    name: 'Cầu năng lượng',
+    category: 'neon',
+    description: 'Cầu hạt phát sáng biến dạng theo phổ, quấn quanh logo',
+    visualizer: {
+      waveStyle: 'orb',
+      colorMode: 'gradient',
+      color1: '#22d3ee',
+      color2: '#f472b6',
+      speed: 1,
+      sensitivity: 1.2,
+      glowEnabled: true,
+      glowIntensity: 0.9,
+    },
+  },
+  {
+    id: 'warp-tunnel',
+    name: 'Hầm warp',
+    category: 'neon',
+    description: 'Vòng sáng lao về phía người xem, hợp nhạc nhanh',
+    visualizer: {
+      waveStyle: 'warp',
+      colorMode: 'gradient',
+      color1: '#67e8f9',
+      color2: '#fb7185',
+      speed: 1.2,
+      sensitivity: 1.1,
+      glowEnabled: true,
+      glowIntensity: 0.8,
+    },
+  },
 ]
 export const COLOR_MODES: StudioColorMode[] = ['rainbow', 'solid', 'gradient']
