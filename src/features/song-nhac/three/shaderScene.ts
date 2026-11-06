@@ -134,24 +134,26 @@ void main() {
 }
 `
 
-/** Energy orb: sphere displaced by the spectrum, fresnel rim, additive glow. */
+/**
+ * Energy orb built from points on a sphere. The classic "audio sphere" reads much
+ * better than a translucent shell: dots scatter outward with the spectrum and the
+ * whole thing glows through the bloom pass.
+ */
 const ORB_VERTEX = /* glsl */ `
 attribute float aEnergy;
 uniform float uTime;
 uniform float uSpeed;
 uniform float uIntensity;
+uniform float uPixelRatio;
 varying float vEnergy;
-varying vec3 vNormal;
-varying vec3 vViewPos;
 
 void main() {
   vEnergy = aEnergy;
-  float ripple = sin(position.y * 7.0 + uTime * 2.2 * uSpeed) * 0.03;
-  float displacement = (aEnergy * 0.42 + ripple) * uIntensity;
-  vec3 displaced = position + normalize(position) * displacement;
-  vec4 mv = modelViewMatrix * vec4(displaced, 1.0);
-  vNormal = normalize(normalMatrix * normal);
-  vViewPos = mv.xyz;
+  vec3 dir = normalize(position);
+  float wobble = sin(uTime * 1.7 * uSpeed + dir.y * 9.0) * 0.02;
+  float radius = 1.5 + (aEnergy * 0.62 + wobble) * uIntensity;
+  vec4 mv = modelViewMatrix * vec4(dir * radius, 1.0);
+  gl_PointSize = min(22.0, (0.9 + aEnergy * 2.6) * uPixelRatio * (34.0 / max(1.0, -mv.z)));
   gl_Position = projectionMatrix * mv;
 }
 `
@@ -161,18 +163,16 @@ precision highp float;
 uniform vec3 uColorA;
 uniform vec3 uColorB;
 uniform vec3 uAccent;
-uniform float uIntensity;
 varying float vEnergy;
-varying vec3 vNormal;
-varying vec3 vViewPos;
 
 void main() {
-  vec3 viewDir = normalize(-vViewPos);
-  float fresnel = pow(1.0 - clamp(abs(dot(normalize(vNormal), viewDir)), 0.0, 1.0), 3.1);
-  vec3 base = mix(uColorA, uColorB, clamp(vEnergy * 1.6, 0.0, 1.0));
-  vec3 color = base * (fresnel * (0.55 + vEnergy * 1.1) + 0.008);
-  color += uAccent * fresnel * 0.12;
-  gl_FragColor = vec4(color * (0.5 + uIntensity * 0.5), 1.0);
+  vec2 coord = gl_PointCoord - 0.5;
+  float dist = length(coord);
+  if (dist > 0.5) discard;
+  float alpha = smoothstep(0.5, 0.05, dist);
+  vec3 color = mix(uColorA, uColorB, clamp(vEnergy * 1.4, 0.0, 1.0));
+  color += uAccent * pow(vEnergy, 2.0) * 0.6;
+  gl_FragColor = vec4(color * alpha, alpha);
 }
 `
 /** Hyperspace tunnel: rings and spokes rushing at the camera. */
@@ -197,12 +197,10 @@ void main() {
   float mirrored = abs(fract(angle + 0.5) - 0.5) * 2.0;
   float energy = texture2D(uSpectrum, vec2(mirrored, 0.5)).r;
 
-  // Depth grows toward the centre, so rings accelerate as they approach.
   float depth = 1.0 / max(r, 0.05);
   float scroll = depth * 1.35 + uTime * 1.15 * uSpeed;
   float band = fract(scroll);
   float ringMask = smoothstep(0.0, 0.12, band) * smoothstep(0.5, 0.18, band);
-
   float spokes = smoothstep(0.44, 0.5, abs(fract(angle * 36.0) - 0.5)) * (0.1 + energy * 0.35);
 
   vec3 base = mix(uColorA, uColorB, mirrored);
@@ -223,7 +221,7 @@ export class ShaderScene {
   private mode: ShaderSceneMode = 'grid'
   private orbEnergy: Float32Array | null = null
   private orbLon: Float32Array | null = null
-  private orbGeometry: THREE.SphereGeometry | null = null
+  private orbGeometry: THREE.BufferGeometry | null = null
 
   constructor(mode: ShaderSceneMode, colorA: number, colorB: number, accent: number) {
     this.mode = mode
@@ -250,6 +248,7 @@ export class ShaderScene {
         uColorA: { value: new THREE.Color(colorA) },
         uColorB: { value: new THREE.Color(colorB) },
         uAccent: { value: new THREE.Color(accent) },
+        uPixelRatio: { value: 1 },
       },
       depthWrite: !isOrb,
       depthTest: true,
@@ -257,24 +256,34 @@ export class ShaderScene {
       blending: isOrb ? THREE.AdditiveBlending : THREE.NormalBlending,
     })
 
-    this.object = new THREE.Mesh(isOrb ? new THREE.SphereGeometry(1.6, 160, 110) : new THREE.PlaneGeometry(1, 1), this.material)
-    this.object.frustumCulled = false
-    this.object.renderOrder = 0
-
     if (isOrb) {
-      const geometry = this.object.geometry as THREE.SphereGeometry
-      this.orbGeometry = geometry
-      const position = geometry.getAttribute('position')
-      const count = position.count
+      // Fibonacci sphere: evenly spread points, no pinching at the poles.
+      const count = 4200
+      const positions = new Float32Array(count * 3)
       this.orbEnergy = new Float32Array(count)
       this.orbLon = new Float32Array(count)
+      const golden = Math.PI * (3 - Math.sqrt(5))
       for (let i = 0; i < count; i += 1) {
-        const x = position.getX(i)
-        const z = position.getZ(i)
+        const y = 1 - (i / (count - 1)) * 2
+        const radius = Math.sqrt(Math.max(0, 1 - y * y))
+        const theta = golden * i
+        const x = Math.cos(theta) * radius
+        const z = Math.sin(theta) * radius
+        positions[i * 3] = x
+        positions[i * 3 + 1] = y
+        positions[i * 3 + 2] = z
         this.orbLon[i] = Math.atan2(z, x) / (Math.PI * 2) + 0.5
       }
+      const geometry = new THREE.BufferGeometry()
+      geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
       geometry.setAttribute('aEnergy', new THREE.BufferAttribute(this.orbEnergy, 1))
+      this.orbGeometry = geometry
+      this.object = new THREE.Points(geometry, this.material) as unknown as THREE.Mesh
+    } else {
+      this.object = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), this.material)
     }
+    this.object.frustumCulled = false
+    this.object.renderOrder = 0
   }
 
   get modeId(): ShaderSceneMode {
@@ -283,6 +292,7 @@ export class ShaderScene {
 
   /** Scales the quad to cover the visible stage at its depth. */
   resize(width: number, height: number): void {
+    this.material.uniforms.uPixelRatio.value = Math.min(2, window.devicePixelRatio || 1)
     if (this.mode === 'orb') {
       this.object.scale.setScalar(Math.max(0.6, Math.min(1.6, height / 2.2)))
       this.material.uniforms.uAspect.value = width / Math.max(0.001, height)
