@@ -1,0 +1,242 @@
+[
+  {
+    "style": "circlebars",
+    "size": "1920x1080",
+    "frames": 40,
+    "avgMs": 0.46,
+    "p95Ms": 0.8,
+    "minMs": 0.2,
+    "maxMs": 0.9,
+    "fps": 2162.2
+  },
+  {
+    "style": "bars",
+    "size": "1920x1080",
+    "frames": 40,
+    "avgMs": 0.4,
+    "p95Ms": 0.7,
+    "minMs": 0.2,
+    "maxMs": 0.7,
+    "fps": 2515.7
+  },
+  {
+    "style": "dots",
+    "size": "1920x1080",
+    "frames": 40,
+    "avgMs": 0.33,
+    "p95Ms": 0.6,
+    "minMs": 0.1,
+    "maxMs": 0.7,
+    "fps": 3007.5
+  },
+  {
+    "style": "waveform",
+    "size": "1920x1080",
+    "frames": 40,
+    "avgMs": 0.29,
+    "p95Ms": 0.5,
+    "minMs": 0.2,
+    "maxMs": 0.6,
+    "fps": 3389.8
+  },
+  {
+    "style": "mirror",
+    "size": "1920x1080",
+    "frames": 40,
+    "avgMs": 0.26,
+    "p95Ms": 0.4,
+    "minMs": 0.1,
+    "maxMs": 0.4,
+    "fps": 3773.6
+  },
+  {
+    "style": "tunnel",
+    "size": "1920x1080",
+    "frames": 40,
+    "avgMs": 0.39,
+    "p95Ms": 0.7,
+    "minMs": 0.2,
+    "maxMs": 1.3,
+    "fps": 2531.6
+  },
+  {
+    "style": "orbit",
+    "size": "1920x1080",
+    "frames": 40,
+    "avgMs": 0.22,
+    "p95Ms": 0.5,
+    "minMs": 0,
+    "maxMs": 0.5,
+    "fps": 4494.4
+  },
+  {
+    "style": "pulse",
+    "size": "1920x1080",
+    "frames": 40,
+    "avgMs": 0.29,
+    "p95Ms": 0.4,
+    "minMs": 0.1,
+    "maxMs": 0.4,
+    "fps": 3508.8
+  },
+  {
+    "style": "grid",
+    "size": "1920x1080",
+    "frames": 40,
+    "avgMs": 0.23,
+    "p95Ms": 0.4,
+    "minMs": 0.1,
+    "maxMs": 0.4,
+    "fps": 4347.8
+  },
+  {
+    "style": "polar",
+    "size": "1920x1080",
+    "frames": 40,
+    "avgMs": 0.27,
+    "p95Ms": 0.5,
+    "minMs": 0.1,
+    "maxMs": 0.5,
+    "fps": 3703.7
+  },
+  {
+    "style": "orb",
+    "size": "1920x1080",
+    "frames": 40,
+    "avgMs": 0.65,
+    "p95Ms": 1.1,
+    "minMs": 0.2,
+    "maxMs": 4.8,
+    "fps": 1532.6
+  },
+  {
+    "style": "warp",
+    "size": "1920x1080",
+    "frames": 40,
+    "avgMs": 0.34,
+    "p95Ms": 0.5,
+    "minMs": 0.2,
+    "maxMs": 0.5,
+    "fps": 2941.2
+  },
+  {
+    "style": "circlebars",
+    "size": "3840x2160",
+    "frames": 40,
+    "avgMs": 0.26,
+    "p95Ms": 0.4,
+    "minMs": 0.1,
+    "maxMs": 0.6,
+    "fps": 3883.5
+  },
+  {
+    "style": "bars",
+    "size": "3840x2160",
+    "frames": 40,
+    "avgMs": 0.23,
+    "p95Ms": 0.4,
+    "minMs": 0.1,
+    "maxMs": 0.4,
+    "fps": 4301.1
+  },
+  {
+    "style": "dots",
+    "size": "3840x2160",
+    "frames": 40,
+    "avgMs": 0.18,
+    "p95Ms": 0.3,
+    "minMs": 0,
+    "maxMs": 0.3,
+    "fps": 5633.8
+  },
+  {
+    "style": "waveform",
+    "size": "3840x2160",
+    "frames": 40,
+    "avgMs": 0.2,
+    "p95Ms": 0.3,
+    "minMs": 0.1,
+    "maxMs": 0.9,
+    "fps": 5063.3
+  },
+  {
+    "style": "mirror",
+    "size": "3840x2160",
+    "frames": 40,
+    "avgMs": 0.22,
+    "p95Ms": 0.4,
+    "minMs": 0.1,
+    "maxMs": 0.4,
+    "fps": 4651.2
+  },
+  {
+    "style": "tunnel",
+    "size": "3840x2160",
+    "frames": 40,
+    "avgMs": 0.18,
+    "p95Ms": 0.4,
+    "minMs": 0.1,
+    "maxMs": 0.6,
+    "fps": 5479.5
+  },
+  {
+    "style": "orbit",
+    "size": "3840x2160",
+    "frames": 40,
+    "avgMs": 0.25,
+    "p95Ms": 0.4,
+    "minMs": 0.1,
+    "maxMs": 0.4,
+    "fps": 4000
+  },
+  {
+    "style": "pulse",
+    "size": "3840x2160",
+    "frames": 40,
+    "avgMs": 0.15,
+    "p95Ms": 0.3,
+    "minMs": 0,
+    "maxMs": 0.4,
+    "fps": 6896.6
+  },
+  {
+    "style": "grid",
+    "size": "3840x2160",
+    "frames": 40,
+    "avgMs": 0.17,
+    "p95Ms": 0.3,
+    "minMs": 0,
+    "maxMs": 0.3,
+    "fps": 5882.4
+  },
+  {
+    "style": "polar",
+    "size": "3840x2160",
+    "frames": 40,
+    "avgMs": 0.17,
+    "p95Ms": 0.3,
+    "minMs": 0,
+    "maxMs": 0.4,
+    "fps": 5797.1
+  },
+  {
+    "style": "orb",
+    "size": "3840x2160",
+    "frames": 40,
+    "avgMs": 0.24,
+    "p95Ms": 0.4,
+    "minMs": 0.1,
+    "maxMs": 0.4,
+    "fps": 4255.3
+  },
+  {
+    "style": "warp",
+    "size": "3840x2160",
+    "frames": 40,
+    "avgMs": 0.15,
+    "p95Ms": 0.3,
+    "minMs": 0.1,
+    "maxMs": 0.3,
+    "fps": 6451.6
+  }
+]

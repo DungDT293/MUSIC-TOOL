@@ -1712,3 +1712,10 @@ Cross-session changelog. **Newest entries on top.** Every feature update or bug 
 - suggestBitrate baseline lowered: 8 Mbps at 1080p (was 10), 12 at 1440p, 22 at 4K, 4.5 at 720p. Export UI exposes tiers high/balanced/light (1.0 / 0.8 / 0.55) plus an HEVC option that disables itself when VideoEncoder.isConfigSupported says no.
 - Verified: WebCodecs HEVC -> Annex-B .265 -> ffmpeg -c:v copy -tag:v hvc1 produces a decodable bt709 MP4 (scripts/viz-harness/hevc-entry.ts + integration test "muxes an HEVC bitstream").
 - Why: H.264 10.2 Mbps exports were ~40% larger than CapCut's HEVC 7.2 Mbps for the same look; HEVC + tier control cuts upload size without touching the render timeline.
+
+## 2026-11-06 — Sóng nhạc: 4K export fix + throughput numbers
+
+- H.264/HEVC codec strings were pinned to Level 4.0, so 1440p and 4K exports failed with "no supported config". rameEncoder.ts now picks the level from the pixel count (4.0 / 5.0 / 5.1-5.2, HEVC L120/L123/L150).
+- Measured through the real app (WebCodecs + mux, hardware GL): 1080p30 = 122 fps render+encode (300 frames in 2.45 s), 1440p30 = 69 fps, 4K30 (3840x2160 H.264 High L5.1) = 44 fps. A 1-hour mix exports in roughly 15 min at 1080p and 41 min at 4K.
+- Added 4K to the export resolution list.
+- Benchmark tooling: window.benchViz in the harness (render cost per style) and scripts/bench-visualizer.cjs (Electron, hardware GL).

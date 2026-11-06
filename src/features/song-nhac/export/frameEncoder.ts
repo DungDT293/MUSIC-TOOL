@@ -11,11 +11,33 @@ export interface FrameEncoderOptions {
   onChunk: (chunk: Uint8Array) => void
 }
 
-const CODEC_CANDIDATES: Record<FrameCodec, string[]> = {
-  // High 4.0 first, then Main, then Baseline for old GPUs.
-  h264: ['avc1.640028', 'avc1.4d4028', 'avc1.42e01f', 'avc1.42c01f'],
-  // Main profile, level 4.0 / 4.1 — enough for 1080p30 and 1440p30.
-  hevc: ['hvc1.1.6.L120.90', 'hvc1.1.6.L123.B0', 'hev1.1.6.L120.90'],
+/**
+ * H.264 levels cap resolution: a Level 4.0 stream cannot carry 1440p or 4K, and
+ * Chromium rejects the config instead of silently encoding. Pick the level from the
+ * pixel count so 1440p/4K do not fail with "unsupported".
+ */
+function h264Candidates(width: number, height: number): string[] {
+  const pixels = width * height
+  if (pixels > 2560 * 1440) {
+    // 4K: High 5.2, High 5.1, High 5.0 (Turing+ and most software encoders take 5.1).
+    return ['avc1.640034', 'avc1.640033', 'avc1.640032']
+  }
+  if (pixels > 1920 * 1088) {
+    // 1440p: High 5.0, then Main 4.2 as a fallback.
+    return ['avc1.640032', 'avc1.64002a', 'avc1.4d4028']
+  }
+  return ['avc1.640028', 'avc1.4d4028', 'avc1.42e01f', 'avc1.42c01f']
+}
+
+function hevcCandidates(width: number, height: number): string[] {
+  const pixels = width * height
+  if (pixels > 2560 * 1440) return ['hvc1.1.6.L150.90', 'hvc1.1.6.L153.B0', 'hev1.1.6.L150.90']
+  if (pixels > 1920 * 1088) return ['hvc1.1.6.L123.B0', 'hvc1.1.6.L120.90']
+  return ['hvc1.1.6.L120.90', 'hvc1.1.6.L123.B0', 'hev1.1.6.L120.90']
+}
+
+function candidatesFor(codec: FrameCodec, width: number, height: number): string[] {
+  return codec === 'hevc' ? hevcCandidates(width, height) : h264Candidates(width, height)
 }
 
 interface Attempt {
@@ -51,7 +73,7 @@ export class FrameEncoder {
   /** Probes one configuration without creating an encoder. */
   static async probe(codec: FrameCodec, width: number, height: number, fps: number, bitrate: number): Promise<boolean> {
     if (!FrameEncoder.isSupported()) return false
-    for (const candidate of CODEC_CANDIDATES[codec]) {
+    for (const candidate of candidatesFor(codec, width, height)) {
       try {
         const support = await VideoEncoder.isConfigSupported({ codec: candidate, width, height, framerate: fps, bitrate })
         if (support.supported) return true
@@ -87,7 +109,7 @@ export class FrameEncoder {
     ]
 
     for (const flavour of order) {
-      for (const candidate of CODEC_CANDIDATES[flavour]) {
+      for (const candidate of candidatesFor(flavour, width, height)) {
         for (const variant of variants) {
           const config = {
             codec: candidate,

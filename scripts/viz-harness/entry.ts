@@ -141,3 +141,73 @@ function syntheticSpectrum(bins: number, time: number): Uint8Array {
   ;(window as unknown as Record<string, unknown>).__engine = engine
   return true
 }
+
+/**
+ * Renders N frames with the engine and reports the cost per frame.
+ * Used with Electron (hardware GL) so the numbers reflect the real app.
+ */
+;(window as unknown as Record<string, unknown>).benchViz = async (options: HarnessOptions & { frames?: number } = {}) => {
+  const width = options.width ?? 1920
+  const height = options.height ?? 1080
+  const frames = options.frames ?? 60
+  const canvas = document.getElementById('stage') as HTMLCanvasElement
+  canvas.width = width
+  canvas.height = height
+
+  const engine = new AveeVisualizerEngine(canvas, {
+    theme: (options.theme ?? 'cyberpunk') as never,
+    quality: options.quality ?? 'balanced',
+    intensity: 1,
+    seed: 93,
+    logoUrl: makeBrightLogoDataUrl(),
+  })
+  const viz = createVisualizerLayer()
+  viz.waveStyle = options.waveStyle ?? 'circlebars'
+  viz.colorMode = 'gradient'
+  engine.setLayers([viz, createTextLayer('Bench')])
+
+  const context = (engine as unknown as { renderer?: { getContext?: () => WebGLRenderingContext } }).renderer?.getContext?.()
+  const samples: number[] = []
+  // Warm up: the first frames compile shaders and allocate bloom buffers, which would
+  // otherwise dominate the average.
+  for (let i = 0; i < 10; i += 1) {
+    engine.render({
+      timeSec: 0,
+      frequencyData: syntheticSpectrum(128, 0),
+      waveformData: syntheticWaveform(0),
+      bass: 0.5, mid: 0.4, treble: 0.3, rms: 0.4, beat: 0.4,
+    })
+  }
+  context?.finish()
+  for (let i = 0; i < frames; i += 1) {
+    const time = i / 30
+    const frame = {
+      timeSec: time,
+      frequencyData: syntheticSpectrum(options.bins ?? 128, time),
+      waveformData: syntheticWaveform(time),
+      bass: 0.6,
+      mid: 0.4,
+      treble: 0.3,
+      rms: 0.4,
+      beat: 0.5,
+    }
+    const start = performance.now()
+    engine.render(frame)
+    context?.finish()
+    samples.push(performance.now() - start)
+  }
+  engine.dispose()
+
+  const sorted = [...samples].sort((a, b) => a - b)
+  const average = samples.reduce((sum, value) => sum + value, 0) / Math.max(1, samples.length)
+  return {
+    style: options.waveStyle ?? 'circlebars',
+    size: `${width}x${height}`,
+    frames,
+    avgMs: Number(average.toFixed(2)),
+    p95Ms: Number((sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))] ?? 0).toFixed(2)),
+    minMs: Number((sorted[0] ?? 0).toFixed(2)),
+    maxMs: Number((sorted[sorted.length - 1] ?? 0).toFixed(2)),
+    fps: Number((1000 / Math.max(0.01, average)).toFixed(1)),
+  }
+}

@@ -1042,6 +1042,7 @@ export default function SongNhacPage() {
                 <option value="1280x720">720p</option>
                 <option value="1920x1080">1080p</option>
                 <option value="2560x1440">1440p</option>
+                <option value="3840x2160">4K</option>
               </select>
             </label>
             <label style={{ fontSize: 11, color: '#94a3b8' }}>
