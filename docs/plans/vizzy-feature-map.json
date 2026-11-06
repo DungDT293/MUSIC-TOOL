@@ -1,0 +1,342 @@
+{
+  "capturedAt": "2026-11-06T08:43:02.669Z",
+  "url": "https://vizzy.io/editor?project=P50QtonsBCSY1eo76ZXVd",
+  "panels": {
+    "Composition": {
+      "controls": [
+        "Hide shy layers",
+        "Open render settings",
+        "Audio processing settings",
+        "Clear all objects",
+        "Add global effect",
+        "Add new layer",
+        "Add effect",
+        "Add item",
+        "Add automation",
+        "Hide keyframes",
+        "00:00.00/03:04.32"
+      ],
+      "sections": [
+        "Composition",
+        "Visualizer",
+        "Particles Glow",
+        "Particles",
+        "Background Layer",
+        "Image",
+        "Video",
+        "Tabs",
+        "Zoom: 1",
+        "00:00.00",
+        "03:04.32"
+      ]
+    },
+    "Analyzers": {
+      "controls": [
+        "Add audio analyzer",
+        "Don't show info text again",
+        "Rename",
+        "Delete",
+        "Hide keyframes",
+        "00:00.00/03:04.32"
+      ],
+      "sections": [
+        "Audio Analyzers",
+        "Default",
+        "Image",
+        "Particles",
+        "Audio Impact",
+        "Green",
+        "Layer 1 - Visualizer",
+        "Analyzer (2)",
+        "Layer 2 - Visualizer",
+        "Blue",
+        "Layer 3 - Visualizer",
+        "Pink",
+        "Layer 4 - Visualizer",
+        "Red",
+        "Layer 5 - Visualizer",
+        "Analyzer (1)",
+        "Layer 6 - Visualizer",
+        "Yellow",
+        "Layer 7 - Visualizer",
+        "White / particles",
+        "Layer 8 - Visualizer",
+        "Tabs",
+        "Zoom: 1",
+        "00:00.00",
+        "03:04.32",
+        "Analyzers"
+      ]
+    },
+    "Effects": {
+      "controls": [
+        "Show connections",
+        "Add effect",
+        "Delete",
+        "Rename",
+        "Hide keyframes",
+        "00:00.00/03:04.32"
+      ],
+      "sections": [
+        "Effects",
+        "Blending",
+        "Two pass blur",
+        "Global alpha",
+        "FXAA",
+        "Template Scale",
+        "Color Tint",
+        "Mirror",
+        "Camera Shake",
+        "Tabs",
+        "Zoom: 1",
+        "00:00.00",
+        "03:04.32"
+      ]
+    },
+    "Automations": {
+      "controls": [
+        "Add folder",
+        "Add automation",
+        "Rename",
+        "Disable",
+        "Delete",
+        "Hide keyframes",
+        "00:00.00/03:04.32"
+      ],
+      "sections": [
+        "Automations",
+        "Default automations",
+        "Amount",
+        "Amplitude X, Amplitude Y",
+        "Scale multiplier",
+        "Front limit",
+        "Tabs",
+        "Zoom: 1",
+        "00:00.00",
+        "03:04.32"
+      ]
+    },
+    "Media": {
+      "controls": [
+        "Close",
+        "Show your uploads",
+        "Stock",
+        "Sign in",
+        "Hide keyframes",
+        "00:00.00/03:04.32"
+      ],
+      "sections": [
+        "Uploads",
+        "Stock",
+        "Audio",
+        "Images",
+        "Videos",
+        "Sign in",
+        "Tabs",
+        "Zoom: 1",
+        "00:00.00",
+        "03:04.32",
+        "Media"
+      ]
+    },
+    "Projects": {
+      "controls": [
+        "Sign in",
+        "Explore creations",
+        "Hide keyframes",
+        "00:00.00/03:04.32"
+      ],
+      "sections": [
+        "Project settings",
+        "Project history",
+        "Your projects",
+        "Sign in",
+        "Explore creations",
+        "Tabs",
+        "Zoom: 1",
+        "00:00.00",
+        "03:04.32",
+        "Projects"
+      ]
+    },
+    "Lyrics": {
+      "controls": [
+        "Discard everything",
+        "Key hold mode: Hold 'A' to sync line duration (Press to start, Release to end)",
+        "Search ready-made lyrics using LRCLIB",
+        "Use LRCLIB to search for lyrics",
+        "Split selected text into different rows",
+        "Start map",
+        "Join selected text into same row",
+        "Hide keyframes",
+        "00:00.00/03:04.32"
+      ],
+      "sections": [
+        "Input lyrics",
+        "Start typing or paste your lyrics here",
+        "Use LRCLIB to search for lyrics",
+        "Tabs",
+        "Zoom: 1",
+        "00:00.00",
+        "03:04.32",
+        "Lyrics"
+      ]
+    }
+  },
+  "menus": {
+    "File": [
+      "Choose preset",
+      "Add automation",
+      "Enable",
+      "Disable",
+      "Set background",
+      "Duplicate",
+      "Delete",
+      "Remove",
+      "Reset",
+      "Save preview as image",
+      "Save as this preset",
+      "Open external preview",
+      "Edit image",
+      "Export",
+      "New Project",
+      "Save",
+      "Save As NewCtrl+",
+      "Close Editor"
+    ],
+    "Edit": [
+      "Choose preset",
+      "Add automation",
+      "Enable",
+      "Disable",
+      "Set background",
+      "Duplicate",
+      "Delete",
+      "Remove",
+      "Reset",
+      "Save preview as image",
+      "Save as this preset",
+      "Open external preview",
+      "Edit image"
+    ],
+    "Project": [
+      "Choose preset",
+      "Add automation",
+      "Enable",
+      "Disable",
+      "Set background",
+      "Duplicate",
+      "Delete",
+      "Remove",
+      "Reset",
+      "Save preview as image",
+      "Save as this preset",
+      "Explore creations",
+      "Open external preview",
+      "Edit image",
+      "Rename project",
+      "Unpublish from community",
+      "Update project thumbnail",
+      "Set custom resolution",
+      "Organize track positions"
+    ],
+    "View": [
+      "Choose preset",
+      "Add automation",
+      "Enable",
+      "Disable",
+      "Set background",
+      "Duplicate",
+      "Delete",
+      "Remove",
+      "Reset",
+      "Save preview as image",
+      "Save as this preset",
+      "Open external preview",
+      "Edit image"
+    ],
+    "Help": [
+      "Choose preset",
+      "Add automation",
+      "Enable",
+      "Disable",
+      "Set background",
+      "Duplicate",
+      "Delete",
+      "Remove",
+      "Reset",
+      "Save preview as image",
+      "Save as this preset",
+      "Show project information",
+      "Open external preview",
+      "Edit image",
+      "Show system information",
+      "Join our Discord",
+      "Frequently asked questions",
+      "Launch intro tutorial",
+      "Export project as JSON",
+      "Export current log",
+      "Export last log",
+      "Show changelog"
+    ]
+  },
+  "presets": [
+    "presets%2Fspectrum_preset%3ACfKwtDM1TvfNNo0v2UcYP",
+    "presets%2Fspectrum_preset%3AMJ9QyNICe1Pn7ffouOBIL",
+    "presets%2Fspectrum_preset%3AMpBiDfJ_oPeFKyzBclQdU",
+    "presets%2Fspectrum_preset%3AcJuzRXYOYSBflpC4IJaLu",
+    "presets%2Fspectrum_preset%3ASTYMVhSQ7fWhx8uCzbwfp",
+    "presets%2Fspectrum_preset%3Aikh7eio3U7LYEEVYV9GMC",
+    "presets%2Fspectrum_preset%3A5OiNjI_C7XgpkJDXH1QXu",
+    "presets%2Fspectrum_preset%3AvBur4jVbPG6-h0FyjCs0-",
+    "presets%2Fspectrum_preset%3AzyBozgbIt91dw-wx90kRP",
+    "presets%2Fspectrum_preset%3AY7YBz4NxCr3QDlGAY0Sqd",
+    "presets%2Fspectrum_preset%3A0XRHfD59fAMbYktRQH0I8",
+    "presets%2Fspectrum_preset%3A8b9z9U5CMF55coBDjodQh",
+    "presets%2Fspectrum_preset%3AvvHjpPLOw6fdjzvXIStBI",
+    "presets%2Fspectrum_preset%3AfDC3UhZ4CNg3QWKXze2KO",
+    "presets%2Fspectrum_preset%3A6rIMecueuMlF4hB5V_Nq-",
+    "presets%2Fspectrum_preset%3AsJ8I2_Kml1DkHQJ_NfElR",
+    "presets%2Fspectrum_preset%3AS8NqSmD-vYUD3Fxt0vav5",
+    "presets%2Fspectrum_preset%3AOBS6MY8pNg3i_LqgGjAC-",
+    "presets%2Fspectrum_preset%3AUKEy2TmOrXPeuSg_qTEHb",
+    "presets%2Fspectrum_preset%3AAVktxFneFkWJXSJxT7MZh",
+    "presets%2Fspectrum_preset%3AjtZyO_j1dj0drQCa9P0Up",
+    "presets%2Fspectrum_preset%3Ac2-ANxQHpDG8zAjggKa7j",
+    "presets%2Fspectrum_preset%3ADSYW080ZSmuHrhklgoeVG",
+    "presets%2Fspectrum_preset%3A8e6rolX0NvVRdigZgX_ZE",
+    "presets%2Fspectrum_preset%3AecQZiOFVgeZYNszy3FBMj",
+    "presets%2Fspectrum_preset%3AkMlfhPr-jSO9-r828lecN",
+    "presets%2Fspectrum_preset%3A3jct-djvc24JjI-cgV-gL",
+    "presets%2Fspectrum_preset%3AtcORo9-IWJZxuy6r1hB-x",
+    "presets%2Fspectrum_preset%3AXpYNb5lmaBbjMLAi2OBP8",
+    "presets%2Fspectrum_preset%3ABetFQHB5XxpR88-3AqN7s",
+    "presets%2Fspectrum_preset%3AIOaAlclI-92pExIX38JiI",
+    "presets%2Fspectrum_preset%3AmDiz9TZPDKyRfXqGaQ_sO"
+  ],
+  "inspector": [
+    "Preset",
+    "Spectrum layers",
+    "General",
+    "Positioning & Size",
+    "Basics"
+  ],
+  "timeline": [
+    {
+      "kind": "button",
+      "label": "Zoom in track"
+    },
+    {
+      "kind": "button",
+      "label": "Hide keyframes"
+    },
+    {
+      "kind": "button",
+      "label": "00:00.00/03:04.32"
+    },
+    {
+      "kind": "button",
+      "label": "Upload audio or right click to select from default"
+    }
+  ]
+}
