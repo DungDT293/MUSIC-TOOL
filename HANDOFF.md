@@ -1,5 +1,37 @@
 # HANDOFF
 
+## 2026-11-06 — Sóng nhạc: engine Three.js mới + xuất video theo từng frame
+
+- Bối cảnh:
+  - Engine Avee cũ chỉ là box đơn sắc, không hậu kỳ; bản xuất video lại dùng filter `showwaves` của FFmpeg nên **video thành phẩm khác hẳn preview**.
+  - Preview lấy dữ liệu từ `AnalyserNode` realtime, không thể tái lập từng frame khi xuất.
+
+- Thay đổi:
+  1. `src/features/song-nhac/three/AveeVisualizerEngine.ts` (viết lại):
+     - UnrealBloom + ACES tone mapping; nền shader gradient đập theo bass.
+     - `InstancedMesh` thanh phổ (96/160/224 theo quality) + vòng echo additive lệch nửa bước.
+     - Hạt dùng hash-seed, vị trí là hàm thuần của thời gian → render lại cho ra đúng frame cũ.
+     - 6 theme, `render(frame)` tất định, `dispose()` dọn sạch.
+  2. `src/features/song-nhac/export/`:
+     - `spectrumAnalyzer.ts`: FFT radix-2, bin log, beat theo onset — biến AudioBuffer thành mảng frame tất định.
+     - `frameEncoder.ts`: WebCodecs H.264 Annex-B (High profile), nén một lần duy nhất.
+     - `renderSongNhacVideo.ts`: vòng render + encode, có backpressure và `AbortSignal`.
+     - `exportSongNhacFrames.ts`: decode audio → analyze → render → stream chunk qua IPC → mux.
+  3. `electron/handlers/songNhacHandlers.ts` + `preload.ts` + `shared/songNhacChannels.ts`:
+     - Thêm `framesBegin / chunk / flush / end / cancel`; main chỉ ghi `.h264` rồi mux `-c:v copy`.
+     - Sửa whitelist style từng chặn `avee-circle` (nguyên nhân nút xuất báo lỗi).
+  4. `src/pages/Music/SongNhacPage.tsx`: style Avee đi qua luồng frame; nút Hủy abort render rồi `framesCancel`.
+  5. `scripts/viz-harness/`: bundle esbuild + Playwright screenshot/export test để kiểm tra hình và luồng xuất mà không cần mở app.
+
+- Kiểm chứng:
+  - Headless: 120 frame (4s @30fps) → 2.5 MB `.h264` → mux MP4 **H.264 High, 30fps, đủ 120 frame**; frame trích ra đúng hình engine.
+  - `npx electron-vite build` OK; `vitest` **277 pass / 41 file** (thêm 4 test cho FFT).
+
+- Follow-up:
+  - Tốc độ render thật chưa đo trên GPU người dùng; bitrate mặc định 1080p 10 Mbps (1 giờ ≈ 4.5 GB).
+  - Các style canvas 2D vẫn dùng đường FFmpeg cũ.
+  - Chưa có UI chọn độ phân giải/FPS cho Sóng nhạc (đang cố định 1920×1080@30).
+
 ## 2026-11-06 — Sóng nhạc: fallback WebGL, dựng Avee bằng canvas 2D, tách filter builder
 
 - Bối cảnh:

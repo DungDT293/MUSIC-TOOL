@@ -21,6 +21,9 @@ export default function SongNhacPage() {
 
   const aveeEngineRef = useRef<AveeVisualizerEngine | null>(null)
   const webglUnavailableRef = useRef(false)
+  const exportAbortRef = useRef<AbortController | null>(null)
+  const exportRequestIdRef = useRef('')
+  const exportModeRef = useRef<'frames' | 'legacy' | null>(null)
 
   const [audioPath, setAudioPath] = useState('')
   const [logoPath, setLogoPath] = useState('')
@@ -241,42 +244,68 @@ export default function SongNhacPage() {
   const startExport = async () => {
     if (!audioPath || !outputPath || isExporting) return
     const requestId = crypto.randomUUID()
+    exportRequestIdRef.current = requestId
     setIsExporting(true)
     setMessage('Đang xuất MP4…')
+    setProgress(null)
     try {
       // avee-circle renders through the Three.js engine frame by frame, so the exported
       // file matches the preview. The remaining styles still use the FFmpeg filter path.
-      const result = style === 'avee-circle'
-        ? await exportSongNhacFrames({
-            audioPath,
-            outputPath,
-            width: 1920,
-            height: 1080,
-            fps: 30,
-            theme,
-            intensity,
-            quality: 'balanced',
-            onProgress: (percent) => setProgress({
-              requestId,
-              percent,
-              timeSec: 0,
-              totalSec: 0,
-            }),
-          })
-        : await window.api.songNhac.start({
+      if (style === 'avee-circle') {
+        exportModeRef.current = 'frames'
+        const controller = new AbortController()
+        exportAbortRef.current = controller
+        const result = await exportSongNhacFrames({
+          requestId,
+          audioPath,
+          outputPath,
+          width: 1920,
+          height: 1080,
+          fps: 30,
+          theme,
+          intensity,
+          quality: 'balanced',
+          signal: controller.signal,
+          onProgress: (percent, rendered, total) => setProgress({
             requestId,
-            audioPath,
-            outputPath,
-            style,
-            width: 1920,
-            height: 1080,
-            fps: 30,
-          })
-      setMessage(result.success ? `Xuất xong: ${result.outputPath}` : result.error || 'Xuất Song Nhạc thất bại.')
+            percent,
+            timeSec: rendered / 30,
+            totalSec: total / 30,
+          }),
+        })
+        setMessage(result.success ? `Xuất xong: ${result.outputPath}` : result.error || 'Xuất Song Nhạc thất bại.')
+      } else {
+        exportModeRef.current = 'legacy'
+        const result = await window.api.songNhac.start({
+          requestId,
+          audioPath,
+          outputPath,
+          style,
+          width: 1920,
+          height: 1080,
+          fps: 30,
+        })
+        setMessage(result.success ? `Xuất xong: ${result.outputPath}` : result.error || 'Xuất Song Nhạc thất bại.')
+      }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error))
     } finally {
+      exportModeRef.current = null
+      exportAbortRef.current = null
       setIsExporting(false)
+    }
+  }
+
+  const cancelExport = async () => {
+    const requestId = exportRequestIdRef.current
+    if (!requestId) return
+    if (exportModeRef.current === 'frames') {
+      // Abort stops the render loop, then main drops the partial stream and temp file.
+      exportAbortRef.current?.abort()
+      await window.api.songNhac.framesCancel(requestId)
+      setMessage('Đã hủy xuất video.')
+    } else {
+      await window.api.songNhac.cancel(requestId)
     }
   }
 

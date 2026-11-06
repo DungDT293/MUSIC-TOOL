@@ -5,6 +5,8 @@ import { renderSongNhacVideo, suggestBitrate } from './renderSongNhacVideo'
 import type { SongNhacFramesResult } from '../../../../shared/songNhacChannels'
 
 export interface ExportSongNhacFramesOptions {
+  /** Caller-owned id so the UI can cancel the right job. */
+  requestId?: string
   audioPath: string
   outputPath: string
   width: number
@@ -14,7 +16,8 @@ export interface ExportSongNhacFramesOptions {
   intensity: number
   quality: AveeQuality
   seed?: number
-  onProgress?: (percent: number) => void
+  signal?: AbortSignal
+  onProgress?: (percent: number, renderedFrames: number, totalFrames: number) => void
 }
 
 function decodeBase64(base64: string): ArrayBuffer {
@@ -30,7 +33,7 @@ function decodeBase64(base64: string): ArrayBuffer {
  * encoded H.264 to the main process for muxing. What the preview shows is what ships.
  */
 export async function exportSongNhacFrames(options: ExportSongNhacFramesOptions): Promise<SongNhacFramesResult> {
-  const requestId = `songnhac-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+  const requestId = options.requestId?.trim() || `songnhac-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
   const api = window.api.songNhac
 
   try {
@@ -78,10 +81,11 @@ export async function exportSongNhacFrames(options: ExportSongNhacFramesOptions)
         frames,
         fps: options.fps,
         bitrate: suggestBitrate(options.width, options.height, options.fps),
+        signal: options.signal,
         onChunk: (chunk) => queue.push(chunk),
         onProgress: async (rendered, total) => {
           await flushQueue()
-          options.onProgress?.(Math.min(99, Math.round((rendered / total) * 100)))
+          options.onProgress?.(Math.min(99, Math.round((rendered / total) * 100)), rendered, total)
         },
       })
       await flushQueue()
