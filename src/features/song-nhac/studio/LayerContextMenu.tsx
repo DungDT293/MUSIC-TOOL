@@ -83,6 +83,8 @@ export function LayerContextMenu({ menu, onClose, onChoosePreset }: LayerContext
           visible: !(layer as { visible?: boolean }).visible,
         } as never),
     },
+    { label: 'Sao chép', action: () => store.copyLayer(layer.id) },
+    { label: 'Dán', action: () => store.pasteLayers() },
     { label: 'Nhân bản', action: () => store.duplicateLayer(layer.id) },
     { label: 'Đưa lên trên', action: () => store.moveLayerUp(layer.id) },
     { label: 'Đưa xuống dưới', action: () => store.moveLayerDown(layer.id) },

@@ -1515,6 +1515,19 @@ export default function SongNhacPage() {
         store.redo()
         return
       }
+      if (mod && event.key.toLowerCase() === 'c') {
+        if (!store.selectedIds.length) return
+        event.preventDefault()
+        store.copySelectedLayers()
+        setMessage(`Đã sao chép ${store.selectedIds.length} lớp.`)
+        return
+      }
+      if (mod && event.key.toLowerCase() === 'v') {
+        event.preventDefault()
+        store.pasteLayers()
+        setMessage('Đã dán lớp.')
+        return
+      }
       if (mod && event.key.toLowerCase() === 'd') {
         event.preventDefault()
         store.duplicateSelectedLayers()
