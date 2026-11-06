@@ -259,7 +259,11 @@ export function createWindow() {
   })
 
   // Error handling cho webContents
-  mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
+  mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    // -3 = ERR_ABORTED: the navigation was superseded (HMR reload, our own startup
+    // reload, or a redirect). It is not a failure the user needs to see, and acting on
+    // it dropped the error page on top of a perfectly loaded app.
+    if (errorCode === -3 || isMainFrame === false) return
     console.error('[Window] Failed to load:', { errorCode, errorDescription, validatedURL })
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.show()
