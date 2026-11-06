@@ -80,3 +80,6 @@ security/dev_private_key.pem
 scripts/viz-harness/bundle.js
 scripts/viz-harness/*.png
 scripts/viz-harness/export-bundle.js
+
+# Legacy Sóng nh?c studio (reference for the port, not compiled)
+legacy-song-nhac/

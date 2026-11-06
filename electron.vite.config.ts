@@ -42,6 +42,11 @@ export default defineConfig({
     },
     server: {
       port: 5173,
+      watch: {
+        // legacy-song-nhac/ is a read-only reference copy of the old studio; watching it
+        // crashed the dev server with EBUSY on Windows.
+        ignored: ['**/legacy-song-nhac/**'],
+      },
     },
   },
 })

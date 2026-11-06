@@ -380,6 +380,8 @@ export default function SongNhacPage() {
           theme,
           intensity,
           quality: 'balanced',
+          seed: 93,
+          layers,
           signal: controller.signal,
           onProgress: (percent, rendered, total) => setProgress({
             requestId,

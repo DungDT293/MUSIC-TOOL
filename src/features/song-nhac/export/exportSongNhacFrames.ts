@@ -1,5 +1,6 @@
 import type { AveeColorTheme, AveeQuality } from '../three/AveeVisualizerEngine'
 import { AveeVisualizerEngine } from '../three/AveeVisualizerEngine'
+import type { StudioLayer } from '../studio/layerTypes'
 import { analyzeAudioBuffer } from './spectrumAnalyzer'
 import { renderSongNhacVideo, suggestBitrate } from './renderSongNhacVideo'
 import type { SongNhacFramesResult } from '../../../../shared/songNhacChannels'
@@ -16,6 +17,8 @@ export interface ExportSongNhacFramesOptions {
   intensity: number
   quality: AveeQuality
   seed?: number
+  /** Layer stack to render. Without it the exported video loses every image/text layer. */
+  layers?: StudioLayer[]
   signal?: AbortSignal
   onProgress?: (percent: number, renderedFrames: number, totalFrames: number) => void
 }
@@ -65,6 +68,11 @@ export async function exportSongNhacFrames(options: ExportSongNhacFramesOptions)
       quality: options.quality,
       seed: options.seed ?? 93,
     })
+    if (options.layers?.length) {
+      engine.setLayers(options.layers)
+      // Give image layers a moment to decode before the first frame is encoded.
+      await new Promise((resolve) => setTimeout(resolve, 250))
+    }
 
     const queue: Uint8Array[] = []
     const flushQueue = async () => {
