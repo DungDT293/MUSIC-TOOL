@@ -962,6 +962,11 @@ export default function SongNhacPage() {
             >
               Chọn nơi lưu MP4
             </button>
+            {layers.some((layer) => layer.type === 'video' && layer.visible) && (
+              <div style={{ fontSize: 11, color: '#fbbf24', marginTop: 6, lineHeight: 1.4 }}>
+                Lớp video phát theo thời gian thực nên khi xuất, cảnh video có thể lệch vài giây so với preview. Ảnh và chữ thì chính xác tuyệt đối.
+              </div>
+            )}
             <div
               style={{
                 fontSize: 11,
