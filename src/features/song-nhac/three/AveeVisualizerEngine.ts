@@ -993,7 +993,11 @@ export class AveeVisualizerEngine {
     if (layer.type === 'text') {
       return `text:${layer.text}|${layer.fontSize}|${layer.color}|${layer.strokeColor}|${layer.strokeWidth}|${layer.fontWeight}|${layer.italic}|${layer.fontFamily}|${layer.textShadowBlur}|${layer.textShadowColor}|${layer.textShadowOffsetX}|${layer.textShadowOffsetY}|${filterKey}`
     }
-    return `${layer.type}:${layer.src}:${layer.fitMode}|${filterKey}`
+    const plate = layer.plate
+    const plateKey = plate
+      ? `${plate.cornerRadius}|${plate.borderWidth}|${plate.borderColor}|${plate.shadowBlur}|${plate.shadowColor}|${plate.shadowOffsetX}|${plate.shadowOffsetY}`
+      : ''
+    return `${layer.type}:${layer.src}:${layer.fitMode}|${filterKey}|${plateKey}`
   }
 
   private applyVisualizerLayer(layer: StudioLayer, index: number): void {
@@ -1105,6 +1109,16 @@ export class AveeVisualizerEngine {
     )
     node.object.rotation.z = (t.rotation * Math.PI) / 180
     node.object.visible = layer.visible
+    // Anchor decides which point of the plate sits on transform.x/y.
+    const anchor = (layer as { plate?: { anchor?: string } }).plate?.anchor
+    if (anchor && anchor !== 'center') {
+      const ax = anchor.includes('left') ? -0.5 : anchor.includes('right') ? 0.5 : 0
+      const ay = anchor.startsWith('top') ? 0.5 : anchor.startsWith('bottom') ? -0.5 : 0
+      const widthWorld = node.baseWidth * node.depthFactor * Math.abs(t.scaleX)
+      const heightWorld = node.baseHeight * node.depthFactor * Math.abs(t.scaleY)
+      node.object.position.x += ax * widthWorld
+      node.object.position.y += ay * heightWorld
+    }
     // Particles use a ShaderMaterial without a `color` uniform exposed as Material.color,
     // so only tint materials that actually have one.
     const material = (node.object as THREE.Mesh).material as THREE.MeshBasicMaterial | THREE.ShaderMaterial | undefined
@@ -1247,14 +1261,60 @@ export class AveeVisualizerEngine {
           }
           // Bake brightness/contrast/saturation/hue/grayscale/sepia/blur into the bitmap:
           // MeshBasicMaterial has no CSS filter, and doing it here keeps the shader cheap.
+          const plate = layer.plate
+          const blur = Math.max(0, plate?.shadowBlur ?? 0)
+          const border = Math.max(0, plate?.borderWidth ?? 0)
+          const pad =
+            Math.ceil(blur + border + Math.abs(plate?.shadowOffsetX ?? 0) + Math.abs(plate?.shadowOffsetY ?? 0)) + 2
+          // Bake the colour filter plus the plate chrome (rounded corners, border, drop
+          // shadow) once, so the material stays a plain textured quad.
           const baked = document.createElement('canvas')
-          baked.width = bitmap.width
-          baked.height = bitmap.height
+          baked.width = bitmap.width + pad * 2
+          baked.height = bitmap.height + pad * 2
           const bakedCtx = baked.getContext('2d')
           let textureSource: HTMLCanvasElement | ImageBitmap = bitmap
           if (bakedCtx) {
+            const radius = Math.min(Math.max(0, plate?.cornerRadius ?? 0), Math.min(bitmap.width, bitmap.height) / 2)
+            const path = new Path2D()
+            const x0 = pad
+            const y0 = pad
+            const w0 = bitmap.width
+            const h0 = bitmap.height
+            path.moveTo(x0 + radius, y0)
+            path.lineTo(x0 + w0 - radius, y0)
+            path.quadraticCurveTo(x0 + w0, y0, x0 + w0, y0 + radius)
+            path.lineTo(x0 + w0, y0 + h0 - radius)
+            path.quadraticCurveTo(x0 + w0, y0 + h0, x0 + w0 - radius, y0 + h0)
+            path.lineTo(x0 + radius, y0 + h0)
+            path.quadraticCurveTo(x0, y0 + h0, x0, y0 + h0 - radius)
+            path.lineTo(x0, y0 + radius)
+            path.quadraticCurveTo(x0, y0, x0 + radius, y0)
+            path.closePath()
+
+            if (blur > 0) {
+              bakedCtx.save()
+              bakedCtx.shadowColor = plate?.shadowColor ?? '#000000'
+              bakedCtx.shadowBlur = blur
+              bakedCtx.shadowOffsetX = plate?.shadowOffsetX ?? 0
+              bakedCtx.shadowOffsetY = plate?.shadowOffsetY ?? 0
+              bakedCtx.fillStyle = '#000000'
+              bakedCtx.fill(path)
+              bakedCtx.restore()
+            }
+
+            bakedCtx.save()
+            bakedCtx.clip(path)
             bakedCtx.filter = buildCssFilter(layer.filter)
-            bakedCtx.drawImage(bitmap, 0, 0)
+            bakedCtx.drawImage(bitmap, x0, y0)
+            bakedCtx.restore()
+
+            if (border > 0) {
+              bakedCtx.save()
+              bakedCtx.lineWidth = border
+              bakedCtx.strokeStyle = plate?.borderColor ?? '#ffffff'
+              bakedCtx.stroke(path)
+              bakedCtx.restore()
+            }
             textureSource = baked
           }
           const texture = new THREE.Texture(textureSource as unknown as HTMLCanvasElement)

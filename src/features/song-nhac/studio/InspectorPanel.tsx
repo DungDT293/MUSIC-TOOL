@@ -353,6 +353,112 @@ export function InspectorPanel() {
           </Section>
         )}
 
+        {(isImageLayer(layer) || isVideoLayer(layer)) && (
+          <Section title="Khung & viền">
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={labelStyle}>Blend</span>
+              <select
+                style={inputStyle}
+                value={layer.plate.blend}
+                onChange={(event) => updateLayerWithHistory(layer.id, { plate: { ...layer.plate, blend: event.target.value as typeof layer.plate.blend } })}
+              >
+                <option value="normal">Normal</option>
+                <option value="additive">Additive</option>
+                <option value="multiply">Multiply</option>
+                <option value="screen">Screen</option>
+              </select>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={labelStyle}>Neo</span>
+              <select
+                style={inputStyle}
+                value={layer.plate.anchor}
+                onChange={(event) => updateLayerWithHistory(layer.id, { plate: { ...layer.plate, anchor: event.target.value as typeof layer.plate.anchor } })}
+              >
+                <option value="center">Giữa</option>
+                <option value="top-left">Trên trái</option>
+                <option value="top">Trên</option>
+                <option value="top-right">Trên phải</option>
+                <option value="left">Trái</option>
+                <option value="right">Phải</option>
+                <option value="bottom-left">Dưới trái</option>
+                <option value="bottom">Dưới</option>
+                <option value="bottom-right">Dưới phải</option>
+              </select>
+            </div>
+            <SliderRow
+              label="Bo góc"
+              value={layer.plate.cornerRadius}
+              min={0}
+              max={300}
+              step={2}
+              format={(value) => `${Math.round(value)}px`}
+              onChange={(cornerRadius) => updateLayer(layer.id, { plate: { ...layer.plate, cornerRadius } })}
+              onCommit={commit}
+            />
+            <SliderRow
+              label="Viền"
+              value={layer.plate.borderWidth}
+              min={0}
+              max={40}
+              step={1}
+              format={(value) => `${Math.round(value)}px`}
+              onChange={(borderWidth) => updateLayer(layer.id, { plate: { ...layer.plate, borderWidth } })}
+              onCommit={commit}
+            />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={labelStyle}>Màu viền</span>
+              <input
+                type="color"
+                value={layer.plate.borderColor}
+                onChange={(event) => updateLayer(layer.id, { plate: { ...layer.plate, borderColor: event.target.value } })}
+                onBlur={commit}
+                style={{ flex: 1, height: 26, background: 'transparent', border: '1px solid #334155', borderRadius: 6 }}
+              />
+            </div>
+            <SliderRow
+              label="Bóng đổ"
+              value={layer.plate.shadowBlur}
+              min={0}
+              max={80}
+              step={1}
+              format={(value) => `${Math.round(value)}px`}
+              onChange={(shadowBlur) => updateLayer(layer.id, { plate: { ...layer.plate, shadowBlur } })}
+              onCommit={commit}
+            />
+            <SliderRow
+              label="Lệch X"
+              value={layer.plate.shadowOffsetX}
+              min={-40}
+              max={40}
+              step={1}
+              format={(value) => `${Math.round(value)}px`}
+              onChange={(shadowOffsetX) => updateLayer(layer.id, { plate: { ...layer.plate, shadowOffsetX } })}
+              onCommit={commit}
+            />
+            <SliderRow
+              label="Lệch Y"
+              value={layer.plate.shadowOffsetY}
+              min={-40}
+              max={40}
+              step={1}
+              format={(value) => `${Math.round(value)}px`}
+              onChange={(shadowOffsetY) => updateLayer(layer.id, { plate: { ...layer.plate, shadowOffsetY } })}
+              onCommit={commit}
+            />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={labelStyle}>Màu bóng</span>
+              <input
+                type="color"
+                value={layer.plate.shadowColor}
+                onChange={(event) => updateLayer(layer.id, { plate: { ...layer.plate, shadowColor: event.target.value } })}
+                onBlur={commit}
+                style={{ flex: 1, height: 26, background: 'transparent', border: '1px solid #334155', borderRadius: 6 }}
+              />
+            </div>
+          </Section>
+        )}
+
         {layer.type === 'particles' && (
           <Section title="Hạt (Particles)">
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>

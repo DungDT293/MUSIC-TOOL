@@ -63,6 +63,35 @@ export interface StudioLayerBase {
   parentId?: string
 }
 
+export type StudioBlendMode = 'normal' | 'additive' | 'multiply' | 'screen'
+export type StudioAnchor = 'center' | 'top-left' | 'top' | 'top-right' | 'left' | 'right' | 'bottom-left' | 'bottom' | 'bottom-right'
+
+/** Blend, frame and anchor settings shared by image and video plates. */
+export interface StudioPlateStyle {
+  blend: StudioBlendMode
+  anchor: StudioAnchor
+  /** Rounded corners in source pixels (0 = square). */
+  cornerRadius: number
+  borderWidth: number
+  borderColor: string
+  shadowBlur: number
+  shadowColor: string
+  shadowOffsetX: number
+  shadowOffsetY: number
+}
+
+export const DEFAULT_PLATE_STYLE: StudioPlateStyle = {
+  blend: 'normal',
+  anchor: 'center',
+  cornerRadius: 0,
+  borderWidth: 0,
+  borderColor: '#ffffff',
+  shadowBlur: 0,
+  shadowColor: '#000000',
+  shadowOffsetX: 0,
+  shadowOffsetY: 0,
+}
+
 export interface ImageLayer extends StudioLayerBase {
   type: 'image'
   src: string
@@ -73,6 +102,7 @@ export interface ImageLayer extends StudioLayerBase {
   /** Scale the plate with the kick drum. */
   beatPulse: boolean
   beatIntensity: number
+  plate: StudioPlateStyle
 }
 
 export interface VideoLayer extends StudioLayerBase {
@@ -84,6 +114,7 @@ export interface VideoLayer extends StudioLayerBase {
   muted: boolean
   loop: boolean
   volume: number
+  plate: StudioPlateStyle
 }
 
 export interface TextLayer extends StudioLayerBase {
@@ -275,6 +306,7 @@ export function createImageLayer(src = '', name = 'Ảnh'): ImageLayer {
     waveAroundEnabled: false,
     beatPulse: true,
     beatIntensity: 0.8,
+    plate: { ...DEFAULT_PLATE_STYLE },
   }
 }
 
@@ -287,6 +319,7 @@ export function createVideoLayer(src = '', name = 'Video'): VideoLayer {
     muted: true,
     loop: true,
     volume: 1,
+    plate: { ...DEFAULT_PLATE_STYLE },
   }
 }
 

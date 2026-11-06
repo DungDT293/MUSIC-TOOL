@@ -20,6 +20,7 @@ interface HarnessOptions {
   withLayers?: boolean
   waveStyle?: string
   videoSrc?: string
+  plate?: { cornerRadius?: number; borderWidth?: number; borderColor?: string; shadowBlur?: number; shadowOffsetX?: number; shadowOffsetY?: number; blend?: string; anchor?: string }
   skipImage?: boolean
 }
 
@@ -88,6 +89,9 @@ function syntheticSpectrum(bins: number, time: number): Uint8Array {
     const imageLayer = createImageLayer(makeBrightLogoDataUrl(), 'Anh nen')
     imageLayer.visible = !options.skipImage
     imageLayer.fitMode = 'cover'
+    if (options.plate) {
+      imageLayer.plate = { ...imageLayer.plate, ...options.plate }
+    }
     imageLayer.waveAroundEnabled = options.waveStyle === 'wavearound'
     imageLayer.transform = { ...imageLayer.transform, scaleX: 0.6, scaleY: 0.6 }
 
