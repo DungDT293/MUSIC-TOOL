@@ -405,6 +405,7 @@ export default function SongNhacPage() {
         ;(window as unknown as Record<string, unknown>).__songNhacQueue = useExportQueue
         ;(window as unknown as Record<string, unknown>).__songNhacBatch = enqueueBatchFiles
         ;(window as unknown as Record<string, unknown>).__songNhacHistory = useProjectHistory
+        ;(window as unknown as Record<string, unknown>).__songNhacApplyPreset = (id: string) => applyWavePreset(id)
       }
       aveeEngineRef.current.setLayers(useSongNhacLayerStore.getState().layers)
       aveeEngineRef.current.setSelectedLayer(useSongNhacLayerStore.getState().selectedLayerId)
@@ -768,12 +769,24 @@ export default function SongNhacPage() {
     useSongNhacLayerStore.getState().setCurrentTime(next)
   }
 
-  const applyVisualizerPatch = (patch: Record<string, unknown>) => {
+  /** Visualizers targeted by a preset: the selection when it has any, else the first. */
+  const presetTargets = () => {
     const state = useSongNhacLayerStore.getState()
-    const viz = state.layers.find((layer) => layer.type === 'visualizer')
-    if (!viz) return false
-    state.updateLayerWithHistory(viz.id, patch as never)
-    state.setSelection(viz.id)
+    const selected = state.layers.filter(
+      (layer) => layer.type === 'visualizer' && state.selectedIds.includes(layer.id),
+    )
+    if (selected.length) return selected
+    const first = state.layers.find((layer) => layer.type === 'visualizer')
+    return first ? [first] : []
+  }
+
+  const applyVisualizerPatch = (patch: Record<string, unknown>) => {
+    const targets = presetTargets()
+    if (!targets.length) return false
+    const state = useSongNhacLayerStore.getState()
+    // One history entry for the whole multi-layer apply.
+    state.pushHistorySnapshot(state.layers)
+    for (const target of targets) state.updateLayer(target.id, patch as never)
     return true
   }
 
@@ -805,11 +818,9 @@ export default function SongNhacPage() {
   const applyWavePreset = (presetId: string) => {
     const preset = WAVE_PRESETS.find((item) => item.id === presetId)
     if (!preset) return
-    const state = useSongNhacLayerStore.getState()
-    const viz = state.layers.find((layer) => layer.type === 'visualizer')
-    if (!viz) return
-    state.updateLayerWithHistory(viz.id, preset.visualizer as never)
-    state.setSelection(viz.id)
+    if (!applyVisualizerPatch(preset.visualizer as Record<string, unknown>)) {
+      setMessage('Chưa có lớp sóng để áp preset.')
+    }
   }
 
   const chooseAudio = async () => {

@@ -43,6 +43,7 @@ Mục tiêu: clone toàn bộ chức năng editor Vizzy vào Sóng nhạc. Mỗi
 | Context menu cho clip timeline (bắt đầu/kết thúc tại playhead, phủ toàn bài, xoá khoảng, ẩn, nhân bản, bật/tắt snap) | ✅ |
 | Preset thumbnail render thật (1 engine dùng lại, cache localStorage theo theme) | ✅ |
 | Preset tự tạo (lưu cấu hình sóng hiện tại, đặt tên, áp dụng, xoá) | ✅ |
+| Áp preset cho nhiều lớp sóng cùng lúc (Ctrl/Shift chọn nhiều) | ✅ |
 | Thumbnail render thật cho preset tự tạo | ✅ |
 | Phím tắt editor (Space, ←/→, Ctrl+D, Delete, Ctrl+Z/Y, S, Ctrl+S) | ✅ |
 
