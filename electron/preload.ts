@@ -41,12 +41,15 @@ import {
   SONG_NHAC_FRAMES_END,
   SONG_NHAC_FRAMES_FLUSH,
   SONG_NHAC_WAVEFORM,
+  SONG_NHAC_PROJECT_SAVE,
+  SONG_NHAC_PROJECT_OPEN,
   type SongNhacExportProgress,
   type SongNhacExportRequest,
   type SongNhacExportResult,
   type SongNhacFramesRequest,
   type SongNhacFramesResult,
   type SongNhacWaveformResult,
+  type SongNhacProjectResult,
 } from '../shared/songNhacChannels'
 
 const api: IPCAPI = {
@@ -438,6 +441,10 @@ const api: IPCAPI = {
       ipcRenderer.invoke(SONG_NHAC_FRAMES_CANCEL, requestId) as Promise<{ success: boolean }>,
     waveformImage: (audioPath: string, width?: number, height?: number) =>
       ipcRenderer.invoke(SONG_NHAC_WAVEFORM, { audioPath, width, height }) as Promise<SongNhacWaveformResult>,
+    projectSave: (filePath: string, json: string) =>
+      ipcRenderer.invoke(SONG_NHAC_PROJECT_SAVE, { filePath, json }) as Promise<SongNhacProjectResult>,
+    projectOpen: (filePath: string) =>
+      ipcRenderer.invoke(SONG_NHAC_PROJECT_OPEN, { filePath }) as Promise<SongNhacProjectResult>,
     onProgress: (handler: (progress: SongNhacExportProgress) => void) => {
       const listener = (_event: IpcRendererEvent, progress: SongNhacExportProgress) => handler(progress)
       ipcRenderer.on(SONG_NHAC_EXPORT_PROGRESS, listener)
@@ -454,6 +461,8 @@ const api: IPCAPI = {
     /** Mở dialog lưu video — trả về { canceled, filePath } */
     saveVideoFile: (defaultFileName?: string) =>
       ipcRenderer.invoke('dialog:saveVideoFile', defaultFileName) as Promise<{ canceled: boolean; filePath: string | null }>,
+    saveProjectFile: (defaultFileName?: string) =>
+      ipcRenderer.invoke('dialog:saveProjectFile', defaultFileName) as Promise<{ canceled: boolean; filePath: string | null }>,
   },
   app: {
     getVersion: () => ipcRenderer.invoke('app:getVersion') as Promise<string>,

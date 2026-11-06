@@ -5,6 +5,7 @@ import type {
   SongNhacFramesRequest,
   SongNhacFramesResult,
   SongNhacWaveformResult,
+  SongNhacProjectResult,
 } from '../../shared/songNhacChannels'
 import type {
   FinalExportAudioFailure,
@@ -1008,6 +1009,7 @@ export interface IPCAPI {
   dialog: {
     openFile: (options: { title?: string; filters?: { name: string; extensions: string[] }[]; properties?: ('openFile' | 'multiSelections' | 'openDirectory')[] }) => Promise<{ canceled: boolean; filePaths: string[] }>
     saveVideoFile: (defaultFileName?: string) => Promise<{ canceled: boolean; filePath: string | null }>
+    saveProjectFile: (defaultFileName?: string) => Promise<{ canceled: boolean; filePath: string | null }>
   }
   selectVideoFilesMulti: () => Promise<string[] | null>
   selectManyVideos: () => Promise<string[] | null>
@@ -1179,6 +1181,8 @@ export interface IPCAPI {
     framesEnd: (requestId: string) => Promise<SongNhacFramesResult>
     framesCancel: (requestId: string) => Promise<{ success: boolean }>
     waveformImage: (audioPath: string, width?: number, height?: number) => Promise<SongNhacWaveformResult>
+    projectSave: (filePath: string, json: string) => Promise<SongNhacProjectResult>
+    projectOpen: (filePath: string) => Promise<SongNhacProjectResult>
     onProgress: (handler: (progress: SongNhacExportProgress) => void) => () => void
   }
   app: {

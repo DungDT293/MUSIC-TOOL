@@ -47,11 +47,31 @@ const PREVIEW_SIZES = [
   { label: '4K', width: 3840, height: 2160 },
 ]
 
-const RAIL_ITEMS: Array<{ id: 'composition' | 'presets' | 'effects' | 'analyzer' | 'export'; short: string; hint: string }> = [
+const projectButtonStyle: React.CSSProperties = {
+  padding: '8px 10px',
+  borderRadius: 8,
+  border: '1px solid #334155',
+  background: '#0f172a',
+  color: '#e2e8f0',
+  fontSize: 12,
+  cursor: 'pointer',
+}
+
+const LEFT_TITLES: Record<string, string> = {
+  composition: 'COMPOSITION',
+  presets: 'PRESET SÓNG',
+  effects: 'HIỆU ỨNG',
+  analyzer: 'ANALYZER',
+  project: 'PROJECT',
+  export: 'XUẤT VIDEO',
+}
+
+const RAIL_ITEMS: Array<{ id: 'composition' | 'presets' | 'effects' | 'analyzer' | 'project' | 'export'; short: string; hint: string }> = [
   { id: 'composition', short: 'Lớp', hint: 'Cây lớp của composition' },
   { id: 'presets', short: 'Preset', hint: 'Thư viện preset sóng' },
   { id: 'effects', short: 'Hiệu ứng', hint: 'Hiệu ứng toàn composition' },
   { id: 'analyzer', short: 'Analyzer', hint: 'Dải tần theo từng lớp' },
+  { id: 'project', short: 'Project', hint: 'Lưu / mở project' },
   { id: 'export', short: 'Xuất', hint: 'Cài đặt xuất video' },
 ]
 
@@ -249,7 +269,7 @@ export default function SongNhacPage() {
     useSongNhacLayerStore.getState().endHistoryGesture()
     setSelectionBounds((current) => current)
   }
-  const [leftTab, setLeftTab] = useState<'composition' | 'presets' | 'effects' | 'analyzer' | 'export'>('composition')
+  const [leftTab, setLeftTab] = useState<'composition' | 'presets' | 'effects' | 'analyzer' | 'project' | 'export'>('composition')
   const effects = useCompositionEffects()
   const [rightTab, setRightTab] = useState<'objects' | 'visualizer'>('visualizer')
 
@@ -610,6 +630,106 @@ export default function SongNhacPage() {
     // The preview only renders while audio plays; redraw so a slider change is visible.
     if (!isPlaying) draw()
   }, [effects, isPlaying, draw])
+  interface SongNhacProjectFile {
+    app: 'song-nhac'
+    version: number
+    savedAt: string
+    audioPath: string
+    outputPath: string
+    settings: Record<string, unknown>
+    effects: Record<string, unknown>
+    layers: unknown[]
+  }
+
+  const saveProject = async () => {
+    try {
+      const picked = await window.api.dialog.saveProjectFile(`song-nhac-${new Date().toISOString().slice(0, 10)}.json`)
+      if (picked.canceled || !picked.filePath) return
+      const payload: SongNhacProjectFile = {
+        app: 'song-nhac',
+        version: 2,
+        savedAt: new Date().toISOString(),
+        audioPath,
+        outputPath,
+        settings: {
+          style,
+          theme,
+          intensity,
+          showParticles,
+          showLogo,
+          exportWidth,
+          exportHeight,
+          exportFps,
+          exportCodec,
+          bitrateTier,
+        },
+        effects: {
+          blur: effects.blur,
+          alpha: effects.alpha,
+          tint: effects.tint,
+          tintStrength: effects.tintStrength,
+          shake: effects.shake,
+          mirror: effects.mirror,
+          zoom: effects.zoom,
+        },
+        layers,
+      }
+      const result = await window.api.songNhac.projectSave(picked.filePath, JSON.stringify(payload, null, 2))
+      setMessage(result.success ? `Đã lưu project: ${picked.filePath}` : result.error || 'Lưu project thất bại.')
+    } catch (error) {
+      setMessage(`Lưu project lỗi: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  const openProject = async () => {
+    try {
+      const picked = await window.api.dialog.openFile({
+        title: 'Mở project Sóng nhạc',
+        properties: ['openFile'],
+        filters: [{ name: 'Song Nhac Project', extensions: ['json'] }],
+      })
+      const filePath = picked.filePaths?.[0]
+      if (picked.canceled || !filePath) return
+      const result = await window.api.songNhac.projectOpen(filePath)
+      if (!result.success || !result.data) {
+        setMessage(result.error || 'Mở project thất bại.')
+        return
+      }
+      const data = JSON.parse(result.data) as SongNhacProjectFile
+      if (data.app !== 'song-nhac' || !Array.isArray(data.layers)) {
+        setMessage('File này không phải project Sóng nhạc.')
+        return
+      }
+      useSongNhacLayerStore.getState().applyTemplateLayers(data.layers as never)
+      const settings = data.settings ?? {}
+      if (typeof settings.style === 'string') setStyle(settings.style as SongNhacStyle)
+      if (typeof settings.theme === 'string') setTheme(settings.theme as AveeColorTheme)
+      if (typeof settings.intensity === 'number') setIntensity(settings.intensity)
+      if (typeof settings.showParticles === 'boolean') setShowParticles(settings.showParticles)
+      if (typeof settings.showLogo === 'boolean') setShowLogo(settings.showLogo)
+      if (typeof settings.exportWidth === 'number') setExportWidth(settings.exportWidth)
+      if (typeof settings.exportHeight === 'number') setExportHeight(settings.exportHeight)
+      if (typeof settings.exportFps === 'number') setExportFps(settings.exportFps)
+      if (settings.exportCodec === 'h264' || settings.exportCodec === 'hevc') setExportCodec(settings.exportCodec)
+      if (settings.bitrateTier === 'high' || settings.bitrateTier === 'balanced' || settings.bitrateTier === 'light') {
+        setBitrateTier(settings.bitrateTier)
+      }
+      if (data.effects) useCompositionEffects.setState(data.effects as never)
+      if (data.outputPath) setOutputPath(data.outputPath)
+      if (data.audioPath) {
+        setAudioPath(data.audioPath)
+        const audio = audioRef.current
+        if (audio) {
+          audio.src = localFileUrl(data.audioPath)
+          audio.load()
+        }
+      }
+      setMessage(`Đã mở project: ${filePath}`)
+    } catch (error) {
+      setMessage(`Mở project lỗi: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
   const togglePlay = async () => {
     const audio = audioRef.current
     if (!audio || !audioPath) return
@@ -790,17 +910,25 @@ export default function SongNhacPage() {
 
         <aside style={{ background: '#0b1220', border: '1px solid #1e293b', borderRadius: 10, padding: 10, overflow: 'auto', minHeight: 0 }}>
           <div style={{ fontSize: 11, letterSpacing: 0.6, color: '#64748b', fontWeight: 700, marginBottom: 8 }}>
-            {leftTab === 'composition'
-              ? 'COMPOSITION'
-              : leftTab === 'presets'
-                ? 'PRESET SÓNG'
-                : leftTab === 'effects'
-                  ? 'HIỆU ỨNG'
-                  : leftTab === 'analyzer'
-                    ? 'ANALYZER'
-                  : 'XUẤT VIDEO'}
+            {LEFT_TITLES[leftTab] ?? 'COMPOSITION'}
           </div>
           {leftTab === 'composition' && <LayersPanel />}
+          {leftTab === 'project' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12, color: '#cbd5e1' }}>
+              <div style={{ color: '#94a3b8', lineHeight: 1.5 }}>
+                Lưu toàn bộ lớp, keyframe, hiệu ứng và cài đặt xuất vào một file .json để mở lại sau.
+              </div>
+              <button type="button" onClick={saveProject} style={projectButtonStyle}>
+                Lưu project (.json)
+              </button>
+              <button type="button" onClick={openProject} style={projectButtonStyle}>
+                Mở project (.json)
+              </button>
+              <div style={{ marginTop: 6, fontSize: 11, color: '#64748b' }}>
+                {layers.length} lớp · {tracks.reduce((sum, layer) => sum + (layer.automations ?? []).reduce((count, item) => count + item.keyframes.length, 0), 0)} keyframe
+              </div>
+            </div>
+          )}
           {leftTab === 'analyzer' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12, color: '#cbd5e1' }}>
               {tracks.map((layer) => {

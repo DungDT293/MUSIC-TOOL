@@ -12,6 +12,16 @@ export const SONG_NHAC_FRAMES_CANCEL = 'song-nhac:frames:cancel'
 /** Renders a waveform picture for the editor timeline (ffmpeg showwavespic). */
 export const SONG_NHAC_WAVEFORM = 'song-nhac:waveform'
 
+/** Project files (.json) written and read by the main process. */
+export const SONG_NHAC_PROJECT_SAVE = 'song-nhac:project:save'
+export const SONG_NHAC_PROJECT_OPEN = 'song-nhac:project:open'
+
+export interface SongNhacProjectResult {
+  success: boolean
+  data?: string
+  error?: string
+}
+
 export interface SongNhacWaveformRequest {
   audioPath: string
   width?: number

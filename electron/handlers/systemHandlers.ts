@@ -216,6 +216,18 @@ export function registerSystemHandlers(getMainWindow: () => Electron.BrowserWind
     return { canceled: result.canceled, filePath: result.filePath ?? null }
   })
 
+  // Project file dialog for the Song Nhac editor (.json).
+  ipcMain.handle('dialog:saveProjectFile', async (_event, defaultFileName?: string) => {
+    const result = await dialog.showSaveDialog({
+      title: 'Lưu project Sóng nhạc',
+      defaultPath: defaultFileName || 'song-nhac.json',
+      filters: [
+        { name: 'Song Nhac Project', extensions: ['json'] },
+        { name: 'All Files', extensions: ['*'] },
+      ],
+    })
+    return { canceled: result.canceled, filePath: result.filePath ?? null }
+  })
   ipcMain.handle('dialog:selectVideoFile', async () => {
     const result = await dialog.showOpenDialog({
       properties: ['openFile'],

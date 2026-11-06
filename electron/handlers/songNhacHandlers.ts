@@ -12,6 +12,9 @@ import {
   SONG_NHAC_FRAMES_BEGIN,
   SONG_NHAC_FRAMES_CANCEL,
   SONG_NHAC_WAVEFORM,
+  SONG_NHAC_PROJECT_SAVE,
+  SONG_NHAC_PROJECT_OPEN,
+  type SongNhacProjectResult,
   type SongNhacWaveformRequest,
   type SongNhacWaveformResult,
   SONG_NHAC_FRAMES_CHUNK,
@@ -232,6 +235,36 @@ function registerFrameHandlers(): void {
     }
   })
 
+  ipcMain.handle(SONG_NHAC_PROJECT_SAVE, async (_event, raw: unknown): Promise<SongNhacProjectResult> => {
+    try {
+      const payload = (raw ?? {}) as { filePath?: string; json?: string }
+      const filePath = typeof payload.filePath === 'string' ? payload.filePath.trim() : ''
+      if (!filePath || !isValidAbsolutePath(filePath)) throw new Error('Đường dẫn project không hợp lệ.')
+      if (typeof payload.json !== 'string' || !payload.json.length) throw new Error('Dữ liệu project rỗng.')
+      if (payload.json.length > 40_000_000) throw new Error('Dữ liệu project quá lớn (giới hạn 40MB).')
+      JSON.parse(payload.json)
+      await fs.promises.mkdir(path.dirname(filePath), { recursive: true })
+      await fs.promises.writeFile(filePath, payload.json, 'utf8')
+      return { success: true }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
+
+  ipcMain.handle(SONG_NHAC_PROJECT_OPEN, async (_event, raw: unknown): Promise<SongNhacProjectResult> => {
+    try {
+      const payload = (raw ?? {}) as { filePath?: string }
+      const filePath = typeof payload.filePath === 'string' ? payload.filePath.trim() : ''
+      if (!filePath || !isValidAbsolutePath(filePath)) throw new Error('Đường dẫn project không hợp lệ.')
+      const stat = await fs.promises.stat(filePath)
+      if (stat.size > 40_000_000) throw new Error('File project quá lớn (giới hạn 40MB).')
+      const data = await fs.promises.readFile(filePath, 'utf8')
+      JSON.parse(data)
+      return { success: true, data }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
   ipcMain.handle(SONG_NHAC_FRAMES_BEGIN, async (_event, raw: unknown): Promise<SongNhacFramesResult> => {
     let requestId = ''
     try {
