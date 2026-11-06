@@ -9,6 +9,7 @@ import type { SongNhacAudioFrame } from '../core/types'
 import { SpectrumRing } from './SpectrumRing'
 import { createFxStyle, isFxStyle, type WaveStyleObject } from './waveStyles'
 import { ShaderScene, isShaderScene } from './shaderScene'
+import { DEFAULT_EFFECTS, type CompositionEffects } from '../studio/effectsStore'
 import {
   buildCssFilter,
   hasColorFilter,
@@ -359,6 +360,7 @@ export class AveeVisualizerEngine {
   private contextLost = false
   private lastFrame: SongNhacAudioFrame | null = null
   private lastDelta = 1 / 60
+  private effects: CompositionEffects = { ...DEFAULT_EFFECTS }
   private visualizerSensitivity = 1
   private visualizerSpeed = 1
   private stageWidth = 10
@@ -828,6 +830,11 @@ export class AveeVisualizerEngine {
     this.selectionFrame.visible = false
     this.selectionFrame.renderOrder = 999
     this.visualizerGroup.parent?.add(this.selectionFrame)
+  }
+
+  /** Composition-level effects coming from the Effects panel. */
+  public setEffects(effects: Partial<CompositionEffects>): void {
+    this.effects = { ...this.effects, ...effects }
   }
 
   public setSelectedLayer(id: string | null): void {
@@ -1562,6 +1569,9 @@ export class AveeVisualizerEngine {
     this.currentCameraZ += (targetZ - this.currentCameraZ) * Math.min(1, dt * 10)
     this.camera.position.z = this.currentCameraZ
     this.camera.rotation.z = Math.sin(timeSec * 9) * beat * 0.01 * intensity
+    const shake = this.effects.shake * beat
+    this.camera.position.x = Math.sin(timeSec * 47) * 0.06 * shake
+    this.camera.position.y = Math.cos(timeSec * 41) * 0.06 * shake
 
     this.outerRing.rotation.z = timeSec * this.visualizerSpeed * 0.18
     this.backgroundMaterial.uniforms.uPulse.value = bass * intensity
@@ -1574,6 +1584,12 @@ export class AveeVisualizerEngine {
       this.finishPass.time = timeSec
       // The grade breathes with the kick drum, just enough to feel alive.
       this.finishPass.aberration = 0.0005 + bass * 0.0012 * intensity
+      this.finishPass.blur = this.effects.blur
+      this.finishPass.alpha = this.effects.alpha
+      this.finishPass.tint = this.effects.tint
+      this.finishPass.tintStrength = this.effects.tintStrength
+      this.finishPass.mirror = this.effects.mirror
+      this.finishPass.zoom = this.effects.zoom
     }
 
     // timeRange fade + filter opacity are per-frame values, not layout state.

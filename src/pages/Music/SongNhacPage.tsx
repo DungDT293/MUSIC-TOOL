@@ -10,6 +10,7 @@ import { LayersPanel } from '../../features/song-nhac/studio/LayersPanel'
 import { InspectorPanel } from '../../features/song-nhac/studio/InspectorPanel'
 import { useSongNhacLayerStore } from '../../features/song-nhac/studio/songNhacLayerStore'
 import { WAVE_PRESETS } from '../../features/song-nhac/studio/builtInPresets'
+import { useCompositionEffects } from '../../features/song-nhac/studio/effectsStore'
 import type { SongNhacExportProgress } from '../../../shared/songNhacChannels'
 
 
@@ -46,9 +47,10 @@ const PREVIEW_SIZES = [
   { label: '4K', width: 3840, height: 2160 },
 ]
 
-const RAIL_ITEMS: Array<{ id: 'composition' | 'presets' | 'export'; short: string; hint: string }> = [
+const RAIL_ITEMS: Array<{ id: 'composition' | 'presets' | 'effects' | 'export'; short: string; hint: string }> = [
   { id: 'composition', short: 'Lớp', hint: 'Cây lớp của composition' },
   { id: 'presets', short: 'Preset', hint: 'Thư viện preset sóng' },
+  { id: 'effects', short: 'Hiệu ứng', hint: 'Hiệu ứng toàn composition' },
   { id: 'export', short: 'Xuất', hint: 'Cài đặt xuất video' },
 ]
 
@@ -246,7 +248,8 @@ export default function SongNhacPage() {
     useSongNhacLayerStore.getState().endHistoryGesture()
     setSelectionBounds((current) => current)
   }
-  const [leftTab, setLeftTab] = useState<'composition' | 'presets' | 'export'>('composition')
+  const [leftTab, setLeftTab] = useState<'composition' | 'presets' | 'effects' | 'export'>('composition')
+  const effects = useCompositionEffects()
   const [rightTab, setRightTab] = useState<'objects' | 'visualizer'>('visualizer')
 
   // Selecting a layer should land on the panel that can edit it, otherwise the click
@@ -258,6 +261,7 @@ export default function SongNhacPage() {
   const [playhead, setPlayhead] = useState(0)
   const [timelineZoom, setTimelineZoom] = useState(1)
   const [waveformUrl, setWaveformUrl] = useState('')
+
 
   // Waveform picture for the timeline, rendered once per audio file by ffmpeg.
   useEffect(() => {
@@ -324,6 +328,10 @@ export default function SongNhacPage() {
           setMessage('GPU bị treo (WebGL context lost). Hãy khởi động lại app trước khi xuất video.')
         },
       })
+      aveeEngineRef.current.setEffects(useCompositionEffects.getState())
+      if (import.meta.env.DEV) {
+        ;(window as unknown as Record<string, unknown>).__songNhacEngine = aveeEngineRef.current
+      }
       aveeEngineRef.current.setLayers(useSongNhacLayerStore.getState().layers)
       aveeEngineRef.current.setSelectedLayer(useSongNhacLayerStore.getState().selectedLayerId)
     } catch (error) {
@@ -592,6 +600,14 @@ export default function SongNhacPage() {
     if (!result.canceled && result.filePath) setOutputPath(result.filePath)
   }
 
+  // Composition effects are global; push them into the live engine whenever they change.
+  useEffect(() => {
+    const engine = aveeEngineRef.current
+    if (!engine) return
+    engine.setEffects(effects)
+    // The preview only renders while audio plays; redraw so a slider change is visible.
+    if (!isPlaying) draw()
+  }, [effects, isPlaying, draw])
   const togglePlay = async () => {
     const audio = audioRef.current
     if (!audio || !audioPath) return
@@ -772,9 +788,62 @@ export default function SongNhacPage() {
 
         <aside style={{ background: '#0b1220', border: '1px solid #1e293b', borderRadius: 10, padding: 10, overflow: 'auto', minHeight: 0 }}>
           <div style={{ fontSize: 11, letterSpacing: 0.6, color: '#64748b', fontWeight: 700, marginBottom: 8 }}>
-            {leftTab === 'composition' ? 'COMPOSITION' : leftTab === 'presets' ? 'PRESET SÓNG' : 'XUẤT VIDEO'}
+            {leftTab === 'composition'
+              ? 'COMPOSITION'
+              : leftTab === 'presets'
+                ? 'PRESET SÓNG'
+                : leftTab === 'effects'
+                  ? 'HIỆU ỨNG'
+                  : 'XUẤT VIDEO'}
           </div>
           {leftTab === 'composition' && <LayersPanel />}
+          {leftTab === 'effects' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, fontSize: 12, color: '#cbd5e1' }}>
+              {([
+                { key: 'blur', label: 'Mờ toàn khung', min: 0, max: 1, step: 0.01, format: (value: number) => `${Math.round(value * 100)}%` },
+                { key: 'alpha', label: 'Độ đậm', min: 0, max: 1, step: 0.01, format: (value: number) => `${Math.round(value * 100)}%` },
+                { key: 'tintStrength', label: 'Pha màu', min: 0, max: 1, step: 0.01, format: (value: number) => `${Math.round(value * 100)}%` },
+                { key: 'shake', label: 'Rung theo beat', min: 0, max: 1, step: 0.01, format: (value: number) => `${Math.round(value * 100)}%` },
+                { key: 'zoom', label: 'Thu phóng', min: 0.6, max: 1.6, step: 0.01, format: (value: number) => `${value.toFixed(2)}x` },
+              ] as const).map((item) => (
+                <label key={item.key} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <span style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>{item.label}</span>
+                    <span style={{ color: '#94a3b8' }}>{item.format(effects[item.key] as number)}</span>
+                  </span>
+                  <input
+                    type="range"
+                    min={item.min}
+                    max={item.max}
+                    step={item.step}
+                    value={effects[item.key] as number}
+                    onChange={(event) => effects.setEffect(item.key, Number(event.target.value) as never)}
+                    style={{ width: '100%' }}
+                  />
+                </label>
+              ))}
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span>Màu pha</span>
+                <input
+                  type="color"
+                  value={effects.tint}
+                  onChange={(event) => effects.setEffect('tint', event.target.value)}
+                  style={{ flex: 1, height: 26, background: 'transparent', border: '1px solid #334155', borderRadius: 6 }}
+                />
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <input type="checkbox" checked={effects.mirror} onChange={(event) => effects.setEffect('mirror', event.target.checked)} style={{ accentColor: '#0ea5e9' }} />
+                Lật ngang toàn khung
+              </label>
+              <button
+                type="button"
+                onClick={() => effects.reset()}
+                style={{ marginTop: 4, padding: '6px 10px', borderRadius: 6, border: '1px solid #334155', background: '#0f172a', color: '#cbd5e1', fontSize: 12, cursor: 'pointer' }}
+              >
+                Đặt lại hiệu ứng
+              </button>
+            </div>
+          )}
           {leftTab === 'presets' && (
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
               {WAVE_PRESETS.map((preset) => (

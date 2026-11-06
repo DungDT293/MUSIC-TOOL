@@ -1,6 +1,7 @@
 import type { AveeColorTheme, AveeQuality } from '../three/AveeVisualizerEngine'
 import { AveeVisualizerEngine } from '../three/AveeVisualizerEngine'
 import type { StudioAnyLayer } from '../studio/layerTypes'
+import type { CompositionEffects } from '../studio/effectsStore'
 import { analyzeAudioBuffer } from './spectrumAnalyzer'
 import { renderSongNhacVideo, suggestBitrate } from './renderSongNhacVideo'
 import type { SongNhacFramesResult } from '../../../../shared/songNhacChannels'
@@ -24,6 +25,8 @@ export interface ExportSongNhacFramesOptions {
   rangeEndSec?: number
   /** avc = widest compatibility, hevc = ~35% smaller (needs hardware support). */
   codec?: 'h264' | 'hevc'
+  /** Composition-level effects (blur, tint, opacity, mirror, zoom, shake). */
+  effects?: CompositionEffects
   /** Bitrate tier: high = 1.0x of the suggestion, balanced = 0.75x, light = 0.55x. */
   bitrateTier?: 'high' | 'balanced' | 'light'
   signal?: AbortSignal
@@ -94,6 +97,7 @@ export async function exportSongNhacFrames(options: ExportSongNhacFramesOptions)
         gpuContextLost = true
       },
     })
+    if (options.effects) engine.setEffects(options.effects)
     if (options.layers?.length) {
       engine.setLayers(options.layers)
       // Give image layers a moment to decode before the first frame is encoded.
