@@ -9,6 +9,21 @@ if (typeof window !== 'undefined' && !window.api) {
   console.error('[main.tsx] window.api is not available! Check preload script.')
 }
 
+// Electron's very first renderer in a fresh window can come up without WebCodecs
+// (VideoEncoder/VideoDecoder undefined while VideoFrame exists); one reload restores
+// them. Guarded by sessionStorage so an unsupported machine reloads at most once.
+if (typeof window !== 'undefined') {
+  const RELOAD_KEY = 'app.webcodecsReload'
+  if (typeof (window as unknown as { VideoEncoder?: unknown }).VideoEncoder === 'undefined') {
+    if (!sessionStorage.getItem(RELOAD_KEY)) {
+      sessionStorage.setItem(RELOAD_KEY, String(Date.now()))
+      window.location.reload()
+    }
+  } else {
+    sessionStorage.removeItem(RELOAD_KEY)
+  }
+}
+
 try {
   const rootElement = document.getElementById('root')
   if (!rootElement) {
