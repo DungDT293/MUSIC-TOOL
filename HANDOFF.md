@@ -1704,3 +1704,11 @@ Cross-session changelog. **Newest entries on top.** Every feature update or bug 
   - `startAutopilotLegacy` 498-line dead duplicate
   - `chromaKeyPreview` missing from `IPCAPI` (compiles only via `?.`)
 - Why deferred: full refactor planned; #1, #2 explicitly out of scope per user; the rest will be reshaped during refactor.
+
+## 2026-11-06 — Sóng nhạc export: HEVC + bitrate tiers
+
+- frameEncoder.ts accepts codec: 'h264' | 'hevc'; HEVC config uses hevc: { format: 'annexb' } and probes hvc1.1.6.L120.90 / hvc1.1.6.L123.B0 / hev1.1.6.L120.90.
+- SongNhacFramesRequest.codec picks the raw demuxer (-f hevc + -tag:v hvc1) and the temp extension (.265).
+- suggestBitrate baseline lowered: 8 Mbps at 1080p (was 10), 12 at 1440p, 22 at 4K, 4.5 at 720p. Export UI exposes tiers high/balanced/light (1.0 / 0.8 / 0.55) plus an HEVC option that disables itself when VideoEncoder.isConfigSupported says no.
+- Verified: WebCodecs HEVC -> Annex-B .265 -> ffmpeg -c:v copy -tag:v hvc1 produces a decodable bt709 MP4 (scripts/viz-harness/hevc-entry.ts + integration test "muxes an HEVC bitstream").
+- Why: H.264 10.2 Mbps exports were ~40% larger than CapCut's HEVC 7.2 Mbps for the same look; HEVC + tier control cuts upload size without touching the render timeline.
