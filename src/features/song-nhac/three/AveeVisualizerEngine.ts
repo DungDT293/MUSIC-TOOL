@@ -798,13 +798,26 @@ export class AveeVisualizerEngine {
     if (!this.selectionFrame) return
     const id = this.selectedLayerId
     const node = id ? this.layerNodes.get(id) : null
-    const layer = node?.layer
-    if (!node || !layer || layer.type === 'visualizer') {
+    let layer = node?.layer
+    // The primary visualizer has no layer node; use the current one when selected.
+    if (!layer && this.currentVisualizerLayer?.id === id) layer = this.currentVisualizerLayer
+    if (!layer) {
       this.selectionFrame.visible = false
       return
     }
     const t = layer.transform
     this.selectionFrame.visible = true
+    if (layer.type === 'visualizer') {
+      const sizeWorld = 1.45 * 2
+      this.selectionFrame.position.set(t.x * this.unit, -t.y * this.unit, this.visualizerGroup.position.z + 0.01)
+      this.selectionFrame.scale.set(sizeWorld * Math.abs(t.scaleX), sizeWorld * Math.abs(t.scaleY), 1)
+      this.selectionFrame.rotation.z = (t.rotation * Math.PI) / 180
+      return
+    }
+    if (!node) {
+      this.selectionFrame.visible = false
+      return
+    }
     this.selectionFrame.position.set(t.x * this.unit, -t.y * this.unit, node.object.position.z + 0.01)
     this.selectionFrame.scale.set(node.baseWidth * node.depthFactor * Math.abs(t.scaleX), node.baseHeight * node.depthFactor * Math.abs(t.scaleY), 1)
     this.selectionFrame.rotation.z = (t.rotation * Math.PI) / 180

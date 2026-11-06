@@ -63,6 +63,8 @@ export default function SongNhacPage() {
   const [webglFallback, setWebglFallback] = useState(false)
   const layers = useSongNhacLayerStore((state) => state.layers)
   const selectedLayerId = useSongNhacLayerStore((state) => state.selectedLayerId)
+  const canUndo = useSongNhacLayerStore((state) => state.historyPast.length > 0)
+  const canRedo = useSongNhacLayerStore((state) => state.historyFuture.length > 0)
   const layersRef = useRef(layers)
   const dragRef = useRef<null | {
     startX: number
@@ -439,6 +441,8 @@ export default function SongNhacPage() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      // Keep-alive router keeps this page mounted while hidden; only react on its route.
+      if (!window.location.hash.includes('/music/song-nhac')) return
       const target = event.target as HTMLElement | null
       if (
         target &&
@@ -685,6 +689,8 @@ export default function SongNhacPage() {
             <button
               type="button"
               onClick={() => useSongNhacLayerStore.getState().undo()}
+              disabled={!canUndo}
+              title={canUndo ? 'Hoàn tác (Ctrl+Z)' : 'Không có gì để hoàn tác'}
               style={{
                 padding: '9px 14px',
                 background: '#1e293b',
@@ -701,6 +707,8 @@ export default function SongNhacPage() {
             <button
               type="button"
               onClick={() => useSongNhacLayerStore.getState().redo()}
+              disabled={!canRedo}
+              title={canRedo ? 'Làm lại (Ctrl+Shift+Z)' : 'Không có gì để làm lại'}
               style={{
                 padding: '9px 14px',
                 background: '#1e293b',
@@ -788,6 +796,11 @@ export default function SongNhacPage() {
                 </option>
               ))}
             </select>
+            {style !== 'avee-circle' && (
+              <div style={{ fontSize: 11, color: '#fbbf24', marginTop: 6, lineHeight: 1.4 }}>
+                Chỉ chế độ “Avee Player” mới hiển thị và xuất được ảnh / video / chữ theo lớp. Các kiểu còn lại chỉ vẽ sóng.
+              </div>
+            )}
           </div>
 
           {/* 3. Avee Player Specific Settings */}

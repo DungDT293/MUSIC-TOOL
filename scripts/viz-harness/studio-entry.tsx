@@ -4,6 +4,7 @@ import { LayersPanel } from '../../src/features/song-nhac/studio/LayersPanel'
 import { InspectorPanel } from '../../src/features/song-nhac/studio/InspectorPanel'
 import { useSongNhacLayerStore } from '../../src/features/song-nhac/studio/songNhacLayerStore'
 
+;(window as unknown as Record<string, unknown>).__store = useSongNhacLayerStore
 const store = useSongNhacLayerStore.getState()
 store.addTextLayer('Tên bài hát')
 store.addImageLayer('Ảnh nền', '')
